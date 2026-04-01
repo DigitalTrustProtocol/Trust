@@ -1,0 +1,735 @@
+import { NIP50, NKinds, RelayError } from '@nostrify/nostrify';
+import type {
+  NostrEvent,
+  NostrFilter,
+  NostrRelayCLOSED,
+  NostrRelayEOSE,
+  NostrRelayEVENT,
+  NRelay,
+} from '@nostrify/types';
+import { Machina } from '@nostrify/nostrify/utils';
+import { Kysely, type SelectQueryBuilder, sql } from 'kysely';
+import { getFilterLimit, sortEvents } from 'nostr-tools';
+import { Packr } from 'msgpackr';
+import { kvDelete, kvGet, kvSet } from './kv.js';
+import { ExtendedNRelay } from './dbManager.js';
+import { KIND_TRUST } from '../nostr/nip32010.js';
+
+const DENORMALIZED_TAGS = new Set(['d', 'c', 't']);
+const packr = new Packr({ structuredClone: false });
+
+
+/** Kysely database schema for Nostr. */
+export interface NPostgresSchema {
+  nostr_events: {
+    id: string;
+    kind: number;
+    pubkey: string;
+    created_at: number | bigint;
+    raw_event: Uint8Array;
+    tags: string[][];
+    tags_index: Record<string, string[]>;
+    d: string | null;
+    t: string | null;
+    c: string | null;
+    search: unknown;
+    search_ext: Record<string, string>;
+  };
+}
+
+/** Options object for the NPostgres constructor. */
+export interface NPostgresOpts {
+  /**
+   * Function that returns which tags to index so tag queries like `{ "#p": ["..."] }` resolve via `tags_index` (all `p` values, including multiple per event).
+   * By default, all single-letter tags are indexed.
+   */
+  indexTags?(event: NostrEvent): string[][];
+  /**
+   * Build NIP-50 search text from the event.
+   * By default, only kinds 0 and 1 events are indexed for search, and the search text is the event content with tag values appended to it.
+   */
+  indexSearch?(event: NostrEvent): string | undefined;
+  /**
+   * Index NIP-50 search extensions.
+   * For example: returning an object like `{ language: "pt" }` will allow searching for events with `{ search: "language:pt" }`.
+   */
+  indexExtensions?(event: NostrEvent): Record<string, string> | Promise<Record<string, string>>;
+  /** Chunk size to use when streaming results with `.req`. Default: 20. */
+  chunkSize?: number;
+}
+
+/** Query to select necessary fields from the `nostr_events` table. */
+type SelectEventsQuery = SelectQueryBuilder<
+  NPostgresSchema,
+  'nostr_events',
+  NPostgresSchema['nostr_events']
+>;
+
+export class NPostgres implements ExtendedNRelay {
+  db: Kysely<NPostgresSchema>;
+  private indexTags: (event: NostrEvent) => string[][];
+  private indexSearch: (event: NostrEvent) => string | undefined;
+  private indexExtensions: (event: NostrEvent) => Record<string, string> | Promise<Record<string, string>>;
+  private chunkSize: number;
+
+  constructor(db: Kysely<any>, opts?: NPostgresOpts) {
+    this.db = db as Kysely<NPostgresSchema>;
+    this.indexTags = opts?.indexTags ?? NPostgres.indexTags;
+    this.indexSearch = opts?.indexSearch ?? NPostgres.indexSearch;
+    this.indexExtensions = opts?.indexExtensions ?? (() => ({}));
+    this.chunkSize = opts?.chunkSize ?? 20;
+  }
+
+  private deriveTrustKindFromD(dTagValue: string | null, fallback: string): string | null {
+    if (!dTagValue) return null;
+    // Future format: <trust_kind>|<hex(64)>[|context]
+    const m = dTagValue.match(/^(\d+)\|([a-fA-F0-9]{64})(\|.*)?$/);
+    if (m?.[1]) return m[1]!;
+    // Legacy format may not include trust kind; fall back to default.
+    return fallback;
+  }
+
+  /** Default tag index function. */
+  static indexTags(event: NostrEvent): string[][] {
+    return event.tags.filter(
+      ([name, value]) => name.length === 1 && value && value.length < 200 && !DENORMALIZED_TAGS.has(name),
+    );
+  }
+
+  /** Default search content builder. */
+  static indexSearch(event: NostrEvent): string | undefined {
+    if (event.kind === 0 || event.kind === 1) {
+      return `${event.content} ${event.tags.map(([_name, value]) => value).join(' ')}`.substring(0, 1000);
+    }
+  }
+
+  /** Insert an event (and its tags) into the database. */
+  async event(event: NostrEvent, opts: { signal?: AbortSignal; timeout?: number } = {}): Promise<void> {
+    if (NKinds.ephemeral(event.kind)) return;
+
+    if (await this.isDeleted(event)) {
+      if(opts) {
+        (opts as any).isDeleted = true; // indicate that the event was deleted
+        (opts as any).isInserted = false; // indicate that the event was not inserted into the database
+      }
+      throw new RelayError('invalid', 'the event has been deleted');
+    }
+
+    try {
+      if (opts?.signal?.aborted) return;
+      let inserted = false;
+      let result =  await NPostgres.trx(this.db, (trx) => {
+        return this.withTimeout(trx, opts.timeout, async (trx) => {
+          await Promise.all([
+            this.deleteEvents(trx, event),
+            async () => inserted = await this.insertEvent(trx, event),
+          ]);
+        });
+      });
+
+      if(opts) 
+        (opts as any).isInserted = inserted; // indicate that the event was inserted into the database
+      
+      return result;
+    } catch (e) {
+      if (e instanceof Error) {
+        switch (e.message) {
+          case 'duplicate key value violates unique constraint "nostr_events_pkey"':
+            return;
+          case 'canceling statement due to statement timeout':
+            throw new RelayError('error', 'the event could not be added fast enough');
+          default:
+            throw e;
+        }
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  /** Check if an event has been deleted. */
+  protected async isDeleted(event: NostrEvent): Promise<boolean> {
+    const filters: NostrFilter[] = [
+      { kinds: [5], authors: [event.pubkey], '#e': [event.id], limit: 1 },
+    ];
+
+    if (NKinds.replaceable(event.kind) || NKinds.addressable(event.kind)) {
+      const d = event.tags.find(([name]) => name === 'd')?.[1] ?? '';
+
+      filters.push({
+        kinds: [5],
+        authors: [event.pubkey],
+        '#a': [`${event.kind}:${event.pubkey}:${d}`],
+        since: event.created_at,
+        limit: 1,
+      });
+    }
+
+    const events = await this.query(filters);
+    return events.length > 0;
+  }
+
+  /** Delete events referenced by kind 5. */
+  protected async deleteEvents(db: Kysely<NPostgresSchema>, event: NostrEvent): Promise<void> {
+    if (event.kind === 5) {
+      const ids = new Set(event.tags.filter(([name]) => name === 'e').map(([_name, value]) => value));
+      const addrs: Set<string> = new Set(event.tags.filter(([name]) => name === 'a').map(([_name, value]) => value));
+
+      const filters: NostrFilter[] = [];
+
+      if (ids.size) {
+        filters.push({ ids: [...ids], authors: [event.pubkey] });
+      }
+
+      for (const addr of addrs) {
+        const [k, pubkey, d] = addr.split(':');
+        const kind = Number(k);
+
+        if (pubkey !== event.pubkey) continue;
+        if (!(Number.isInteger(kind) && kind >= 0)) continue;
+        if (d === undefined) continue;
+
+        const filter: NostrFilter = {
+          kinds: [kind],
+          authors: [event.pubkey],
+          until: event.created_at,
+        };
+
+        if (d) {
+          filter['#d'] = [d];
+        }
+
+        filters.push(filter);
+      }
+
+      if (filters.length) {
+        await this.removeEvents(db, filters);
+      }
+    }
+  }
+
+  /** Insert the event into the database. */
+  protected async insertEvent(trx: Kysely<NPostgresSchema>, event: NostrEvent): Promise<boolean> {
+    const d = event.tags.find(([name]) => name === 'd')?.[1];
+    const tTag = event.tags.find(([name]) => name === 't')?.[1] ?? null;
+    const c = event.tags.find(([name]) => name === 'c')?.[1] ?? null;
+
+    const replaceable = NKinds.replaceable(event.kind);
+    const parameterized = NKinds.addressable(event.kind);
+
+    const tagsIndex = this.indexTags(event).reduce((result, [name, value]) => {
+      if (!result[name]) {
+        result[name] = [];
+      }
+      result[name].push(value);
+      return result;
+    }, {} as Record<string, string[]>);
+
+    const searchText = this.indexSearch(event);
+
+    const row: NPostgresSchema['nostr_events'] = {
+      id: event.id,
+      kind: event.kind,
+      pubkey: event.pubkey,
+      created_at: event.created_at,
+      raw_event: packr.pack(event),
+      tags: event.tags,
+      tags_index: tagsIndex,
+      search_ext: await this.indexExtensions(event),
+      search: searchText ? sql`to_tsvector(${searchText})` : null,
+      d: parameterized ? d ?? '' : null,
+      t:
+        tTag ??
+        (event.kind === 32010 ? this.deriveTrustKindFromD(d ?? null, '32010') : null),
+      c,
+    };
+
+    let result: any = null;
+
+    if (replaceable || parameterized) {
+      result = await trx.insertInto('nostr_events')
+        .values(row)
+        .onConflict((oc) =>
+          oc
+            .columns(replaceable ? ['kind', 'pubkey'] : ['kind', 'pubkey', 'd'])
+            .where(() =>
+              replaceable
+                ? sql`kind >= 10000 and kind < 20000 or (kind in (0, 3))`
+                : sql`kind >= 30000 and kind < 40000`
+            )
+            .doUpdateSet((eb) => ({
+              id: eb.ref('excluded.id'),
+              kind: eb.ref('excluded.kind'),
+              pubkey: eb.ref('excluded.pubkey'),
+              created_at: eb.ref('excluded.created_at'),
+              raw_event: eb.ref('excluded.raw_event'),
+              tags: eb.ref('excluded.tags'),
+              tags_index: eb.ref('excluded.tags_index'),
+              d: eb.ref('excluded.d'),
+              t: eb.ref('excluded.t'),
+              c: eb.ref('excluded.c'),
+              search: eb.ref('excluded.search'),
+              search_ext: eb.ref('excluded.search_ext'),
+            })).where((eb) =>
+              eb.or([
+                eb('nostr_events.created_at', '<', eb.ref('excluded.created_at')),
+                eb.and([
+                  eb('nostr_events.created_at', '=', eb.ref('excluded.created_at')),
+                  eb('nostr_events.id', '<', eb.ref('excluded.id')),
+                ]),
+              ])
+            )
+        )
+        .execute();
+    } else {
+      result = await trx.insertInto('nostr_events')
+        .values(row)
+        .execute();
+    }
+    if(result)
+      return result.numInsertedOrUpdatedRows > 0;
+    return false;
+  }
+
+  /** Whether results should be sorted reverse-chronologically by the database. */
+  static shouldOrder(filter: NostrFilter): boolean {
+    const { limit = Infinity, ...rest } = filter;
+    const potentialLimit = getFilterLimit(rest);
+    return potentialLimit === Infinity || limit < potentialLimit;
+  }
+
+  /** Build the query for a filter. */
+  protected getFilterQuery(trx: Kysely<NPostgresSchema>, filter: NostrFilter): SelectEventsQuery {
+    let query = trx
+      .selectFrom('nostr_events')
+      .selectAll('nostr_events');
+
+    // Avoid ORDER BY for certain queries.
+    const shouldOrder = NPostgres.shouldOrder(filter);
+    if (shouldOrder) {
+      query = query
+        .orderBy('nostr_events.created_at', 'desc')
+        .orderBy('nostr_events.id', 'asc');
+    }
+
+    if (filter.ids) {
+      query = query.where('nostr_events.id', '=', ({ fn, val }) => fn.any(val(filter.ids)));
+    }
+    if (filter.kinds) {
+      query = query.where('nostr_events.kind', '=', ({ fn, val }) => fn.any(val(filter.kinds)));
+    }
+    if (filter.authors) {
+      query = query.where('nostr_events.pubkey', '=', ({ fn, val }) => fn.any(val(filter.authors)));
+    }
+    if (typeof filter.since === 'number') {
+      query = query.where('nostr_events.created_at', '>=', filter.since);
+    }
+    if (typeof filter.until === 'number') {
+      query = query.where('nostr_events.created_at', '<=', filter.until);
+    }
+    if (typeof filter.limit === 'number') {
+      query = query.limit(filter.limit);
+    }
+    if (filter.search) {
+      const ext: Record<string, string[]> = {};
+      const tsq: string[] = [];
+
+      for (const token of NIP50.parseInput(filter.search)) {
+        if (typeof token === 'object') {
+          ext[token.key] ??= [];
+          ext[token.key].push(token.value);
+        }
+
+        if (typeof token === 'string') {
+          const t = token.replace(/[^\p{L}\p{N}-]/gu, ' ');
+
+          const isWord = /^-?[\p{L}\p{N}]+$/u.test(t);
+          const isPhrase = /^([\p{L}\p{N}]+\s+)+[\p{L}\p{N}]+$/u.test(t);
+
+          if (isWord) {
+            tsq.push(t.replace(/^-/, '!')); // handle negated words
+          } else if (isPhrase) {
+            tsq.push(t.split(/\s+/g).join(' <-> ')); // join words in phrase
+          } else {
+            // unsupported token
+            return trx.selectFrom('nostr_events').selectAll().where('nostr_events.id', 'is', null);
+          }
+        }
+      }
+
+      for (let [key, values] of Object.entries(ext)) {
+        let negated = false;
+
+        if (key.startsWith('-')) {
+          key = key.slice(1);
+          negated = true;
+        }
+
+        query = query.where((eb) => {
+          if (negated) {
+            return eb.and(
+              values.map((value) => eb.not(eb('nostr_events.search_ext', '@>', { [key]: value }))),
+            );
+          } else {
+            return eb.or(
+              values.map((value) => eb('nostr_events.search_ext', '@>', { [key]: value })),
+            );
+          }
+        });
+      }
+
+      if (tsq.length) {
+        query = query.where('nostr_events.search', '@@', sql`to_tsquery(${tsq.join(' & ')})`);
+      }
+    }
+
+    for (const [key, values] of Object.entries(filter)) {
+      if (key.startsWith('#') && Array.isArray(values)) {
+        const name = key.replace(/^#/, '');
+
+        if (name === 'd' && filter.kinds?.every((kind) => NKinds.addressable(kind))) {
+          query = query.where('d', '=', ({ fn, val }) => fn.any(val(values)));
+        } else if (name === 't') {
+          query = query.where('t', '=', ({ fn, val }) => fn.any(val(values)));
+        } else if (name === 'c') {
+          query = query.where('c', '=', ({ fn, val }) => fn.any(val(values)));
+        } else {
+          query = query.where((eb) =>
+            eb.or(
+              values.map(
+                (value) => eb('nostr_events.tags_index', '@>', { [name]: [value] }),
+              ),
+            )
+          );
+        }
+      }
+    }
+
+    return query;
+  }
+
+  /** Combine filter queries into a single union query. */
+  protected getEventsQuery(trx: Kysely<NPostgresSchema>, filters: NostrFilter[]): SelectEventsQuery {
+    return trx.selectFrom((eb) =>
+      filters
+        .map((filter) => eb.selectFrom(() => this.getFilterQuery(trx, filter).as('e')).selectAll())
+        .reduce((result, query) => result.unionAll(query)).as('e')
+    )
+      .selectAll() as SelectEventsQuery;
+  }
+
+    async *allEvents(kind: number = KIND_TRUST, opts: { signal?: AbortSignal } = {}): AsyncIterable<NostrEvent> {
+      const rows = this.db
+        .selectFrom('nostr_events')
+        .selectAll('nostr_events')
+        .where('kind', '=', kind)
+        .stream(1000);
+
+      for await (const row of rows) {
+        yield packr.unpack(row.raw_event) as NostrEvent;
+      }
+    }
+  
+
+  /**
+   * Stream events, mimicking a relay.
+   *
+   * This method uses the database's native streaming mechanism, so both the database
+   * and Kysely dialect must support it. Set the `cunkSize` in the constructor to control
+   * how many rows are fetched at once.
+   *
+   * Yields `EVENT` messages until the query completes, then it will yield `EOSE`, then `CLOSED`.
+   * If the signal is aborted, it will yield `CLOSED` on the next iteration.
+   */
+  async *req(
+    filters: NostrFilter[],
+    opts: { timeout?: number; signal?: AbortSignal } = {},
+  ): AsyncIterable<NostrRelayEVENT | NostrRelayEOSE | NostrRelayCLOSED> {
+    const subId = crypto.randomUUID();
+
+    filters = this.normalizeFilters(filters);
+
+    if (filters.length) {
+      const machina = new Machina<NostrRelayEVENT | NostrRelayEOSE | NostrRelayCLOSED>(opts.signal);
+
+      this.withTimeout(this.db, opts.timeout, async (trx) => {
+        const rows = this.getEventsQuery(trx, filters).stream(this.chunkSize);
+
+        for await (const row of rows) {
+          const event = this.parseEventRow(row);
+          machina.push(['EVENT', subId, event]);
+        }
+
+        machina.push(['EOSE', subId]);
+      }).catch((error) => {
+        if (error instanceof Error && (error.name === 'TimeoutError' || error.message.includes('timeout'))) {
+          machina.push(['CLOSED', subId, 'error: the relay could not respond fast enough']);
+        } else {
+          machina.push(['CLOSED', subId, 'error: something went wrong']);
+        }
+      });
+
+      try {
+        for await (const msg of machina) {
+          const [verb] = msg;
+
+          yield msg;
+
+          if (verb === 'EOSE') {
+            break;
+          }
+
+          if (verb === 'CLOSED') {
+            return;
+          }
+        }
+      } catch {
+        yield ['CLOSED', subId, 'error: the relay could not respond fast enough'];
+        return;
+      }
+    }
+
+    yield ['CLOSED', subId, 'error: realtime streaming is not supported'];
+  }
+
+  /** Get events for filters from the database. */
+  async query(
+    filters: NostrFilter[],
+    opts: { timeout?: number; signal?: AbortSignal; limit?: number } = {},
+  ): Promise<NostrEvent[]> {
+    filters = this.normalizeFilters(filters);
+
+    if (!filters.length) {
+      return [];
+    }
+
+    return await this.withTimeout(this.db, opts.timeout, async (trx) => {
+      let query = this.getEventsQuery(trx, filters);
+
+      if (typeof opts.limit === 'number') {
+        query = query.limit(opts.limit);
+      }
+
+      const rows = await query.execute();
+      const events = rows.map((row) => this.parseEventRow(row));
+
+      return sortEvents(events);
+    });
+  }
+
+  /** Parse an event row from the database. */
+  protected parseEventRow(row: NPostgresSchema['nostr_events']): NostrEvent {
+    return packr.unpack(row.raw_event) as NostrEvent;
+  }
+
+  // Returns rows directly without unpacking raw_event.
+  async rowQuery(
+    filters: NostrFilter[],
+    opts: { timeout?: number; signal?: AbortSignal; limit?: number } = {},
+  ): Promise<NPostgresSchema['nostr_events'][]> {
+    filters = this.normalizeFilters(filters);
+    if (!filters.length) return [];
+
+    return await this.withTimeout(this.db, opts.timeout, async (trx) => {
+      let query = this.getEventsQuery(trx, filters);
+
+      if (typeof opts.limit === 'number') {
+        query = query.limit(opts.limit);
+      }
+
+      return query.execute();
+    });
+  }
+
+  /** Normalize the `limit` of each filter, and remove filters that can't produce any events. */
+  protected normalizeFilters(filters: NostrFilter[]): NostrFilter[] {
+    return filters.reduce<NostrFilter[]>((acc, filter) => {
+      const limit = getFilterLimit(filter);
+      if (limit > 0) {
+        acc.push(limit === Infinity ? filter : { ...filter, limit });
+      }
+      return acc;
+    }, []);
+  }
+
+  /** Remove events from the database. */
+  protected async removeEvents(db: Kysely<NPostgresSchema>, filters: NostrFilter[]): Promise<void> {
+    await db
+      .deleteFrom('nostr_events')
+      .where('id', 'in', () => this.getEventsQuery(db, filters).clearSelect().select('id'))
+      .execute();
+  }
+
+  /** Delete events based on filters from the database. */
+  async remove(filters: NostrFilter[], opts: { signal?: AbortSignal; timeout?: number } = {}): Promise<void> {
+    await this.withTimeout(this.db, opts.timeout, (trx) => this.removeEvents(trx, filters));
+  }
+
+  /** Get number of events that would be returned by filters. */
+  async count(
+    filters: NostrFilter[],
+    opts: { signal?: AbortSignal; timeout?: number } = {},
+  ): Promise<{ count: number; approximate: boolean }> {
+    return await this.withTimeout(this.db, opts.timeout, async (trx) => {
+      const query = this.getEventsQuery(trx, filters);
+      const [{ count }] = await query
+        .clearSelect()
+        .clearOrderBy()
+        .select((eb) => eb.fn.countAll().as('count'))
+        .execute();
+
+      return {
+        count: Number(count),
+        approximate: false,
+      };
+    });
+  }
+
+  /** Execute NPostgres functions in a transaction. */
+  async transaction(callback: (store: NPostgres, kysely: Kysely<NPostgresSchema>) => Promise<void>): Promise<void> {
+    await NPostgres.trx(this.db, async (trx) => {
+      const store = new NPostgres(trx as Kysely<NPostgresSchema>, {
+        indexTags: this.indexTags,
+        indexSearch: this.indexSearch,
+        indexExtensions: this.indexExtensions,
+        chunkSize: this.chunkSize,
+      });
+
+      await callback(store, trx);
+    });
+  }
+
+  /** Execute the callback in a new transaction, unless the Kysely instance is already a transaction. */
+  private static async trx<T = unknown>(
+    db: Kysely<NPostgresSchema>,
+    callback: (trx: Kysely<NPostgresSchema>) => Promise<T>,
+  ): Promise<T> {
+    if (db.isTransaction) {
+      return await callback(db);
+    } else {
+      return await db.transaction().execute((trx) => callback(trx));
+    }
+  }
+
+  /** Maybe execute the callback in a transaction with a timeout, if a timeout is provided. */
+  protected async withTimeout<T>(
+    db: Kysely<NPostgresSchema>,
+    timeout: number | undefined,
+    callback: (trx: Kysely<NPostgresSchema>) => T | Promise<T>,
+  ): Promise<T> {
+    if (typeof timeout === 'number') {
+      return await NPostgres.trx(db, async (trx) => {
+        await sql`set local statement_timeout = ${sql.raw(timeout.toString())}`.execute(trx);
+        return await callback(trx);
+      });
+    } else {
+      return await callback(db);
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.db.destroy();
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
+  }
+
+  /** Migrate the database schema. */
+  async migrate(): Promise<void> {
+    const schema = this.db.schema;
+
+    await schema
+      .createTable('nostr_events')
+      .addColumn('id', 'char(64)', (col) => col.primaryKey())
+      .addColumn('kind', 'integer', (col) => col.notNull())
+      .addColumn('pubkey', 'char(64)', (col) => col.notNull())
+      .addColumn('created_at', 'bigint', (col) => col.notNull())
+      .addColumn('raw_event', 'bytea', (col) => col.notNull())
+      .addColumn('tags', 'jsonb', (col) => col.notNull())
+      .addColumn('tags_index', 'jsonb', (col) => col.notNull())
+      .addColumn('d', 'text')
+      .addColumn('t', 'text')
+      .addColumn('c', 'text')
+      .addColumn('search', sql`tsvector`)
+      .addColumn('search_ext', 'jsonb', (col) => col.notNull())
+      .addCheckConstraint('nostr_events_kind_chk', sql`kind >= 0`)
+      .addCheckConstraint('nostr_events_created_chk', sql`created_at >= 0`)
+      .addCheckConstraint('nostr_events_tags_chk', sql`jsonb_typeof(tags) = 'array'`)
+      .addCheckConstraint('nostr_events_tags_index_chk', sql`jsonb_typeof(tags_index) = 'object'`)
+      .addCheckConstraint('nostr_events_search_ext_chk', sql`jsonb_typeof(search_ext) = 'object'`)
+      .addCheckConstraint(
+        'nostr_events_d_chk',
+        sql`(kind >= 30000 and kind < 40000 and d is not null) or ((kind < 30000 or kind >= 40000) and d is null)`,
+      )
+      .ifNotExists()
+      .execute();
+
+    await schema
+      .createIndex('nostr_events_created_kind_idx')
+      .on('nostr_events')
+      .columns(['created_at desc', 'id asc', 'kind', 'pubkey'])
+      .ifNotExists()
+      .execute();
+
+    await schema
+      .createIndex('nostr_events_pubkey_created_idx')
+      .on('nostr_events')
+      .columns(['pubkey', 'created_at desc', 'id asc', 'kind'])
+      .ifNotExists()
+      .execute();
+
+    await schema
+      .createIndex('nostr_events_tags_idx').using('gin')
+      .on('nostr_events')
+      .column('tags_index')
+      .ifNotExists()
+      .execute();
+
+    await schema
+      .createIndex('nostr_events_replaceable_idx')
+      .on('nostr_events')
+      .columns(['kind', 'pubkey'])
+      .where(() => sql`kind >= 10000 and kind < 20000 or (kind in (0, 3))`)
+      .unique()
+      .ifNotExists()
+      .execute();
+
+    await schema
+      .createIndex('nostr_events_parameterized_idx')
+      .on('nostr_events')
+      .columns(['kind', 'pubkey', 'd'])
+      .where(() => sql`kind >= 30000 and kind < 40000`)
+      .unique()
+      .ifNotExists()
+      .execute();
+
+    await schema
+      .createIndex('nostr_events_kind_pubkey_c_idx')
+      .on('nostr_events')
+      .columns(['kind', 'pubkey', 'c'])
+      .ifNotExists()
+      .execute();
+
+    await schema
+      .createIndex('nostr_events_kind_pubkey_t_idx')
+      .on('nostr_events')
+      .columns(['kind', 'pubkey', 't'])
+      .ifNotExists()
+      .execute();
+
+    await schema
+      .createIndex('nostr_events_search_idx').using('gin')
+      .on('nostr_events')
+      .column('search')
+      .ifNotExists()
+      .execute();
+
+    await schema
+      .createIndex('nostr_events_search_ext_idx').using('gin')
+      .on('nostr_events')
+      .column('search_ext')
+      .ifNotExists()
+      .execute();
+  }
+}

@@ -1,0 +1,156 @@
+import { describe, it, expect } from 'vitest';
+import { encodeNpub, encodeNote, encodeNevent, encodeNprofile, encodeNaddr } from '../../../src/lib/nostr/nip19.js';
+import { parseSubject, parseSubjects, resolveTargetForQuery } from '../../../src/lib/trust/subject.js';
+
+const TEST_PUBKEY = 'a'.repeat(64);
+const TEST_EVENT_ID = 'b'.repeat(64);
+
+describe('subject module', () => {
+  describe('parseSubject', () => {
+    describe('hex pubkey', () => {
+      it('should parse 64-char hex as pubkey', () => {
+        const r = parseSubject(TEST_PUBKEY);
+        expect(r.tag).toBe('p');
+        expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
+      });
+    });
+
+    describe('NIP-19', () => {
+      it('should parse npub as pubkey', () => {
+        const npub = encodeNpub(TEST_PUBKEY);
+        const r = parseSubject(npub);
+        expect(r.tag).toBe('p');
+        expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
+      });
+
+      it('should parse nprofile as pubkey', () => {
+        const nprofile = encodeNprofile(TEST_PUBKEY);
+        const r = parseSubject(nprofile);
+        expect(r.tag).toBe('p');
+        expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
+      });
+
+      it('should parse note as event', () => {
+        const note = encodeNote(TEST_EVENT_ID);
+        const r = parseSubject(note);
+        expect(r.tag).toBe('e');
+        expect(r.value).toBe(TEST_EVENT_ID.toLowerCase());
+      });
+
+      it('should parse nevent as event', () => {
+        const nevent = encodeNevent(TEST_EVENT_ID);
+        const r = parseSubject(nevent);
+        expect(r.tag).toBe('e');
+        expect(r.value).toBe(TEST_EVENT_ID.toLowerCase());
+      });
+
+      it('should parse naddr as addressable', () => {
+        const naddr = encodeNaddr(30023, TEST_PUBKEY, 'my-article');
+        const r = parseSubject(naddr);
+        expect(r.tag).toBe('a');
+        expect(r.value).toBe(`30023:${TEST_PUBKEY.toLowerCase()}:my-article`);
+      });
+    });
+
+    describe('nostr URI', () => {
+      it('should parse nostr:npub...', () => {
+        const npub = encodeNpub(TEST_PUBKEY);
+        const r = parseSubject('nostr:' + npub);
+        expect(r.tag).toBe('p');
+        expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
+      });
+    });
+
+    describe('a tag', () => {
+      it('should parse kind:pubkey:d format', () => {
+        const r = parseSubject(`30023:${TEST_PUBKEY}:my-id`);
+        expect(r.tag).toBe('a');
+        expect(r.value).toBe(`30023:${TEST_PUBKEY.toLowerCase()}:my-id`);
+      });
+    });
+
+    describe('URL', () => {
+      it('should parse https URL as r tag', () => {
+        const r = parseSubject('https://example.com/path?q=1');
+        expect(r.tag).toBe('r');
+        expect(r.value).toBe('https://example.com/path?q=1');
+      });
+
+      it('should strip fragment from URL', () => {
+        const r = parseSubject('https://example.com/path#section');
+        expect(r.tag).toBe('r');
+        expect(r.value).toBe('https://example.com/path');
+      });
+    });
+
+    describe('hash', () => {
+      it('should parse h: prefix for hash', () => {
+        const hash = 'c'.repeat(64);
+        const r = parseSubject('h:' + hash);
+        expect(r.tag).toBe('h');
+        expect(r.value).toBe(hash.toLowerCase());
+      });
+    });
+
+    describe('NIP-73', () => {
+      it('should parse isbn:', () => {
+        const r = parseSubject('isbn:978-0-76-538203-0');
+        expect(r.tag).toBe('i');
+        expect(r.value).toBe('isbn:9780765382030');
+        expect(r.k).toBe('isbn');
+      });
+
+      it('should parse doi:', () => {
+        const r = parseSubject('doi:10.1234/example.paper');
+        expect(r.tag).toBe('i');
+        expect(r.value).toBe('doi:10.1234/example.paper');
+        expect(r.k).toBe('doi');
+      });
+
+      it('should parse geo:', () => {
+        const r = parseSubject('geo:ezs42e44yx96');
+        expect(r.tag).toBe('i');
+        expect(r.k).toBe('geo');
+      });
+    });
+
+    describe('errors', () => {
+      it('should throw on empty input', () => {
+        expect(() => parseSubject('')).toThrow(/cannot be empty/);
+        expect(() => parseSubject('   ')).toThrow(/cannot be empty/);
+      });
+
+      it('should throw on unparseable input', () => {
+        expect(() => parseSubject('not-a-valid-subject-xyz')).toThrow(/Cannot parse/);
+      });
+    });
+  });
+
+  describe('parseSubjects', () => {
+    it('should parse multiple inputs', () => {
+      const npub = encodeNpub(TEST_PUBKEY);
+      const note = encodeNote(TEST_EVENT_ID);
+      const results = parseSubjects([npub, note]);
+      expect(results).toHaveLength(2);
+      expect(results[0].tag).toBe('p');
+      expect(results[0].value).toBe(TEST_PUBKEY.toLowerCase());
+      expect(results[1].tag).toBe('e');
+      expect(results[1].value).toBe(TEST_EVENT_ID.toLowerCase());
+    });
+  });
+
+  describe('resolveTargetForQuery', () => {
+    it('should resolve npub to canonical pubkey', () => {
+      const npub = encodeNpub(TEST_PUBKEY);
+      const r = resolveTargetForQuery(npub);
+      expect(r.tag).toBe('p');
+      expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
+    });
+
+    it('should resolve URL to canonical form', () => {
+      const r = resolveTargetForQuery('https://example.com/foo');
+      expect(r.tag).toBe('r');
+      expect(r.value).toBe('https://example.com/foo');
+    });
+  });
+});

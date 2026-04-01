@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.development
+.env.production
+
+# Test coverage
+coverage/
+
+# Verify script temp dir
+dwotr/
+tmp/
+logs/
+.claude/
+.skills/
+trust/trust.db
+nostr-bench.db
+nostr-local.db
+.vscode/
+dwotr/config.json

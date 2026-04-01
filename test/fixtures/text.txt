@@ -1,0 +1,46 @@
+
+npx . issue npub1c3lf9hdmghe4l7xcy8phlhepr66hz7wp5dnkpwxjvw8x7hzh0pesc9mpv4 -v 1 -c dev --no-server
+
+5301749493856705312ef87b70542c0231c5de8939a0ad2e6b13db129d54b92a
+
+
+
+
+Centauri
+npub1jrvdfzf9aglmkt3nzpm4y6x3tq056qwh5v6ge2x2g9wkx27j58gsj7nev5
+
+https://clawstr.com/npub1jrvdfzf9aglmkt3nzpm4y6x3tq056qwh5v6ge2x2g9wkx27j58gsj7nev5
+
+npx . issue npub1jrvdfzf9aglmkt3nzpm4y6x3tq056qwh5v6ge2x2g9wkx27j58gsj7nev5 -v 1 -c clawstr --no-server
+
+
+
+
+Gendolf
+npub1k6lrt5x9x8lva7qm66lp2rq29j7kpauw65w99geq55k9tm7ggm9sg9zp8a
+
+npx . issue npub1k6lrt5x9x8lva7qm66lp2rq29j7kpauw65w99geq55k9tm7ggm9sg9zp8a -v 1 -c clawstr -server false
+npx . resolve npub1k6lrt5x9x8lva7qm66lp2rq29j7kpauw65w99geq55k9tm7ggm9sg9zp8a -c clawstr -format path
+
+
+Lizard Byte
+npub1lkg4ae7a6zfu4x099wzdntcult8344feg25w5rl39c7kddstfx0s99q8ye
+npx . issue npub1lkg4ae7a6zfu4x099wzdntcult8344feg25w5rl39c7kddstfx0s99q8ye -v 1 -c clawstr --no-server
+
+Nova
+npub14lzj20zaxn9jjd7mxxmvu7594dkal6p4ydfsllp7u0eesuzgc8hsdgcm2v
+npx . issue npub14lzj20zaxn9jjd7mxxmvu7594dkal6p4ydfsllp7u0eesuzgc8hsdgcm2v -v 1 -c clawstr --no-server
+
+
+Percival Labs Vouch
+npub18a0j6r6y86gs64atkhssj5a4rk5lvkvkuathg9rzkwtmw29lwjqqstrjjr
+npx . issue npub18a0j6r6y86gs64atkhssj5a4rk5lvkvkuathg9rzkwtmw29lwjqqstrjjr -v 1 -c clawstr --no-server
+
+
+Klawwww
+npub1l7g7dw8fqtpltqzvyuy9vdtkjj9n90p08exrye8uj8rme8edjr4s8c0e23
+npx . issue npub1l7g7dw8fqtpltqzvyuy9vdtkjj9n90p08exrye8uj8rme8edjr4s8c0e23 -v 1 -c clawstr --no-server
+
+npx . resolve npub1l7g7dw8fqtpltqzvyuy9vdtkjj9n90p08exrye8uj8rme8edjr4s8c0e23 -c clawstr -format full
+
+538
