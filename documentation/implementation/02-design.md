@@ -103,7 +103,7 @@ Built on top of the database. No direct CLI I/O here; pure logic and data access
 
 ### 2.2 Trust Event Builder (`src/lib/trust/trust-event.ts`)
 
-- `computeDTag(subjects, context?)` – per-subject fragments (hex or SHA256), dedupe before XOR, and output `d = <trust_kind>|<hex(64)>[|context]` (for current NIP-32010, `<trust_kind>` = `32010`).
+- `computeDTag(subjects, context?)` – per-subject fragments (hex or SHA256), dedupe before XOR, and output `d = <hex(64)>[|context]` (no kind prefix on kind `32010`; use `kinds: [32010]` to query).
 - `buildTrustEventTemplate({ subjects, context?, value, content? })` – kind 32010 `EventTemplate`.
 - Validation: content ≤ 1024 chars, value ∈ {1, 0, -1}.
 - Used by: issue command.

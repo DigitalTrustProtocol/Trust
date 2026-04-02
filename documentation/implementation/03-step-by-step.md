@@ -69,9 +69,9 @@ Implementation order: **Database first** (schema and access), then **business la
 1. **Create** `src/lib/trust/trust-event.ts`.
 2. **Implement** `computeDTag(subjects: ParsedSubject[], context?: string): string`:
    - Per subject: fragment = raw 64-hex preimage or SHA256(preimage) hex; dedupe identical fragments; single unique → that fragment; multiple → XOR 32-byte decodes; append `|context` if context.
-   - Output: `d = <trust_kind>|<hex(64)>[|context]`.
+   - Output: `d = <hex(64)>[|context]` (no kind prefix).
 3. **Implement** `buildTrustEventTemplate(params): EventTemplate`:
-   - Kind 32010, tags: `d`, `t`, `c`, `v`, plus subject tags.
+   - Kind 32010, tags: `d`, `c` (if context), `v`, plus subject tags.
    - Enforce content ≤ 1024, value ∈ {1, 0, -1}.
 4. **Tests:** Unit tests for d-tag (single, batch) and template.
 

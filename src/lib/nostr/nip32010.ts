@@ -125,27 +125,11 @@ export function isTrustEventValid(event: ITrustEvent): boolean {
 export function asTrustEvent(event: Event): ITrustEvent {
   const e = event as ITrustEvent;
   e.d_tag = getTagValueFromTags(event, 'd');
-  e.t_tag = getTagValueFromTags(event, 't') ?? getTrustKindFromDTag(e.d_tag ?? '');
+  e.t_tag = getTagValueFromTags(event, 't');
   e.p_tag = getTagValueFromTags(event, 'p');
   e.c_tag = getTagValueFromTags(event, 'c');
 
   return e;
-}
-
-function getTrustKindFromDTag(d: string): string {
-  const parts = d.split('|');
-
-  if (parts.length < 2) return '';
-  
-  const part0 = parts[0] ?? '';
-  const part1 = parts[1] ?? '';
-  let kind = part0;
-
-  if (!HEX_64.test(part1) && Number.isInteger(Number(part1))) {
-    kind = part1;
-  }
-
-  return kind;
 }
 
 /** NIP-33 / subject `a` value: kind:pubkey:identifier (identifier may contain `:`) */
@@ -218,8 +202,7 @@ function uniqueFragmentsInOrder(fragments: string[]): string[] {
  * subjects cannot cancel via F ⊕ F. Single unique fragment: that fragment; multiple unique: XOR of
  * their 32-byte decodes. Append `|context` when context is non-empty.
  *
- * Output format:
- *   `<trust_kind>|<hex(64)>[|context]`
+ * Output format (NIP-32010): `<hex(64)>[|context]` — no kind prefix; use `kinds: [32010]`.
  */
 export function computeDTag(subjects: ParsedSubject[], context?: string): string {
   if (subjects.length === 0) {
@@ -240,10 +223,8 @@ export function computeDTag(subjects: ParsedSubject[], context?: string): string
     base = bytesToHex(acc);
   }
 
-  const dWithKind = `${KIND_TRUST}|${base}`;
-
-  if (context !== undefined && context !== null && context !== '') return `${dWithKind}|${context}`;
-  return dWithKind;
+  if (context !== undefined && context !== null && context !== '') return `${base}|${context}`;
+  return base;
 }
 
 export interface BuildTrustEventParams {
@@ -273,18 +254,8 @@ export function buildTrustEventTemplate(params: BuildTrustEventParams): EventTem
   }
 
   const d = computeDTag(subjects, context);
-  const trustKindForT = (() => {
-    // If `d` is extended to: <trust_kind>|<hex(64)>[|context], then `t` MUST repeat <trust_kind>.
-    // Current implementation's `d` is `<trust_kind>|<hex(64)>[|context]`, but we keep a fallback
-    // so legacy/partial events still produce a valid `t`.
-    const parts = d.split('|');
-    const trustKind = parts[0] ?? '';
-    const hexCandidate = parts[1] ?? '';
-    if (/^\d+$/.test(trustKind) && HEX_64.test(hexCandidate)) return trustKind;
-    return String(KIND_TRUST);
-  })();
 
-  const tags: string[][] = [['d', d], ['t', trustKindForT], ['v', String(value)]];
+  const tags: string[][] = [['d', d], ['v', String(value)]];
 
   if (context !== undefined && context !== null && context !== '') {
     tags.push(['c', context]);
