@@ -5,6 +5,29 @@ import { IEdge } from "./Edge.js";
 export const EDGE_KEY_SEP = '|';
 
 
+export class OutTrust {
+  items: TrustContext = new TrustContext();
+  pubkeys: TrustContext = new TrustContext();
+}
+
+export class InTrust {
+  items: TrustContext = new TrustContext();
+  pubkeys: TrustContext = new TrustContext();
+}
+
+export class TrustContext extends Map<string, TrustSubject> { // context is the key, value is the subject
+  constructor() {
+    super();
+  }
+}
+
+export class TrustSubject extends Array<IEdge> {
+  constructor() {
+    super();
+  }
+}
+
+
 export class EdgeSubject extends Map<string, IEdge> {
   constructor() {
     super();

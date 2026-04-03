@@ -15,14 +15,31 @@ export class Graph {
   nodes: Map<string, Node> = new Map();
   edges: Map<string, IEdge> = new Map();
 
+  nodesIndex: Array<Node> = new Array<Node>();
+  contextMap: Map<string, number> = new Map();
+  contextIndex: Array<string> = new Array<string>();
+
   eventAddedSinceLastSave: number = 0;
   eventRemovedSinceLastSave: number = 0;
+
+
+  getContextIndex(context: string): number {
+    let index = this.contextMap.get(context?.toLowerCase() ?? '');
+    if (!index) {
+      index = this.contextIndex.length;
+      this.contextMap.set(context, index);
+      this.contextIndex.push(context);
+    }
+    return index;
+  }
 
   getOrCreateNode(id: string, type: SubjectType): Node {
     let node = this.nodes.get(id);
     if (!node) {
       node = new Node(id, type);
       this.nodes.set(id, node);
+      //node.index = this.nodesIndex.length;
+      //this.nodesIndex.push(node);
     }
     return node;
   }

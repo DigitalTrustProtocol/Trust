@@ -1,20 +1,29 @@
 import type { VerifiedEvent } from 'nostr-tools';
 import type { SubjectType, Identity } from '../../nostr/nip32010.js';
 import { parseIdentityFromKind0, mergeIdentity } from '../identity.js';
-import { EdgeMap } from './EdgeMap.js';
+import { EdgeMap, OutTrust } from './EdgeMap.js';
 
 /** @deprecated Use Identity from identity.js */
 export type NodeIdentity = Identity;
 
 export class Node {
+  index: number = 0;
   id: string; // pubkey or subject id (e.g. event id)
   type: SubjectType;
 
   identity?: Identity;
 
+  // Not implemented yet
+  delegate?: Map<string, any>; // delegate pubkey and context new Map<string, id> (context is the key)
+
   outgoing: EdgeMap = new EdgeMap();
   incoming: EdgeMap = new EdgeMap();
 
+  out: OutTrust = new OutTrust();
+
+  // Not implemented yet
+  attributes?: Map<string, any>; //  context is the key, value is the attribute
+  
   constructor(id: string, type: SubjectType) {
     this.id = id;
     this.type = type;

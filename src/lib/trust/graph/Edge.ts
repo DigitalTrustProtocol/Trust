@@ -30,6 +30,7 @@ export interface IEdge {
   isValidAt(now?: number): boolean;
 }
 
+// Trust edge for kind 32010
 export class EdgeT1 implements IEdge {
   kind: number;
   value: 1 | 0 | -1 = 0;
@@ -37,6 +38,8 @@ export class EdgeT1 implements IEdge {
   createdAt: number = 0;
   activate?: number;
   expire?: number;
+  index: number = 0;
+  content: string | undefined = undefined;
 
   constructor(event: ITrustEvent) {
     this.kind = event.kind;
@@ -49,6 +52,7 @@ export class EdgeT1 implements IEdge {
     this.createdAt = event.created_at;
     this.activate = getActivateFromTags(event);
     this.expire = getExpireFromTags(event);
+    this.content = event.content;
     return this;
   }
 

@@ -15,7 +15,7 @@ function getOutgoingFromGraph(
   context: string,
   subjectType: 'p' | 'i' = 'p'
 ): EdgeSubject | undefined {
-  const node = graph.nodes.get(authorId);
+  const node = graph.nodes.get(authorId); // We could use the node reference directly and not id 
   if (!node) return undefined;
   return node.outgoing.getSubjects({ kind: KIND_TRUST, context, subjectType });
 }
