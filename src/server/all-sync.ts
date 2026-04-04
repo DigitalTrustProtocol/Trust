@@ -9,23 +9,26 @@ import { logger } from "../lib/logger.js";
 import { RuntimeContext } from "../lib/runtimeContext.js";
 import { Store } from "../lib/db/dbManager.js";
 import { Graph } from "../lib/trust/graph/Graph.js";
+import { run } from "node:test";
+import { Filter } from "nostr-tools";
 
 export async function subscribeToAll(runtimeContext: RuntimeContext): Promise<GraphSyncResult> {
     let visitedEvent = new Set<string>();
-    const { relays, syncSince: since, pool, graph, store, contexts, json, statusCallback } = runtimeContext;
+    const { relays, since, pool, graph, store, contexts, json, statusCallback } = runtimeContext;
     const signal = runtimeContext.abortController?.signal ?? new AbortSignal();
     let latestTimestamp = 0;
     let eventsReceived = 0;
     let eventsInserted = 0;
 
+    const filter: Filter ={ kinds: [KIND_TRUST] };
+    if (since !== undefined) filter.since = since;
+    //if (until !== undefined) filter.until = runtimeContext.until;
+    if (contexts?.length) filter['#c'] = [...new Set(contexts)];
+    const filters: Filter[] = [filter];
 
-
-    //const contextArray = contexts  ? contexts.split(',') : [];
-    
     const options: subscriptionOptions = {
       relays,
-      since,
-      kinds: [KIND_TRUST], // subscribe to both trust and user metadata events
+      filters,
       pool: pool as NPool,
       signal,
       onEvent: async (event) => {
@@ -50,6 +53,7 @@ export async function subscribeToAll(runtimeContext: RuntimeContext): Promise<Gr
         logger.error(`Relay subscription error: ${error}`);
       },
     };
+
     await startRelaySubscription(options);
     return {
       processedAuthors: visitedEvent.size,

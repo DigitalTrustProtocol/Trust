@@ -20,8 +20,7 @@ export type SubscriptionStatusCallback = (status: SubscriptionStatus) => void;
 
 export type subscriptionOptions = {
   relays: string[];
-  since: number | undefined;
-  kinds?: number[];
+  filters?: Filter[];
   pool: NPool;
   onStatus?: SubscriptionStatusCallback;
   onEvent?: (event: VerifiedEvent) => Promise<void>;
@@ -43,14 +42,11 @@ export async function startRelaySubscription(
   options: subscriptionOptions,
  
 ): Promise<void> {
+ 
+  const { pool, signal, filters, onEvent, onClosed, onEose, onError } = options;
 
-  const { pool, signal } = options;
-  
-  const { since, onEvent, onClosed, onEose, onError } = options;
-  const filters: Filter[] = [
-    since !== undefined ? { kinds: options.kinds ?? [KIND_TRUST], since } : { kinds: options.kinds ?? [KIND_TRUST] },
-  ];
-  
+  if(!filters || filters.length === 0) return;
+ 
   try {
     for await (const msg of pool.req(filters, options)) {
       if (msg[0] === 'EOSE') {

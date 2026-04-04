@@ -28,19 +28,19 @@ export async function runTrustedGraphSync(runtimeContext: RuntimeContext): Promi
   const signal = runtimeContext.abortController?.signal ?? new AbortSignal();
 
   while (!signal.aborted) {
-    const bfsSeeds = bfsSeedsFromAuthor(runtimeContext.authors as string[]);
+    const bfsSeeds = bfsSeedsFromAuthor(runtimeContext.authors);
     const chunk = getUnseenTrustedAuthors(
       visitedAuthors,
       runtimeContext.graph as Graph,
       bfsSeeds,
       maxDepth,
-      runtimeContext.contexts as string[],
+      runtimeContext.contexts,
     );
     if (!chunk.length) break; // No more unseen trusted authors
 
     chunk.forEach((author) => visitedAuthors.add(author));
 
-    const filters = createTrustFilters(chunk, kinds, runtimeContext.syncSince, runtimeContext.contexts as string[]);
+    const filters = createTrustFilters(chunk, kinds, runtimeContext.since, runtimeContext.contexts);
     const iterable = runtimeContext.pool?.req(filters, { signal: runtimeContext.abortController?.signal ?? new AbortSignal() }) as AsyncIterable<NostrRelayMsg>;
     const iterator = iterable[Symbol.asyncIterator]();
     let timedOut = false;

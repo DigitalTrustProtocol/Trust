@@ -3,6 +3,8 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { loadKeyPair } from './lib/keys.js';
 import { getPrimaryPublicKeyHex, listIdentityKeys } from './lib/identityStore.js';
+import { decode } from 'node:punycode';
+import { nip19 } from 'nostr-tools';
 
 // Allow override via env (e.g. TRUST_CONFIG_DIR=./trust for local testing)
 const CONFIG_DIR = process.env.TRUST_CONFIG_DIR
@@ -98,6 +100,42 @@ export const DEFAULT_CONFIG: UserConfig = {
   contexts: undefined,
 };
 
+
+/**
+ * Single resolved instance: file + defaults + CLI + identity. Use this for host/port/relays/sync
+ * and focus — no parallel option objects.
+ */
+export type ResolvedRuntimeConfig = Omit<UserConfig, 'authors' | 'contexts'> & {
+  primaryPubkey: string;
+  /** Retain events from these hex pubkeys; empty = all authors (same as former `FocusAxis` `''`). */
+  authors: string[];
+  /** Trust `c` tag values to retain; empty = all contexts. */
+  contexts: string[];
+  syncAuthor: string;
+  syncSubscribeAll: boolean;
+  /** Effective HTTP bind (CLI > `TRUST_SERVER_*` env > config > defaults). */
+  host: string;
+  port: number;
+  /** Relay URLs for this process (CLI `--relay` replaces file list when given). */
+  relays: string[];
+  /** Merged `--since` / config `since` string for `getSinceFromTimestamp`. */
+  since?: number | undefined;
+  /** Unix timestamp for incremental sync / relay `since` filter (parsed from `since` when numeric). */
+  syncSince?: number | undefined;
+  maxDepth: number;
+  syncIntervalSeconds: number;
+  kinds: number[];
+  json: boolean;
+  service: 'all' | 'relay' | 'api' | 'web';
+  /** Effective DB driver (CLI → env → config → infer from URL). */
+  database: 'sqlite' | 'postgres';
+  /** Resolved SQLite file path when using sqlite. */
+  sqlitePath: string;
+  /** Resolved Postgres URL when using postgres (undefined if none configured). */
+  postgresUrl?: string;
+};
+
+
 export function getServerPort(config?: Pick<UserConfig, 'serverPort'>): number {
   const env = process.env.TRUST_SERVER_PORT;
   if (env !== undefined) {
@@ -165,12 +203,31 @@ export function isAllToken(s: string): boolean {
   return s.trim().toLowerCase() === ALL_TOKEN;
 }
 
-export function axisIsUnfiltered(axis: FocusAxis): boolean {
-  return axis === '';
+
+/** Map resolved string lists to `FocusAxis` (`[]` → unfiltered `''`). */
+export function resolvedListsToFocus(authors: string[], contexts: string[]): FocusResolution {
+  return {
+    authors: authors.length === 0 ? '' : authors,
+    contexts: contexts.length === 0 ? '' : contexts,
+  };
 }
 
+function parseOptionalUnixTimestamp(s: string | undefined): number | undefined {
+  if (s === undefined || s === '') return undefined;
+  const n = parseInt(s, 10);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+// If npubXXX then decode it, otherwise just return the hex
 export function normalizePubkeyHex(hex: string): string {
   const h = hex.trim().toLowerCase();
+  if (h.startsWith('npub')) {
+    const decoded = nip19.decode(h);
+    if (decoded.type !== 'npub') {
+      throw new Error(`Invalid npub: ${h}`);
+    }
+    return decoded.data.toLowerCase();
+  }
   if (!/^[0-9a-f]{64}$/.test(h)) {
     throw new Error(`Invalid hex pubkey: ${hex}`);
   }
@@ -187,6 +244,30 @@ export function parseContextsCsv(raw: string | undefined): FocusAxis | undefined
     .filter(Boolean);
   if (parts.length === 0) return '';
   if (parts.length === 1 && isAllToken(parts[0]!)) return '';
+  return parts;
+}
+
+
+export function parseAuthorsString(raw: string): string[] {
+  const t = raw?.trim() ?? '';
+  if (t === '' || t === '*' || isAllToken(t)) return [];
+  const parts = t
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return [];
+  return parts.map((p) => normalizePubkeyHex(p));
+}
+
+
+export function parseContextsString(raw: string): string[] {
+  const t = raw?.trim() ?? '';
+  if (t === '' || t === '*' || isAllToken(t)) return [];
+  const parts = t
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return [];
   return parts;
 }
 
@@ -228,31 +309,6 @@ function listIdentityPubkeysForSync(): string[] {
   return pk ? [pk] : [];
 }
 
-function resolveSyncAuthorString(
-  cliAuthor: string | undefined,
-  cfg: UserConfig,
-  primaryFallback: string,
-): { syncAuthor: string; syncSubscribeAll: boolean } {
-  const raw = cliAuthor?.trim() ?? '';
-  if (raw !== '') {
-    return parseExplicitSyncAuthor(raw, primaryFallback);
-  }
-
-  const fromCfg = normalizeAuthorsList(cfg.authors);
-  if (fromCfg !== undefined) {
-    if (fromCfg === '') {
-      return { syncSubscribeAll: true, syncAuthor: '*' };
-    }
-    return { syncSubscribeAll: false, syncAuthor: fromCfg.join(',') };
-  }
-
-  const pubs = listIdentityPubkeysForSync();
-  if (!pubs.length) {
-    throw new Error('No authors: set `authors` in config or add keys with `trust identity add`.');
-  }
-  return { syncSubscribeAll: false, syncAuthor: pubs.join(',') };
-}
-
 function parseExplicitSyncAuthor(
   raw: string,
   primaryFallback: string,
@@ -273,47 +329,6 @@ function parseExplicitSyncAuthor(
   const parsed = parseAuthorsCsv(t);
   if (parsed === '') return { syncSubscribeAll: true, syncAuthor: '*' };
   return { syncSubscribeAll: false, syncAuthor: (parsed as string[]).join(',') };
-}
-
-/**
- * Merge file config + CLI + identity into focus axes, with sync-derived author string driving
- * the author axis when aligning relay sync and filters.
- */
-function resolveFocusAxes(options: {
-  authorOverride: string;
-  contextsCli: string | undefined;
-  config: UserConfig;
-  primaryPubkey: string;
-}): FocusResolution {
-  const cfg = options.config;
-
-  let authors: FocusAxis = normalizeAuthorsList(cfg.authors) ?? '';
-
-  let contexts: FocusAxis = normalizeContextsList(cfg.contexts) ?? '';
-
-  const authorParam = options.authorOverride;
-  const trimmed = authorParam.trim();
-  if (trimmed === '' || trimmed === '*' || trimmed === 'All' || isAllToken(trimmed)) {
-    authors = '';
-  } else if (trimmed.includes(',')) {
-    authors = parseAuthorsCsv(trimmed);
-  } else if (trimmed === 'primary' || trimmed === 'default') {
-    authors = [options.primaryPubkey];
-  } else {
-    authors = [normalizePubkeyHex(trimmed)];
-  }
-
-  if (options.contextsCli !== undefined) {
-    const ct = options.contextsCli.trim();
-    if (ct === '' || ct === '*' || isAllToken(ct)) {
-      contexts = '';
-    } else {
-      const parsed = parseContextsCsv(options.contextsCli);
-      if (parsed !== undefined) contexts = parsed;
-    }
-  }
-
-  return { authors, contexts };
 }
 
 function cliHas(cli: Record<string, unknown>, key: string): boolean {
@@ -343,12 +358,22 @@ function getCliBoolean(cli: Record<string, unknown>, key: string): boolean | und
   return cli[key] === true;
 }
 
-function getCliStringArray(cli: Record<string, unknown>, key: string): string[] | undefined {
-  if (!cliHas(cli, key)) return undefined;
-  const v = cli[key];
-  if (Array.isArray(v) && v.every((x) => typeof x === 'string')) return v as string[];
-  if (typeof v === 'string' && v.trim() !== '') return [v];
-  return undefined;
+function getCliStringArray(cli: Record<string, unknown>, key: string): string[] {
+  return getStringArray(cli[key] as string | undefined);
+}
+
+function getStringArray(v: string | undefined): string[] {
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) return [];
+  if (typeof v === 'string' && v.trim() !== '') {
+    const parts = v
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean);
+    return parts;
+  };
+  return [];
+
 }
 
 function getCliNumberArray(cli: Record<string, unknown>, key: string): number[] | undefined {
@@ -467,51 +492,14 @@ function parseKindsEnv(raw: string | undefined): number[] | undefined {
 }
 
 function mergeEffectiveRelays(cli: Record<string, unknown>, base: UserConfig): string[] {
-  const relayFromCli = getCliStringArray(cli, 'relay');
-  if (relayFromCli !== undefined && relayFromCli.length > 0) return [...relayFromCli];
-  const envRaw = process.env.TRUST_RELAYS?.trim() || process.env.TRUST_RELAY_URLS?.trim();
-  if (envRaw) {
-    return envRaw
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-  }
-  return [...base.relays];
+ let relays = getStringArray(cli['relay'] ? cli['relay'] as string : process.env.TRUST_RELAYS?.trim());
+  if (relays.length > 0) return relays;
+  return base.relays;
 }
 
-/**
- * Single resolved instance: file + defaults + CLI + identity. Use this for host/port/relays/sync
- * and focus — no parallel option objects.
- */
-export type ResolvedRuntimeConfig = Omit<UserConfig, 'authors' | 'contexts'> & {
-  primaryPubkey: string;
-  authors: FocusAxis;
-  contexts: FocusAxis;
-  syncAuthor: string;
-  syncSubscribeAll: boolean;
-  /** Effective HTTP bind (CLI > `TRUST_SERVER_*` env > config > defaults). */
-  host: string;
-  port: number;
-  /** Relay URLs for this process (CLI `--relay` replaces file list when given). */
-  relays: string[];
-  /** Merged `--since` / config `since` string for `getSinceFromTimestamp`. */
-  since?: string;
-  syncSince?: number;
-  maxDepth: number;
-  syncIntervalSeconds: number;
-  kinds: number[];
-  json: boolean;
-  service: 'all' | 'relay' | 'api' | 'web';
-  /** Effective DB driver (CLI → env → config → infer from URL). */
-  database: 'sqlite' | 'postgres';
-  /** Resolved SQLite file path when using sqlite. */
-  sqlitePath: string;
-  /** Resolved Postgres URL when using postgres (undefined if none configured). */
-  postgresUrl?: string;
-};
 
 export function toFocusResolution(r: ResolvedRuntimeConfig): FocusResolution {
-  return { authors: r.authors, contexts: r.contexts };
+  return resolvedListsToFocus(r.authors, r.contexts);
 }
 
 function mergeEffectiveHostPort(cli: Record<string, unknown>, base: UserConfig): { host: string; port: number } {
@@ -532,46 +520,43 @@ function mergeEffectiveHostPort(cli: Record<string, unknown>, base: UserConfig):
  *
  * Database: `--database` / `postgresUrl` / `sqlitePath` on CLI; `TRUST_DB_DRIVER`, `TRUST_POSTGRES_URL`,
  * `TRUST_SQLITE_PATH`, `DATABASE_URL`, `PGHOST`/`PGUSER`/…, then `config.db.*`.
- * Sync focus: `TRUST_AUTHORS` / `TRUST_SYNC_AUTHOR`, `TRUST_CONTEXTS` when the matching CLI flag is omitted.
+ * Sync focus: `TRUST_AUTHORS`, `TRUST_CONTEXTS` when the matching CLI flag is omitted.
  */
 export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntimeConfig {
   const base = mergeUserConfig();
   const kp = loadKeyPair();
   const primaryPubkey = kp?.publicKey.toLowerCase() ?? '0'.repeat(64);
 
-  const authorsForSync = cliHas(cli, 'authors')
-    ? getCliString(cli, 'authors')
-    : process.env.TRUST_AUTHORS?.trim() || process.env.TRUST_SYNC_AUTHOR?.trim();
+  let authors: string[] = getCliStringArray(cli, 'authors') ?? [];
+  if (authors === undefined) {
+    const authorsString = process.env.TRUST_AUTHORS?.trim();
+    if (authorsString === undefined) {
+      authors = base.authors ?? [];
+    } else {
+      authors = parseAuthorsString(authorsString);
+    }
+  }
 
-  const { syncAuthor, syncSubscribeAll } = resolveSyncAuthorString(authorsForSync, base, primaryPubkey);
+  let contexts: string[] = getCliStringArray(cli, 'contexts') ?? [];
+  if (contexts === undefined) {
+    const contextsString = process.env.TRUST_CONTEXTS?.trim();
+    if (contextsString === undefined) {
+      contexts = base.contexts ?? [];
+    } else {
+      contexts = parseContextsString(contextsString);
+    }
+  }
 
-  const contextsCliResolved = cliHas(cli, 'contexts')
-    ? getCliString(cli, 'contexts')
-    : process.env.TRUST_CONTEXTS?.trim();
-
-  const { authors, contexts } = resolveFocusAxes({
-    authorOverride: syncAuthor,
-    contextsCli: contextsCliResolved,
-    config: base,
-    primaryPubkey,
-  });
-
-  const { authors: _a, contexts: _c, ...rest } = base;
 
   const { host, port } = mergeEffectiveHostPort(cli, base);
 
   const relays = mergeEffectiveRelays(cli, base);
 
-  let since: string | undefined;
-  if (cliHas(cli, 'since')) {
-    const s = getCliString(cli, 'since');
-    since = s !== undefined && s !== '' ? s : undefined;
-  } else {
-    const envSince = process.env.TRUST_SINCE?.trim() || process.env.TRUST_SYNC_SINCE?.trim();
-    if (envSince) since = envSince;
-    else if (base.since !== undefined && base.since !== '') since = base.since;
-    else since = undefined;
-  }
+  let sinceString: string | undefined = cli['since'] ? cli['since'] as string : process.env.TRUST_SINCE?.trim();
+  let since: number | undefined = parseOptionalUnixTimestamp(sinceString ?? base.since);
+
+  let syncSinceString: string | undefined = cli['syncSince'] ? cli['syncSince'] as string : process.env.TRUST_SYNC_SINCE?.trim();
+  let syncSince: number | undefined = parseOptionalUnixTimestamp(syncSinceString ?? base.since);
 
   const maxDepthEnv = process.env.TRUST_MAX_DEPTH?.trim();
   let maxDepthFromEnv: number | undefined;
@@ -584,13 +569,13 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
   const syncIntervalSeconds = cliHas(cli, 'syncInterval')
     ? Math.max(0, getCliNumber(cli, 'syncInterval') ?? 0)
     : (() => {
-        const env = process.env.TRUST_SYNC_INTERVAL_SECONDS?.trim();
-        if (env !== undefined && env !== '') {
-          const n = parseInt(env, 10);
-          if (!Number.isNaN(n)) return Math.max(0, n);
-        }
-        return base.syncIntervalSeconds ?? 3600;
-      })();
+      const env = process.env.TRUST_SYNC_INTERVAL_SECONDS?.trim();
+      if (env !== undefined && env !== '') {
+        const n = parseInt(env, 10);
+        if (!Number.isNaN(n)) return Math.max(0, n);
+      }
+      return base.syncIntervalSeconds ?? 3600;
+    })();
 
   const kindsFromCli = getCliNumberArray(cli, 'kinds');
   const kindsFromEnv = parseKindsEnv(process.env.TRUST_SYNC_KINDS);
@@ -622,26 +607,24 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
   const database = resolveDatabaseDriver(cli, base, postgresUrl);
 
   return {
-    ...rest,
+    ...base,
     authors,
     contexts,
     primaryPubkey,
-    syncAuthor,
-    syncSubscribeAll,
     host,
     port,
     relays,
     since,
+    syncSince: syncSince ?? undefined,
     maxDepth,
     syncIntervalSeconds,
-    syncSince: since ? parseInt(since, 10) : undefined,
     kinds,
     json,
     service,
     database,
     sqlitePath,
     postgresUrl,
-  };
+  } as ResolvedRuntimeConfig;
 }
 
 let runtimeConfig: ResolvedRuntimeConfig | null = null;
