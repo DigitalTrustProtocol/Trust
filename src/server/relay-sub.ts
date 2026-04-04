@@ -197,7 +197,7 @@ function canonicalizeEvent(event: VerifiedEvent): VerifiedEvent {
   return event;
 }
 
-
+/*
 export async function iterativeTrustEventSubscription(
   author: string,
   options: AuthorGraphSubscriptionOptions,
@@ -245,6 +245,8 @@ export async function iterativeTrustEventSubscription(
   };
 }
 
+*/
+/*
 export async function queryAuthorGraph(
   author: string,
   store: NStore,
@@ -277,7 +279,7 @@ export async function queryAuthorGraph(
 
       for (const event of events) {
         let trustEvent = asTrustEvent(event as VerifiedEvent);
-        let inserted = await insertEvent(trustEvent);
+        let inserted = await insertEvent(trustEvent, runtimeContext);
         if (inserted) {
           timestamp = Math.max(timestamp, trustEvent.created_at);
       
@@ -299,7 +301,7 @@ export async function queryAuthorGraph(
     await updateLastSeenTimestamp(TIMESTAMP_NS_SYNC, timestamp);
   }
 }
-
+*/
 /*
 export async function subscribeToGraph(
   author: string,

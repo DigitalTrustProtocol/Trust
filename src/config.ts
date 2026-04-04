@@ -3,8 +3,9 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { loadKeyPair } from './lib/keys.js';
 import { getPrimaryPublicKeyHex, listIdentityKeys } from './lib/identityStore.js';
-import { decode } from 'node:punycode';
 import { nip19 } from 'nostr-tools';
+
+const ALL_TOKEN = 'all';
 
 // Allow override via env (e.g. TRUST_CONFIG_DIR=./trust for local testing)
 const CONFIG_DIR = process.env.TRUST_CONFIG_DIR
@@ -107,9 +108,9 @@ export const DEFAULT_CONFIG: UserConfig = {
  */
 export type ResolvedRuntimeConfig = Omit<UserConfig, 'authors' | 'contexts'> & {
   primaryPubkey: string;
-  /** Retain events from these hex pubkeys; empty = all authors (same as former `FocusAxis` `''`). */
-  authors: string[];
+  /** Retain events from these hex pubkeys; empty = all authors 
   /** Trust `c` tag values to retain; empty = all contexts. */
+  authors: string[];
   contexts: string[];
   syncAuthor: string;
   syncSubscribeAll: boolean;
@@ -189,28 +190,12 @@ export function getNpub(): string {
   return keyPair.npub.toLowerCase();
 }
 
-// ——— Runtime focus & resolved instance config (merged file + CLI + identity) ———
 
-/** `''` = no filter; otherwise hex pubkeys or context strings. */
-export type FocusAxis = '' | string[];
-
-/** In-memory focus for storage, graph, and DB filters. */
-export type FocusResolution = { authors: FocusAxis; contexts: FocusAxis };
-
-const ALL_TOKEN = 'all';
 
 export function isAllToken(s: string): boolean {
   return s.trim().toLowerCase() === ALL_TOKEN;
 }
 
-
-/** Map resolved string lists to `FocusAxis` (`[]` → unfiltered `''`). */
-export function resolvedListsToFocus(authors: string[], contexts: string[]): FocusResolution {
-  return {
-    authors: authors.length === 0 ? '' : authors,
-    contexts: contexts.length === 0 ? '' : contexts,
-  };
-}
 
 function parseOptionalUnixTimestamp(s: string | undefined): number | undefined {
   if (s === undefined || s === '') return undefined;
@@ -234,22 +219,10 @@ export function normalizePubkeyHex(hex: string): string {
   return h;
 }
 
-export function parseContextsCsv(raw: string | undefined): FocusAxis | undefined {
-  if (raw === undefined) return undefined;
-  const t = raw.trim();
-  if (t === '' || t === '*' || isAllToken(t)) return '';
-  const parts = t
-    .split(',')
-    .map((x) => x.trim())
-    .filter(Boolean);
-  if (parts.length === 0) return '';
-  if (parts.length === 1 && isAllToken(parts[0]!)) return '';
-  return parts;
-}
 
-
-export function parseAuthorsString(raw: string): string[] {
-  const t = raw?.trim() ?? '';
+export function parseAuthorsString(raw?: string): string[] | undefined {
+  const t = raw?.trim();
+  if (!t) return undefined;
   if (t === '' || t === '*' || isAllToken(t)) return [];
   const parts = t
     .split(',')
@@ -260,8 +233,9 @@ export function parseAuthorsString(raw: string): string[] {
 }
 
 
-export function parseContextsString(raw: string): string[] {
-  const t = raw?.trim() ?? '';
+export function parseContextsString(raw: string): string[] | undefined {
+  const t = raw?.trim();
+  if (!t) return undefined;
   if (t === '' || t === '*' || isAllToken(t)) return [];
   const parts = t
     .split(',')
@@ -271,26 +245,16 @@ export function parseContextsString(raw: string): string[] {
   return parts;
 }
 
-export function parseAuthorsCsv(raw: string): FocusAxis {
-  const t = raw.trim();
-  if (t === '' || t === '*' || isAllToken(t)) return '';
-  const parts = t
-    .split(',')
-    .map((x) => x.trim())
-    .filter(Boolean);
-  if (parts.length === 0) return '';
-  return parts.map((p) => normalizePubkeyHex(p));
-}
 
-export function normalizeAuthorsList(list: string[] | undefined): FocusAxis | undefined {
+export function normalizeAuthorsList(list: string[] | undefined): string[] | undefined {
   if (!list?.length) return undefined;
-  if (list.length === 1 && isAllToken(list[0]!)) return '';
+  if (list.length === 1 && isAllToken(list[0]!)) return undefined;
   return list.map((a) => normalizePubkeyHex(a));
 }
 
-export function normalizeContextsList(list: string[] | undefined): FocusAxis | undefined {
+export function normalizeContextsList(list: string[] | undefined): string[] | undefined {
   if (!list?.length) return undefined;
-  if (list.length === 1 && isAllToken(list[0]!)) return '';
+  if (list.length === 1 && isAllToken(list[0]!)) return undefined;
   return list.map((c) => c.trim());
 }
 
@@ -307,28 +271,6 @@ function listIdentityPubkeysForSync(): string[] {
   }
   const pk = getPrimaryPublicKeyHex();
   return pk ? [pk] : [];
-}
-
-function parseExplicitSyncAuthor(
-  raw: string,
-  primaryFallback: string,
-): { syncAuthor: string; syncSubscribeAll: boolean } {
-  const t = raw.trim();
-  if (t === '*' || t === 'All' || isAllToken(t)) {
-    return { syncSubscribeAll: true, syncAuthor: '*' };
-  }
-  if (t.toLowerCase() === 'primary') {
-    const pk = getPrimaryPublicKeyHex() ?? primaryFallback;
-    return { syncSubscribeAll: false, syncAuthor: normalizePubkeyHex(pk) };
-  }
-  if (t.includes(',')) {
-    const parsed = parseAuthorsCsv(t);
-    if (parsed === '') return { syncSubscribeAll: true, syncAuthor: '*' };
-    return { syncSubscribeAll: false, syncAuthor: (parsed as string[]).join(',') };
-  }
-  const parsed = parseAuthorsCsv(t);
-  if (parsed === '') return { syncSubscribeAll: true, syncAuthor: '*' };
-  return { syncSubscribeAll: false, syncAuthor: (parsed as string[]).join(',') };
 }
 
 function cliHas(cli: Record<string, unknown>, key: string): boolean {
@@ -500,10 +442,6 @@ function mergeEffectiveRelays(cli: Record<string, unknown>, base: UserConfig): s
 }
 
 
-export function toFocusResolution(r: ResolvedRuntimeConfig): FocusResolution {
-  return resolvedListsToFocus(r.authors, r.contexts);
-}
-
 function mergeEffectiveHostPort(cli: Record<string, unknown>, base: UserConfig): { host: string; port: number } {
   const port = cliHas(cli, 'port') ? (getCliNumber(cli, 'port') ?? getServerPort(base)) : getServerPort(base);
   const hostFromCli = getCliString(cli, 'host');
@@ -533,7 +471,7 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
   let authors: string[] = [];
 
   if (authorString) {
-    authors = parseAuthorsString(authorString);
+    authors = parseAuthorsString(authorString) ?? [];
   } else {
     if (base.authors?.length) {
       authors = base.authors;
@@ -544,17 +482,19 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
       }
     }
   }
+  authors = [...new Set(authors)];
 
 
   let contextString: string | undefined = (cli['contexts'] ? cli['contexts'] as string : process.env.TRUST_CONTEXTS)?.trim();
   let contexts: string[] = [];
   if (contextString) {
-    contexts = parseContextsString(contextString);
+    contexts = parseContextsString(contextString) ?? [];
   } else {
     if (base.contexts?.length) {
-      contexts = [...new Set(base.contexts)];
+      contexts = base.contexts;
     }
   }
+  contexts = [...new Set(contexts)];
 
   const { host, port } = mergeEffectiveHostPort(cli, base);
 

@@ -7,6 +7,7 @@ import { initTrustDb } from '../../lib/db/dbManager.js';
 import type { NostrClientMsg, NostrClientREQ } from '@nostrify/types';
 import type WebSocket from 'ws';
 import type { RawData } from 'ws';
+import { RuntimeContext } from '../../lib/runtimeContext.js';
 
 interface ActiveSubscription {
   id: string;
@@ -28,7 +29,7 @@ declare module 'fastify' {
   }
 }
 
-export default fp(async function relayPlugin(app) {
+export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext) {
   await app.register(websocket);
 
   const clients = new Set<RelayClient>();
@@ -74,7 +75,7 @@ export default fp(async function relayPlugin(app) {
             handleClose(client, msg[1]);
             break;
           case 'EVENT':
-            await handleEvent(msg[1], socket);
+            await handleEvent(msg[1], socket, runtimeContext);
             await fanOutEvent(msg[1], clients);
             break;
           default:
@@ -189,14 +190,13 @@ async function pollSubscription(client: RelayClient, sub: ActiveSubscription): P
   }
 }
 
-async function handleEvent(event: NostrEvent, socket: WebSocket): Promise<void> {
+async function handleEvent(event: NostrEvent, socket: WebSocket, runtimeContext: RuntimeContext): Promise<void> {
   if (!verifyEvent(event)) {
     sendRelayMessage(socket, ['OK', event.id, false, 'invalid: failed event signature verification']);
     return;
   }
 
-  const store = await initTrustDb();
-  const accepted = await insertEvent(event as VerifiedEvent, { store });
+  const accepted = await insertEvent(event as VerifiedEvent, runtimeContext);
   sendRelayMessage(socket, ['OK', event.id, accepted, accepted ? '' : 'duplicate: filtered or rejected']);
 }
 

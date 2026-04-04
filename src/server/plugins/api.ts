@@ -20,7 +20,6 @@ import standardResolver from '../../lib/trust/resolvers/trustResolver.js';
 import { initTrustDb, Store } from '../../lib/db/dbManager.js';
 import { fanOutEvent } from './relay.js';
 import { KIND_TRUST } from '../../lib/nostr/nip32010.js';
-import { getRuntimeConfig, resolveConfig, toFocusResolution } from '../../config.js';
 import { RuntimeContext } from '../../lib/runtimeContext.js';
 
 type TrustBody = {
@@ -53,7 +52,6 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
 
   app.addHook('onReady', async () => {
 
-    const focus = toFocusResolution(getRuntimeConfig());
     await loadGraph(runtimeContext);
 
     const pollMs = Math.max(250, Number(process.env.TRUST_GRAPH_NOTIFY_POLL_MS ?? 2000));
@@ -110,7 +108,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       const relays = relaySelection.selected;
 
       await publishEvent(event, relays);
-      await insertEvent(event);
+      await insertEvent(event, runtimeContext);
 
       if (app.hasDecorator('relayClients')) {
         await fanOutEvent(event, app.relayClients);
@@ -148,8 +146,6 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
         throw new Error('Author is required');
       }
 
-      const store = await initTrustDb();
-      const focus = toFocusResolution(getRuntimeConfig() ?? resolveConfig({}));
       const graph = await loadGraph(runtimeContext);
       const score: Score = standardResolver.resolve(author, subjectId, {
         graph,

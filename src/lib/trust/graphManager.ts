@@ -3,13 +3,10 @@ import { Packr } from 'msgpackr';
 import { Graph } from './graph/Graph.js';
 import { getStore, Store } from '../db/dbManager.js';
 import { asTrustEvent, isTrustEventValid, KIND_TRUST } from '../nostr/nip32010.js';
-import { NStore } from '@nostrify/nostrify';
 import { KIND_DELETE_REQUEST_EVENT as KIND_DELETE_REQUEST } from '../nostr/nip09.js';
 import { KIND_USER_METADATA } from '../nostr/nip01.js';
-import { getPublicKey, getRuntimeConfig, toFocusResolution } from '../../config.js';
-import type { FocusAxis, FocusResolution } from '../../config.js';
-import { eventAllowedByFocus } from './eventFocus.js';
 import { RuntimeContext } from '../runtimeContext.js';
+import { createTrustFilters } from '../../server/graph-sync.js';
 
 const packr = new Packr({ structuredClone: false });
 
@@ -27,26 +24,6 @@ export async function getGraph(): Promise<Graph | null> {
   return graph;
 }
 
-export type LoadGraphArg = string | LoadGraphOptions;
-
-export type LoadGraphOptions = {
-  author?: string;
-  maxDepth?: number;
-  focus?: FocusResolution;
-};
-
-function normalizeLoadArgs(authorOrOpts?: LoadGraphArg, maxDepthArg?: number): LoadGraphOptions {
-  if (authorOrOpts === undefined) {
-    return { author: '*', maxDepth: maxDepthArg ?? 3 };
-  }
-  if (typeof authorOrOpts === 'string') {
-    return { author: authorOrOpts, maxDepth: maxDepthArg ?? 3 };
-  }
-  return {
-    ...authorOrOpts,
-    maxDepth: authorOrOpts.maxDepth ?? maxDepthArg ?? 3,
-  };
-}
 
 export async function loadGraph(runtimeContext: RuntimeContext): Promise<Graph> {
   if (graph) return graph;
@@ -55,46 +32,33 @@ export async function loadGraph(runtimeContext: RuntimeContext): Promise<Graph> 
 
   graph = new Graph();
 
-  /*
-  let authors =runtimeContext.authors;
+  const store = await getStore();
+  const authors = runtimeContext.authors;
+  const maxDepth = runtimeContext.maxDepth;
 
-  if (author === '*') {
-    if (focus?.authors !== undefined && focus.authors !== '') {
-      const roots = focus.authors;
-      for (const root of roots) {
-        await getGraphFromDB(root, maxDepth, store, graph, focus);
-      }
-    } else {
-      await getGraphFromDBAllAuthors(store, graph, focus);
-    }
+  if(authors?.length) {
+    await getGraphFromDB(runtimeContext);
   } else {
-    await getGraphFromDB(author, maxDepth, store, graph, focus);
+    await getGraphFromDBAllAuthors(runtimeContext);
   }
-*/
+
   return graph;
 }
 
-export async function insertEvent(event: VerifiedEvent, opts?: { store?: Store; graph?: Graph }): Promise<boolean> {
-  const cfg = getRuntimeConfig();
-  const focus = cfg ? toFocusResolution(cfg) : null;
-  if (focus && !eventAllowedByFocus(event, focus)) {
-    return false;
-  }
-
-  const store = opts?.store === undefined ? await getStore() : opts?.store;
-  const g = opts?.graph === undefined ? graph : opts?.graph;
+export async function insertEvent(event: VerifiedEvent, runtimeContext: RuntimeContext): Promise<boolean> {
+  const {store, graph } = runtimeContext;
 
   if (event.kind === KIND_TRUST) {
-    return await insertTrustEvent(event, store, g ?? undefined);
+    return await insertTrustEvent(event, store!, graph!);
   }
   if (event.kind === KIND_USER_METADATA) {
-    return await insertUserMetadataEvent(event, store, g ?? undefined);
+    return await insertUserMetadataEvent(event, store!, graph!);
   }
   if (event.kind === KIND_DELETE_REQUEST) {
-    return await insertDeletionRequestEvent(event, store, g ?? undefined);
+    return await insertDeletionRequestEvent(event, store!, graph!);
   }
 
-  return await insertGenericEvent(event, store);
+  return await insertGenericEvent(event, store!);
 }
 
 async function insertGenericEvent(event: VerifiedEvent, store?: Store): Promise<boolean> {
@@ -148,57 +112,39 @@ async function insertUserMetadataEvent(event: VerifiedEvent, store?: Store, grap
   return inserted;
 }
 
-function focusToAllEventsOpts(focus?: FocusResolution | null): { authors?: FocusAxis; contexts?: FocusAxis } | undefined {
-  if (!focus) return undefined;
-  const o: { authors?: FocusAxis; contexts?: FocusAxis } = {};
-  if (focus.authors !== '') o.authors = focus.authors;
-  if (focus.contexts !== '') o.contexts = focus.contexts;
-  return Object.keys(o).length ? o : undefined;
-}
+async function getGraphFromDBAllAuthors(runtimeContext: RuntimeContext): Promise<void> {
+  const {graph, store, kinds, authors, contexts, abortController} = runtimeContext;
 
-async function getGraphFromDBAllAuthors(
-  store: Store,
-  g: Graph,
-  focus?: FocusResolution | null,
-): Promise<void> {
-  const evOpts = focusToAllEventsOpts(focus);
-
-  for await (const event of store.allEvents(KIND_TRUST, evOpts)) {
+  for await (const event of store!.allEvents(kinds, authors, contexts, abortController?.signal ?? new AbortSignal())) {
+    if (abortController?.signal?.aborted) break;
     const trustEvent = asTrustEvent(event as VerifiedEvent);
-    if (focus && !eventAllowedByFocus(trustEvent, focus)) continue;
-    g.applyTrustEvent(trustEvent);
+    graph!.applyTrustEvent(trustEvent);
   }
 }
-
-async function getGraphFromDB(
-  author: string,
-  maxdepth: number,
-  store: NStore,
-  localGraph: Graph,
-  focus?: FocusResolution | null,
-): Promise<void> {
+async function getGraphFromDB(runtimeContext: RuntimeContext): Promise<void> {
   const visited: Set<string> = new Set<string>();
 
-  const queue = [author];
-  let degree = 0;
+  const { graph, store, kinds,authors, contexts, since, maxDepth} = runtimeContext;
+  const queue = [...authors];
+  let depth = 0;
   let nodeIndex = 0;
 
-  while (queue.length > 0 && degree < maxdepth) {
-    const degreeLength = queue.length;
-    degree++;
+  while (queue.length > 0 && depth < maxDepth) {
+    const queueLength = queue.length;
+    depth++;
 
-    while (nodeIndex < degreeLength) {
+    while (nodeIndex < queueLength) {
       const a = queue[nodeIndex++]!;
 
-      const events = await store.query([{ authors: [a], kinds: [KIND_TRUST] }]);
+      const filters = createTrustFilters(kinds, [a], since, contexts); // TODO: Possible to use multiple authors! Maybe batching is faster?!
+      const events = await store!.query(filters);
 
       for (const event of events) {
         const trustEvent = asTrustEvent(event as VerifiedEvent);
-        if (focus && !eventAllowedByFocus(trustEvent, focus)) continue;
-        localGraph.applyTrustEvent(trustEvent);
+        graph!.applyTrustEvent(trustEvent);
       }
 
-      const subjects = localGraph.trustedSubjects(a);
+      const subjects = graph!.trustedSubjects(a);
       for (const subject of subjects) {
         if (!visited.has(subject)) {
           visited.add(subject);

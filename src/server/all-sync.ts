@@ -32,7 +32,7 @@ export async function subscribeToAll(runtimeContext: RuntimeContext): Promise<Gr
         if (visitedEvent.has(event.id)) return; // already inserted
         visitedEvent.add(event.id);
   
-        let inserted = await insertEvent(event, { store: store as Store, graph: graph as Graph });
+        let inserted = await insertEvent(event, runtimeContext);
         if (inserted) {
           eventsInserted++;
           latestTimestamp = Math.max(latestTimestamp, await trackLatestTimestamp(TIMESTAMP_NS_SYNC, [event]));

@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import { Kysely, PostgresDialect, SqliteDialect } from 'kysely';
 import { Pool } from 'pg';
 import { getRuntimeConfig } from '../../config.js';
-import type { FocusAxis, ResolvedRuntimeConfig } from '../../config.js';
+import type { ResolvedRuntimeConfig } from '../../config.js';
 import { NSQLite, NSQLiteOpts, NSQLiteSchema } from './NSQLite.js';
 import Database from 'better-sqlite3';
 import { migratePostgresKV, migrateSQLiteKV } from './kv.js';
@@ -22,15 +22,9 @@ export type GraphNotifyRow = {
   raw_event: Uint8Array | null;
 };
 
-export interface AllEventsOpts {
-  signal?: AbortSignal;
-  authors?: FocusAxis;
-  contexts?: FocusAxis;
-}
-
 export interface ExtendedNRelay extends NRelay {
   getEvent(id: string): Promise<NostrEvent | null>;
-  allEvents(kind: number, opts?: AllEventsOpts): AsyncIterable<NostrEvent>;
+  allEvents(kinds: number[], authors: string[], contexts: string[], signal?: AbortSignal): AsyncIterable<NostrEvent>;
   drainGraphNotifyBatch(limit: number): Promise<GraphNotifyRow[]>;
 }
 

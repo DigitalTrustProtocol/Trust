@@ -61,7 +61,7 @@ export async function runTrustedGraphSync(runtimeContext: RuntimeContext): Promi
           const event = msg[2] as VerifiedEvent;
 
           eventsReceived++;
-          const inserted = await insertEvent(event, { store: runtimeContext.store as Store, graph: runtimeContext.graph as Graph });  
+          const inserted = await insertEvent(event, runtimeContext);  
           if (inserted) {
             eventsInserted++;
             latestTimestamp = Math.max(latestTimestamp, event.created_at);

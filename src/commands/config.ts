@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
-import { DEFAULT_CONFIG, loadUserConfig, PATHS, saveUserConfig, type UserConfig } from '../config.js';
+import { DEFAULT_CONFIG, loadUserConfig, parseAuthorsString, PATHS, saveUserConfig, type UserConfig } from '../config.js';
 import { logger } from '../lib/logger.js';
-import { isAllToken, normalizeAuthorsList, normalizeContextsList, parseAuthorsCsv } from '../config.js';
+import { isAllToken, normalizeAuthorsList, normalizeContextsList } from '../config.js';
 
 function ensureConfig(): UserConfig {
   const existing = loadUserConfig();
@@ -39,8 +39,7 @@ export function registerConfig(program: Command): void {
     .description('Replace authors list')
     .action(async (values: string) => {
       const c = ensureConfig();
-      const parsed = parseAuthorsCsv(values);
-      c.authors = parsed === '' ? ['All'] : parsed;
+      c.authors = parseAuthorsString(values);
       write(c);
     });
 
@@ -91,8 +90,7 @@ export function registerConfig(program: Command): void {
       if (isAllToken(t)) {
         c.contexts = ['All'];
       } else {
-        const parsed = normalizeContextsList(t.split(',').map((x) => x.trim()).filter(Boolean));
-        c.contexts = parsed === '' ? ['All'] : parsed;
+        c.contexts = normalizeContextsList(t.split(',').map((x) => x.trim()).filter(Boolean));
       }
       write(c);
     });
@@ -106,8 +104,7 @@ export function registerConfig(program: Command): void {
         throw new Error('Run `trust config contexts set` with explicit values first (currently All).');
       }
       const cur = c.contexts?.filter((x) => !isAllToken(x)) ?? [];
-      const next = normalizeContextsList([...cur, ...names]);
-      c.contexts = next === '' ? ['All'] : next;
+      c.contexts = normalizeContextsList([...cur, ...names]);
       write(c);
     });
 

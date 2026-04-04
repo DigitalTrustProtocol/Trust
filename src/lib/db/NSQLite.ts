@@ -10,8 +10,7 @@ import type {
 import { Kysely, sql } from 'kysely';
 import { getFilterLimit, sortEvents } from 'nostr-tools';
 import { Packr } from 'msgpackr';
-import { KIND_TRUST } from '../nostr/nip32010.js';
-import type { AllEventsOpts, GraphNotifyRow } from './dbManager.js';
+import type { GraphNotifyRow } from './dbManager.js';
 import { ExtendedNRelay } from './dbManager.js';
 
 const DENORMALIZED_TAGS = new Set(['d', 'c', 't']);
@@ -357,40 +356,37 @@ export class NSQLite implements ExtendedNRelay  {
     return allRows.flat();
   }
 
-  async *allEvents(kind: number = KIND_TRUST, opts: AllEventsOpts = {}): AsyncIterable<NostrEvent> {
-    let query = this.db.selectFrom('nostr_events').selectAll('nostr_events').where('kind', '=', kind);
-
-    if (Array.isArray(opts.authors) && opts.authors.length > 0) {
-      query = query.where(
-        'pubkey',
-        'in',
-        opts.authors.map((a) => a.toLowerCase()),
-      );
+  async *allEvents(kinds: number[], authors: string[], contexts: string[], signal?: AbortSignal): AsyncIterable<NostrEvent> {
+    let query = this.db.selectFrom('nostr_events').selectAll('nostr_events');
+    if(kinds.length === 1) {
+      query = query.where('kind', '=', kinds[0]);
+    } 
+    if(kinds.length > 1) {
+      query = query.where('kind', 'in', kinds);
     }
 
-    if (Array.isArray(opts.contexts) && opts.contexts.length > 0) {
-      const ctxs = opts.contexts;
-      query = query.where((eb) => {
-        const parts = [];
-        for (const c of ctxs) {
-          if (c === '') {
-            parts.push(eb('c', 'is', null));
-            parts.push(eb('c', '=', ''));
-          } else {
-            parts.push(eb('c', '=', c));
-          }
-        }
-        return eb.or(parts);
-      });
+    if(authors.length === 1) {
+      query = query.where('pubkey', '=', authors[0]);
+    }
+    if(authors.length > 1) {
+      query = query.where('pubkey', 'in', authors);
     }
 
-    const rows = query.stream();
+    if(contexts.length === 1) {
+      query = query.where('c', '=', contexts[0]);
+    }
+    if(contexts.length > 1) {
+      query = query.where('c', 'in', contexts);
+    }
+
+    const rows = query.stream(1000);
 
     for await (const row of rows) {
-      if (opts.signal?.aborted) break;
+      if (signal?.aborted) break;
       yield packr.unpack(row.raw_event) as NostrEvent;
     }
   }
+
 
   async drainGraphNotifyBatch(limit: number): Promise<GraphNotifyRow[]> {
     let rows: NSQLiteSchema['trust_graph_notify'][];
