@@ -7,7 +7,7 @@ import { getSinceFromTimestamp } from './server.js';
 import { logger } from '../lib/logger.js';
 import { GraphSyncResult, runTrustedGraphSync } from '../server/graph-sync.js';
 import { subscribeToAll } from '../server/all-sync.js';
-import { getRuntimeContext, RuntimeContext, setRuntimeContext } from '../lib/runtimeContext.js';
+import { getRuntimeContext, RuntimeContext, setRuntimeContext, setupRelayPool, setupStore } from '../lib/runtimeContext.js';
 
 
 export async function syncTrustCommand(options: {
@@ -46,17 +46,8 @@ export async function initRuntimeContext(
 
   runtimeContext.statusCallback = (status: string) => statusLine(status);
 
-  const relaySelection = await getAvailableRelays(cfg.relays);
-  const relays = relaySelection.selected;
-
-  if (relaySelection.offline.length > 0) {
-    runtimeContext.statusCallback?.(`Skipping offline relays: ${relaySelection.offline.map((status) => status.url).join(', ')}`);
-  }
-
-  runtimeContext.statusCallback?.('Initializing trust database...');
-  runtimeContext.relays = relays;
-  runtimeContext.store = await getStore(cfg);
-  runtimeContext.pool = getPool(0, relays);
+  await setupRelayPool(runtimeContext);
+  await setupStore(runtimeContext);
 
   return runtimeContext;
 }

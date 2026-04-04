@@ -2,7 +2,7 @@ import { NPool } from "@nostrify/nostrify";
 import { getStore, initTrustDb, Store } from "./db/dbManager.js";
 import { Graph } from "./trust/graph/Graph.js";
 import { getRuntimeConfig, ResolvedRuntimeConfig } from "../config.js";
-import { getPool } from "./nostr/pool.js";
+import { getAvailableRelays, getPool } from "./nostr/pool.js";
 import { clearGraphMemory, loadGraph } from "./trust/graphManager.js";
 
 let runtimeContext: RuntimeContext | null = null;
@@ -41,4 +41,22 @@ export async function getRuntimeContext(config: ResolvedRuntimeConfig): Promise<
 
 export function setRuntimeContext(context: RuntimeContext): void {
     runtimeContext = context;
+}
+
+
+export async function setupRelayPool(runtimeContext: RuntimeContext): Promise<void> {
+    const relaySelection = await getAvailableRelays(runtimeContext.relays);
+    const relays = relaySelection.selected;
+  
+    if (relaySelection.offline.length > 0) {
+      runtimeContext.statusCallback?.(`Skipping offline relays: ${relaySelection.offline.map((status) => status.url).join(', ')}`);
+    }
+  
+    runtimeContext.relays = relays;
+    runtimeContext.pool = getPool(0, relays);
+}
+
+export async function setupStore(runtimeContext: RuntimeContext): Promise<void> {
+    runtimeContext.statusCallback?.('Initializing trust database...');
+    runtimeContext.store = await getStore(runtimeContext);
 }
