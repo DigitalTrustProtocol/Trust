@@ -4,38 +4,41 @@ import { KIND_TRUST } from "../lib/nostr/nip32010.js";
 import { insertEvent } from "../lib/trust/graphManager.js";
 import { trackLatestTimestamp } from "../lib/timestamp.js";
 import { startRelaySubscription } from "./relay-sub.js";
-import { GraphSyncParams, GraphSyncResult } from "./graph-sync.js";
+import { GraphSyncResult } from "./graph-sync.js";
 import { logger } from "../lib/logger.js";
+import { RuntimeContext } from "../lib/runtimeContext.js";
+import { Store } from "../lib/db/dbManager.js";
+import { Graph } from "../lib/trust/graph/Graph.js";
 
-export async function subscribeToAll(params: GraphSyncParams): Promise<GraphSyncResult> {
+export async function subscribeToAll(runtimeContext: RuntimeContext): Promise<GraphSyncResult> {
     let visitedEvent = new Set<string>();
-    const { relays, since, pool, graph, store, json, statusCallback } = params;
-    const signal = params.abortController?.signal ?? new AbortSignal();
+    const { relays, syncSince: since, pool, graph, store, contexts, json, statusCallback } = runtimeContext;
+    const signal = runtimeContext.abortController?.signal ?? new AbortSignal();
     let latestTimestamp = 0;
     let eventsReceived = 0;
     let eventsInserted = 0;
+
+
+
+    //const contextArray = contexts  ? contexts.split(',') : [];
+    
     const options: subscriptionOptions = {
       relays,
       since,
       kinds: [KIND_TRUST], // subscribe to both trust and user metadata events
-      pool,
+      pool: pool as NPool,
       signal,
       onEvent: async (event) => {
         eventsReceived++;
         if (visitedEvent.has(event.id)) return; // already inserted
         visitedEvent.add(event.id);
   
-        let inserted = await insertEvent(event, { store: store, graph: graph });
+        let inserted = await insertEvent(event, { store: store as Store, graph: graph as Graph });
         if (inserted) {
           eventsInserted++;
           latestTimestamp = Math.max(latestTimestamp, await trackLatestTimestamp([event]));
         }
-        statusCallback?.({
-          processedAuthors: visitedEvent.size,
-          eventsReceived,
-          eventsInserted,
-          latestTimestamp: 0,
-        });
+        statusCallback?.(`Received ${eventsReceived} events. Inserted ${eventsInserted} events.` as string);
       },
       onClosed: (subscriptionID, reason) => {
         return true; // stop the subscription

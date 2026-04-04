@@ -1,7 +1,8 @@
 import fp from 'fastify-plugin';
 import websocket from '@fastify/websocket';
 import { matchFilters, verifyEvent } from 'nostr-tools';
-import type { NostrEvent, Filter } from 'nostr-tools';
+import type { NostrEvent, Filter, VerifiedEvent } from 'nostr-tools';
+import { insertEvent } from '../../lib/trust/graphManager.js';
 import { initTrustDb } from '../../lib/db/dbManager.js';
 import type { NostrClientMsg, NostrClientREQ } from '@nostrify/types';
 import type WebSocket from 'ws';
@@ -195,8 +196,8 @@ async function handleEvent(event: NostrEvent, socket: WebSocket): Promise<void> 
   }
 
   const store = await initTrustDb();
-  await store.event(event);
-  sendRelayMessage(socket, ['OK', event.id, true, '']);
+  const accepted = await insertEvent(event as VerifiedEvent, { store });
+  sendRelayMessage(socket, ['OK', event.id, accepted, accepted ? '' : 'duplicate: filtered or rejected']);
 }
 
 function parseClientMessage(raw: RawData):

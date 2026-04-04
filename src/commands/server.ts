@@ -1,88 +1,81 @@
 import { getLatestTimestamp } from '../lib/timestamp.js';
 import { rollForwardTimestamp } from '../lib/timestamp.js';
-import type { FastifyInstance } from 'fastify';
-import { statusLine } from '../lib/utils.js';
-import { createGraphSyncParams, runSync } from './sync.js';
-import { GraphSyncParams } from '../server/graph-sync.js';
 import { initLogger, logger } from '../lib/logger.js';
-import { createApp, type ServerMode } from '../server/app.js';
+import { createApp, type ServerService } from '../server/app.js';
 import { setDbDriverOverride, type DbDriver } from '../lib/db/dbManager.js';
+import { getRuntimeConfig, resolveConfig, setRuntimeConfig, type ResolvedRuntimeConfig } from '../config.js';
+
+const VALID_SERVICES = new Set<string>(['all', 'relay', 'api', 'web']);
+
+export function parseServerService(raw: string | undefined): ServerService {
+  if (raw === undefined || raw.trim() === '') return 'all';
+  const s = raw.trim().toLowerCase();
+  if (!VALID_SERVICES.has(s)) {
+    throw new Error(`Invalid --service "${raw}". Use all, relay, api, or web.`);
+  }
+  return s as ServerService;
+}
 
 export async function serverCommand(options: {
   port?: number;
   host?: string;
   relay?: string[];
   since?: string;
-  author?: string;
-  context?: string;
+  authors?: string;
+  contexts?: string;
   kinds?: number[];
   maxDepth?: number;
   syncInterval?: number;
   json?: boolean;
-  only?: ServerMode;
+  /** Omitted or `all`: run relay, API, and web in one process. */
+  service?: ServerService;
   database?: string;
 }): Promise<void> {
-
   initLogger('server');
 
-  if (options.database !== undefined && options.database !== '') {
-    const d = options.database.trim().toLowerCase();
-    if (d !== 'sqlite' && d !== 'postgres') {
-      throw new Error('Invalid --database value. Use sqlite or postgres.');
-    }
-    setDbDriverOverride(d as DbDriver);
-  }
+  const resolved = getRuntimeConfig(options);
 
-  const mode = options.only ?? 'all';
-  const needsSync = mode === 'all' || mode === 'relay';
+  setDbDriverOverride(resolved.database as DbDriver);
 
-  if (needsSync) {
-    const syncParams = await createGraphSyncParams(options, (status: string) => statusLine(status));
-    runWebServer(syncParams, mode);
-    await runSync(syncParams);
-  } else {
-    await runWebServer(undefined, mode, options);
-  }
+  const service = resolved.service;
+  await runWebServer(resolved);
 }
 
-async function runWebServer(
-  syncParams: GraphSyncParams | undefined,
-  mode: ServerMode,
-  options?: { port?: number; host?: string; relay?: string[]; json?: boolean },
-): Promise<void> {
-  const host = syncParams?.host ?? options?.host ?? 'localhost';
-  const port = syncParams?.port ?? options?.port ?? 3417;
-  const relays = syncParams?.relays ?? options?.relay ?? [];
-  const json = syncParams?.json ?? options?.json ?? false;
+async function runWebServer(resolved: ResolvedRuntimeConfig): Promise<void> {
+  const host = resolved.host;
+  const port = resolved.port;
+  const relays = resolved.relays;
+  const json = resolved.json;
+  const service = resolved.service;
 
-  const app = await createApp(mode);
+  const app = await createApp(service);
   await app.listen({ host, port });
 
   if (json) {
     console.log(
       JSON.stringify({
-        mode,
+        service,
         host,
         port,
         relays,
-        relayEndpoint: (mode === 'all' || mode === 'relay') ? `ws://${host}:${port}/relay` : undefined,
-        relayInfo: (mode === 'all' || mode === 'relay') ? `http://${host}:${port}/relay-info` : undefined,
+        relayEndpoint: service === 'all' || service === 'relay' ? `ws://${host}:${port}/relay` : undefined,
+        relayInfo: service === 'all' || service === 'relay' ? `http://${host}:${port}/relay-info` : undefined,
         status: 'listening',
       }),
     );
   } else {
-    logger.info(`Trust server listening on http://${host}:${port} (mode: ${mode})`);
+    logger.info(`Trust server listening on http://${host}:${port} (service: ${service})`);
     if (relays.length > 0) {
       logger.info(`Relays: ${relays.join(', ')}`);
     }
-    if (mode === 'all' || mode === 'relay') {
+    if (service === 'all' || service === 'relay') {
       logger.info(`Relay websocket (NIP-32010): ws://${host}:${port}/relay`);
       logger.info(`Relay info (NIP-11): http://${host}:${port}/relay-info`);
     }
-    if (mode === 'all' || mode === 'api') {
+    if (service === 'all' || service === 'api') {
       logger.info(`REST API: http://${host}:${port}/trust, /resolve, /health`);
     }
-    if (mode === 'all' || mode === 'web') {
+    if (service === 'all' || service === 'web') {
       logger.info(`Web: http://${host}:${port}/`);
     }
   }

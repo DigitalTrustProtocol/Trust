@@ -78,7 +78,7 @@ describe('trust e2e tests', () => {
       const { stdout, code } = await runCli([
         'resolve',
         'a'.repeat(64),
-        '--author',
+        '--authors',
         'b'.repeat(64),
       ]);
 
@@ -91,7 +91,7 @@ describe('trust e2e tests', () => {
       const { stdout, code } = await runCli([
         'resolve',
         'a'.repeat(64),
-        '--author',
+        '--authors',
         'b'.repeat(64),
         '--json',
       ]);

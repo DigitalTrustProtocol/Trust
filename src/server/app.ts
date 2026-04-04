@@ -4,22 +4,28 @@ import relayPlugin from './plugins/relay.js';
 import apiPlugin from './plugins/api.js';
 import webPlugin from './plugins/web.js';
 
-export type ServerMode = 'all' | 'relay' | 'api' | 'web';
+/** Which parts of the Trust stack to run in this process (`all` = relay + API + web together). */
+export type ServerService = 'all' | 'relay' | 'api' | 'web';
 
-export async function createApp(mode: ServerMode = 'all'): Promise<FastifyInstance> {
+/** @deprecated Use ServerService */
+export type ServerMode = ServerService;
+
+export async function createApp(service: ServerService = 'all'): Promise<FastifyInstance> {
   const app = Fastify({
     loggerInstance: getPinoInstance(),
   }) as unknown as FastifyInstance;
 
-  if (mode === 'all' || mode === 'relay') {
+  if (service === 'all' || service === 'relay') {
     await app.register(relayPlugin);
   }
 
-  if (mode === 'all' || mode === 'api') {
-    await app.register(apiPlugin);
+  if (service === 'all' || service === 'api') {
+    await app.register(apiPlugin, {
+      enableGraphNotifyPoller: service === 'api',
+    });
   }
 
-  if (mode === 'all' || mode === 'web') {
+  if (service === 'all' || service === 'web') {
     await app.register(webPlugin);
   }
 

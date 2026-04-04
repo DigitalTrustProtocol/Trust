@@ -1,9 +1,10 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { nsecEncode, npubEncode } from 'nostr-tools/nip19';
 import { bytesToHex, hexToBytes } from 'nostr-tools/utils';
 import { PATHS } from '../config.js';
+import { loadPrimarySecretKey } from './identityStore.js';
 
 export interface KeyPair {
   secretKey: Uint8Array;
@@ -28,37 +29,18 @@ export function generateKeyPair(): KeyPair {
 }
 
 /**
- * Check if a secret key file exists
+ * Whether a signing key is available (legacy `secret.key`, `identity.json`, or `keys/*.key`).
  */
 export function hasSecretKey(): boolean {
-  return existsSync(PATHS.secretKey);
+  return loadSecretKey() !== null;
 }
 
 /**
- * Load the secret key from disk
+ * Load the primary secret key (identity.json + keys/ or legacy secret.key).
  * Returns null if not found
  */
 export function loadSecretKey(): Uint8Array | null {
-  if (!existsSync(PATHS.secretKey)) {
-    return null;
-  }
-
-  const content = readFileSync(PATHS.secretKey, 'utf-8').trim();
-
-  // Support both hex and nsec formats
-  if (content.startsWith('nsec1')) {
-    const decoded = hexToBytes(content);
-    // nsec decode - we need to handle this differently
-    // For now, we store as hex, so this branch is for backwards compat
-    throw new Error('nsec format not yet supported for storage, please use hex');
-  }
-
-  // Hex format (64 characters)
-  if (/^[0-9a-f]{64}$/i.test(content)) {
-    return hexToBytes(content);
-  }
-
-  throw new Error('Invalid secret key format in ' + PATHS.secretKey);
+  return loadPrimarySecretKey();
 }
 
 /**

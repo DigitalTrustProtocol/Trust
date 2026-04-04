@@ -4,27 +4,9 @@ import { Graph } from '../lib/trust/graph/Graph.js';
 import { insertEvent } from '../lib/trust/graphManager.js';
 import { KIND_TRUST } from '../lib/nostr/nip32010.js';
 import { Store } from '../lib/db/dbManager.js';
+import { RuntimeContext } from '../lib/runtimeContext.js';
 
 export const AUTHOR_CHUNK_SIZE = 100;
-
-export interface GraphSyncParams {
-  host: string;
-  port: number;
-  author: string;
-  pool: NPool;
-  store: Store;
-  graph: Graph;
-  relays: string[];
-  since?: number;
-  maxDepth?: number;
-  kinds?: number[];
-  context?: string;
-  syncIntervalSeconds?: number;
-  quietTimeoutMs?: number;
-  json?: boolean;
-  abortController?: AbortController;
-  statusCallback?: (status: GraphSyncResult) => void;
-}
 
 export interface GraphSyncResult {
   processedAuthors: number;
@@ -33,27 +15,33 @@ export interface GraphSyncResult {
   latestTimestamp: number;
 }
 
-export async function runTrustedGraphSync(params: GraphSyncParams): Promise<GraphSyncResult> {
-  const maxDepth = params.maxDepth ?? 3;
-  const quietTimeoutMs = params.quietTimeoutMs ?? 1000;
-  const kinds = params.kinds ?? [KIND_TRUST];
+export async function runTrustedGraphSync(runtimeContext: RuntimeContext): Promise<GraphSyncResult> {
+  const maxDepth = runtimeContext.maxDepth ?? 3;
+  const quietTimeoutMs = runtimeContext.quietTimeoutMs ?? 1000;
+  const kinds = runtimeContext.kinds ?? [KIND_TRUST];
 
   const visitedAuthors = new Set<string>();
   let eventsReceived = 0;
   let eventsInserted = 0;
   let latestTimestamp = 0;
 
-  const rootAuthor = params.author;
-  const signal = params.abortController?.signal ?? new AbortSignal();
+  const signal = runtimeContext.abortController?.signal ?? new AbortSignal();
 
   while (!signal.aborted) {
-    const chunk = getUnseenTrustedAuthors(visitedAuthors, params.graph, rootAuthor, maxDepth, params.context);
+    const bfsSeeds = bfsSeedsFromAuthor(runtimeContext.authors as string[]);
+    const chunk = getUnseenTrustedAuthors(
+      visitedAuthors,
+      runtimeContext.graph as Graph,
+      bfsSeeds,
+      maxDepth,
+      runtimeContext.contexts as string[],
+    );
     if (!chunk.length) break; // No more unseen trusted authors
 
     chunk.forEach((author) => visitedAuthors.add(author));
 
-    const filters = createTrustFilters(chunk, kinds, params.since, params.context);
-    const iterable = params.pool.req(filters, { signal: params.abortController?.signal ?? new AbortSignal() }) as AsyncIterable<NostrRelayMsg>;
+    const filters = createTrustFilters(chunk, kinds, runtimeContext.syncSince, runtimeContext.contexts as string[]);
+    const iterable = runtimeContext.pool?.req(filters, { signal: runtimeContext.abortController?.signal ?? new AbortSignal() }) as AsyncIterable<NostrRelayMsg>;
     const iterator = iterable[Symbol.asyncIterator]();
     let timedOut = false;
 
@@ -73,7 +61,7 @@ export async function runTrustedGraphSync(params: GraphSyncParams): Promise<Grap
           const event = msg[2] as VerifiedEvent;
 
           eventsReceived++;
-          const inserted = await insertEvent(event, { store: params.store, graph: params.graph });
+          const inserted = await insertEvent(event, { store: runtimeContext.store as Store, graph: runtimeContext.graph as Graph });  
           if (inserted) {
             eventsInserted++;
             latestTimestamp = Math.max(latestTimestamp, event.created_at);
@@ -93,12 +81,7 @@ export async function runTrustedGraphSync(params: GraphSyncParams): Promise<Grap
       //params.signal?.removeEventListener('abort', onParentAbort);
     }
 
-    params.statusCallback?.({
-      processedAuthors: visitedAuthors.size,
-      eventsReceived,
-      eventsInserted,
-      latestTimestamp,
-    });
+    runtimeContext.statusCallback?.(`Processed ${visitedAuthors.size} authors. Received ${eventsReceived} events. Inserted ${eventsInserted} events.` as string);
   }
 
   return {
@@ -109,22 +92,43 @@ export async function runTrustedGraphSync(params: GraphSyncParams): Promise<Grap
   };
 }
 
+/** Comma-separated hex pubkeys; `author` must not be `*` (caller uses subscribe-all path). */
+function bfsSeedsFromAuthor(authors: string[]): string[] {
+  return authors.map((author) => author.trim().toLowerCase());
+}
 
-function getUnseenTrustedAuthors(seen: Set<string>, graph: Graph, rootAuthor: string, maxDepth: number, context?: string): string[] {
+function getUnseenTrustedAuthors(
+  seen: Set<string>,
+  graph: Graph,
+  rootAuthors: string[],
+  maxDepth: number,
+  contexts?: string[],
+): string[] {
   const result: string[] = [];
 
-  if(!seen.has(rootAuthor)) {
-    result.push(rootAuthor);
+  const queue: Array<{ author: string; depth: number }> = [];
+  for (const r of rootAuthors) {
+    if (!seen.has(r) && result.length < AUTHOR_CHUNK_SIZE) {
+      result.push(r);
+    }
+    queue.push({ author: r, depth: 0 });
   }
-
-  const queue: Array<{ author: string; depth: number }> = [{ author: rootAuthor, depth: 0 }];
 
   while (queue.length && result.length < AUTHOR_CHUNK_SIZE) {
     const current = queue.shift()!;
     if (current.depth >= maxDepth) continue;
 
-    const trusted = graph.trustedSubjects(current.author, context, true);
-    for (const author of trusted) {
+    const trustedList = (() => {
+      if (contexts?.length) {
+        const acc = new Set<string>();
+        for (const c of contexts) {
+          for (const t of graph.trustedSubjects(current.author, c, true)) acc.add(t);
+        }
+        return acc;
+      }
+      return new Set(graph.trustedSubjects(current.author, undefined, true));
+    })();
+    for (const author of trustedList) {
       queue.push({ author, depth: current.depth + 1 });
 
       if (!seen.has(author)) {
@@ -137,7 +141,12 @@ function getUnseenTrustedAuthors(seen: Set<string>, graph: Graph, rootAuthor: st
   return result;
 }
 
-function createTrustFilters(authors: string[], kinds: number[], since?: number, context?: string): Filter[] {
+function createTrustFilters(
+  authors: string[],
+  kinds: number[],
+  since?: number,
+  contexts?: string[],
+): Filter[] {
   const filter: Filter = {
     kinds,
     authors,
@@ -147,8 +156,8 @@ function createTrustFilters(authors: string[], kinds: number[], since?: number, 
     filter.since = since;
   }
 
-  if (context !== undefined) {
-    filter['#c'] = [context, ''];
+  if (contexts?.length) {
+    filter['#c'] = [...new Set(contexts)];
   }
 
   return [filter];

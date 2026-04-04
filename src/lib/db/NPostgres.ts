@@ -12,6 +12,7 @@ import { Kysely, type SelectQueryBuilder, sql } from 'kysely';
 import { getFilterLimit, sortEvents } from 'nostr-tools';
 import { Packr } from 'msgpackr';
 import { kvDelete, kvGet, kvSet } from './kv.js';
+import type { AllEventsOpts, GraphNotifyRow } from './dbManager.js';
 import { ExtendedNRelay } from './dbManager.js';
 import { KIND_TRUST } from '../nostr/nip32010.js';
 
@@ -34,6 +35,12 @@ export interface NPostgresSchema {
     c: string | null;
     search: unknown;
     search_ext: Record<string, string>;
+  };
+  trust_graph_notify: {
+    seq: number | string | bigint;
+    event_id: string;
+    op: string;
+    raw_event: Buffer | Uint8Array | null;
   };
 }
 
@@ -419,17 +426,66 @@ export class NPostgres implements ExtendedNRelay {
       .selectAll() as SelectEventsQuery;
   }
 
-    async *allEvents(kind: number = KIND_TRUST, opts: { signal?: AbortSignal } = {}): AsyncIterable<NostrEvent> {
-      const rows = this.db
-        .selectFrom('nostr_events')
-        .selectAll('nostr_events')
-        .where('kind', '=', kind)
-        .stream(1000);
+    async *allEvents(kind: number = KIND_TRUST, opts: AllEventsOpts = {}): AsyncIterable<NostrEvent> {
+      let query = this.db.selectFrom('nostr_events').selectAll('nostr_events').where('kind', '=', kind);
+
+      if (Array.isArray(opts.authors) && opts.authors.length > 0) {
+        query = query.where(
+          'pubkey',
+          'in',
+          opts.authors.map((a) => a.toLowerCase()),
+        );
+      }
+
+      if (Array.isArray(opts.contexts) && opts.contexts.length > 0) {
+        const ctxs = opts.contexts;
+        query = query.where((eb) => {
+          const parts = [];
+          for (const c of ctxs) {
+            if (c === '') {
+              parts.push(eb('c', 'is', null));
+              parts.push(eb('c', '=', ''));
+            } else {
+              parts.push(eb('c', '=', c));
+            }
+          }
+          return eb.or(parts);
+        });
+      }
+
+      const rows = query.stream(1000);
 
       for await (const row of rows) {
+        if (opts.signal?.aborted) break;
         yield packr.unpack(row.raw_event) as NostrEvent;
       }
     }
+
+  async drainGraphNotifyBatch(limit: number): Promise<GraphNotifyRow[]> {
+    let rows: NPostgresSchema['trust_graph_notify'][];
+    try {
+      rows = await this.db
+        .selectFrom('trust_graph_notify')
+        .selectAll()
+        .orderBy('seq', 'asc')
+        .limit(limit)
+        .execute();
+    } catch {
+      return [];
+    }
+
+    if (!rows.length) return [];
+
+    const seqs = rows.map((r) => r.seq);
+    await this.db.deleteFrom('trust_graph_notify').where('seq', 'in', seqs).execute();
+
+    return rows.map((r) => ({
+      seq: Number(r.seq),
+      event_id: r.event_id,
+      op: r.op as 'INSERT' | 'DELETE',
+      raw_event: r.raw_event ? new Uint8Array(r.raw_event) : null,
+    }));
+  }
   
 
   /**
@@ -521,6 +577,12 @@ export class NPostgres implements ExtendedNRelay {
   /** Parse an event row from the database. */
   protected parseEventRow(row: NPostgresSchema['nostr_events']): NostrEvent {
     return packr.unpack(row.raw_event) as NostrEvent;
+  }
+
+  async getEvent(id: string): Promise<NostrEvent | null> {
+    const row = await this.db.selectFrom('nostr_events').selectAll('nostr_events').where('id', '=', id).executeTakeFirst();
+    if (!row) return null;
+    return this.parseEventRow(row);
   }
 
   // Returns rows directly without unpacking raw_event.
@@ -732,5 +794,46 @@ export class NPostgres implements ExtendedNRelay {
       .column('search_ext')
       .ifNotExists()
       .execute();
+
+    await this.installGraphNotifySchema();
+  }
+
+  private async installGraphNotifySchema(): Promise<void> {
+    await sql`
+      CREATE TABLE IF NOT EXISTS trust_graph_notify (
+        seq BIGSERIAL PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        op TEXT NOT NULL,
+        raw_event BYTEA
+      )
+    `.execute(this.db);
+
+    await sql.raw(`CREATE OR REPLACE FUNCTION trust_graph_notify_insert_fn() RETURNS trigger AS $$
+BEGIN
+  INSERT INTO trust_graph_notify(event_id, op) VALUES (NEW.id, 'INSERT');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql`).execute(this.db);
+
+    await sql.raw(`CREATE OR REPLACE FUNCTION trust_graph_notify_delete_fn() RETURNS trigger AS $$
+BEGIN
+  INSERT INTO trust_graph_notify(event_id, op, raw_event) VALUES (OLD.id, 'DELETE', OLD.raw_event);
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql`).execute(this.db);
+
+    await sql.raw(`DROP TRIGGER IF EXISTS trg_nostr_events_ai_graph ON nostr_events`).execute(this.db);
+    await sql.raw(`
+CREATE TRIGGER trg_nostr_events_ai_graph
+AFTER INSERT ON nostr_events
+FOR EACH ROW EXECUTE PROCEDURE trust_graph_notify_insert_fn()
+`).execute(this.db);
+
+    await sql.raw(`DROP TRIGGER IF EXISTS trg_nostr_events_ad_graph ON nostr_events`).execute(this.db);
+    await sql.raw(`
+CREATE TRIGGER trg_nostr_events_ad_graph
+AFTER DELETE ON nostr_events
+FOR EACH ROW EXECUTE PROCEDURE trust_graph_notify_delete_fn()
+`).execute(this.db);
   }
 }

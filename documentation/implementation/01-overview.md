@@ -70,6 +70,12 @@ Both cache strategies reuse the same DB schema and resolution logic; they only d
 
 ## Phase 2: Server/Client Architecture
 
+### Focus and split processes
+
+- **Config:** `authors` and `contexts` in `config.json` scope what is retained (use the single token **`All`** in a one-element list when you want no filter on that axis). Omitted `authors` / `contexts` default to **all** authors and **all** contexts unless narrowed by **`--authors`** / **`--contexts`** on sync/server.
+- **CLI precedence:** **`--authors`** and **`--contexts`** override `config.json` for that sync/server process when set.
+- **Split processes:** `trust server --service relay` and `trust server --service api` can share one database (SQLite file or Postgres). The API process polls `trust_graph_notify` (filled by DB triggers on `nostr_events` insert/delete) to refresh the graph when the relay process writes events. **`trust sync`** writes the relay feed to the database only; the API process refreshes its graph from the DB (notify queue / triggers).
+
 ### Cache-Backed DB Layer
 
 - **Principle:** All searches (resolve, query paths) go against the in-memory cache for speed.

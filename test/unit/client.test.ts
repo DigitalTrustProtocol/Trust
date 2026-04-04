@@ -54,7 +54,7 @@ describe('client wrapper', () => {
 
     const result = await proxyTrust(undefined, {
       subjects: ['npub1test'],
-      context: 'test',
+      contexts: 'test',
       value: 1,
       content: 'hello',
       relay: ['wss://relay.test'],
@@ -67,7 +67,7 @@ describe('client wrapper', () => {
       },
       body: JSON.stringify({
         subjects: ['npub1test'],
-        context: 'test',
+        contexts: 'test',
         value: 1,
         content: 'hello',
         relay: ['wss://relay.test'],
@@ -100,7 +100,7 @@ describe('client wrapper', () => {
 
     const result = await proxyResolve(undefined, {
       subject: 'npub1test',
-      context: 'test',
+      contexts: 'test',
       strategy: 'cache',
       maxDepth: 3,
     });
@@ -112,7 +112,7 @@ describe('client wrapper', () => {
       },
       body: JSON.stringify({
         subject: 'npub1test',
-        context: 'test',
+        contexts: 'test',
         strategy: 'cache',
         maxDepth: 3,
       }),

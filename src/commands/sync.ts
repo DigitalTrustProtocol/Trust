@@ -1,21 +1,20 @@
-import { closeTrustDb, initTrustDb, Store } from '../lib/db/dbManager.js';
-import { closePool, connectionErrors, getPool } from '../lib/nostr/pool.js';
+import { closeTrustDb, getStore, initTrustDb, Store } from '../lib/db/dbManager.js';
+import { closePool, getPool } from '../lib/nostr/pool.js';
 import { getAvailableRelays } from '../lib/nostr/pool.js';
 import { statusLine } from '../lib/utils.js';
-import { DEFAULT_CONFIG, DEFAULT_RELAYS, getPublicKey, getServerHost, getServerPort } from '../config.js';
+import { getRuntimeConfig } from '../config.js';
 import { getSinceFromTimestamp } from './server.js';
 import { logger } from '../lib/logger.js';
-import { loadGraph } from '../lib/trust/graphManager.js';
-import { GraphSyncParams, GraphSyncResult, runTrustedGraphSync } from '../server/graph-sync.js';
-import { KIND_TRUST } from '../lib/nostr/nip32010.js';
+import { GraphSyncResult, runTrustedGraphSync } from '../server/graph-sync.js';
 import { subscribeToAll } from '../server/all-sync.js';
+import { getRuntimeContext, RuntimeContext, setRuntimeContext } from '../lib/runtimeContext.js';
 
 
 export async function syncTrustCommand(options: {
   relay?: string[];
   since?: string;
-  author?: string;
-  context?: string;
+  authors?: string;
+  contexts?: string;
   kinds?: number[];
   maxDepth?: number;
   syncInterval?: number;
@@ -29,117 +28,75 @@ export async function syncTrustCommand(options: {
     return;
   }
 
-  const syncParams = await createGraphSyncParams(options, (status: string) => statusLine(status));
 
-  await runSync(syncParams);
+
+  const runtimeContext = await initRuntimeContext(options);
+
+  await runSync(runtimeContext);
 }
 
-export async function createGraphSyncParams(options: {
-  host?: string;
-  port?: number;
-  relay?: string[];
-  since?: string;
-  author?: string;
-  context?: string;
-  kinds?: number[];
-  maxDepth?: number;
-  syncInterval?: number;
-  json?: boolean;
-},statusCallback?: (status: string) => void): Promise<GraphSyncParams> {
+export async function initRuntimeContext(
+  cli: Record<string, unknown>
+): Promise<RuntimeContext> {
 
-  const abortController = new AbortController();
+  const cfg = getRuntimeConfig(cli);
+  const runtimeContext = await getRuntimeContext(cfg);
+  
+  runtimeContext.syncSince = await getSinceFromTimestamp(undefined);
 
-  const author = options.author?.trim() || getPublicKey();
-  const maxDepth = Math.max(1, options.maxDepth ?? 3);
-  const kinds = options.kinds?.length ? options.kinds : [KIND_TRUST];
+  runtimeContext.statusCallback = (status: string) => statusLine(status);
 
-
-  let syncIntervalSeconds = 3600; // 1 hour
-  if (options.syncInterval) {
-    syncIntervalSeconds = Math.max(0, options.syncInterval);
-  }
-
-  const since = await getSinceFromTimestamp(options.since);
-
-  const host = options.host ?? getServerHost(DEFAULT_CONFIG);
-  const port = options.port ?? getServerPort(DEFAULT_CONFIG);
-
-
-  const relaySelection = await getAvailableRelays(options.relay ?? DEFAULT_RELAYS);
+  const relaySelection = await getAvailableRelays(cfg.relays);
   const relays = relaySelection.selected;
+
   if (relaySelection.offline.length > 0) {
-    statusCallback?.(`Skipping offline relays: ${relaySelection.offline.map((status) => status.url).join(', ')}`);
+    runtimeContext.statusCallback?.(`Skipping offline relays: ${relaySelection.offline.map((status) => status.url).join(', ')}`);
   }
 
-  statusCallback?.('Initializing trust database...');
-  let store = await initTrustDb();
-  let pool = getPool(0, relays); // No timeout, we handle the eose timeout in the sync loop
+  runtimeContext.statusCallback?.('Initializing trust database...');
+  runtimeContext.relays = relays;
+  runtimeContext.store = await getStore(cfg);
+  runtimeContext.pool = getPool(0, relays);
 
-  statusCallback?.('Loading trust data to memory...');
-  let graph = await loadGraph(store, options.author, maxDepth);
-  statusCallback?.('Number of Authors loaded: ' + graph.nodes.size + ' Number of Edges loaded: ' + graph.edges.size);
-
-
-  const syncParams: GraphSyncParams = {
-    host,
-    port,
-    author,
-    pool,
-    store,
-    graph,
-    relays,
-    since,
-    maxDepth,
-    syncIntervalSeconds,
-    context: options.context,
-    kinds,
-    abortController,
-    statusCallback: (status) => {
-      //statusCallback?.(JSON.stringify(status));
-    },
-  }
-
-  return syncParams;
+  return runtimeContext;
 }
 
-export async function runSync(syncParams: GraphSyncParams): Promise<GraphSyncResult | undefined> {
-
+export async function runSync(runtimeContext: RuntimeContext): Promise<GraphSyncResult | undefined> {
   let lastStatus: GraphSyncResult | undefined;
-  let signal = syncParams.abortController?.signal ?? new AbortSignal();
+  const signal = runtimeContext.abortController?.signal ?? new AbortSignal();
 
   try {
-    logger.info("Subscribing to relays " + syncParams.since ? `from ${new Date(syncParams.since! * 1000).toLocaleString()}` : 'from beginning');
+    const sinceLabel = runtimeContext.syncSince
+      ? `from ${new Date(runtimeContext.syncSince * 1000).toLocaleString()}`
+      : 'from beginning';
+    logger.info(`Subscribing to relays ${sinceLabel}`);
 
-    logger.info('Syncing trust graph...');
+    logger.info('Syncing trust (relay → database)…');
     do {
-
-      if (syncParams.author === "*") {
-        lastStatus = await subscribeToAll(syncParams);
+      if (runtimeContext.authors.length === 0) {
+        lastStatus = await subscribeToAll(runtimeContext);
       } else {
-        lastStatus = await runTrustedGraphSync(syncParams);
+        lastStatus = await runTrustedGraphSync(runtimeContext);
       }
       logger.info(`Received ${lastStatus.eventsReceived} events. Inserted ${lastStatus.eventsInserted} events.`);
 
-
-      if ((syncParams?.syncIntervalSeconds &&  syncParams.syncIntervalSeconds <= 0) || signal.aborted) {
+      if ((runtimeContext?.syncIntervalSeconds && runtimeContext.syncIntervalSeconds <= 0) || signal.aborted) {
         break;
       }
 
-      logger.info(`Waiting ${syncParams.syncIntervalSeconds}s before next sync...`);
-      let waitIntervalMs = syncParams?.syncIntervalSeconds ?? 3600;
+      logger.info(`Waiting ${runtimeContext.syncIntervalSeconds}s before next sync...`);
+      const waitIntervalMs = runtimeContext?.syncIntervalSeconds ?? 3600;
       const waitCompleted = await waitForInterval(waitIntervalMs * 1000, signal);
       if (!waitCompleted) break;
-    } while (!syncParams.abortController?.signal.aborted);
-   
-
+    } while (!runtimeContext.abortController?.signal.aborted);
   } catch (err) {
-    if (!syncParams.abortController?.signal.aborted) {
-      syncParams.abortController?.abort("Sync stopped");
+    if (!runtimeContext.abortController?.signal.aborted) {
+      runtimeContext.abortController?.abort('Sync stopped');
     }
     throw err;
   } finally {
-    if(syncParams.pool) await closePool(syncParams.pool);
-    if(syncParams.store) await closeTrustDb(syncParams.store as Store);
+    if (runtimeContext.pool) await closePool(runtimeContext.pool);
+    if (runtimeContext.store) await closeTrustDb(runtimeContext.store as Store);
   }
 
   return lastStatus;
@@ -153,9 +110,13 @@ async function waitForInterval(ms: number, signal: AbortSignal): Promise<boolean
       return;
     }
     const timer = setTimeout(() => resolve(true), ms);
-    signal.addEventListener('abort', () => {
-      clearTimeout(timer);
-      resolve(false);
-    }, { once: true });
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        resolve(false);
+      },
+      { once: true },
+    );
   });
 }

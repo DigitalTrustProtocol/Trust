@@ -1,19 +1,39 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, rmSync, mkdirSync } from 'node:fs';
 
-vi.mock('../../../src/config.js', () => {
-  const { join } = require('node:path');
-  const { tmpdir } = require('node:os');
+vi.mock('../../../src/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/config.js')>();
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
   const dir = join(tmpdir(), 'trust-trust-db-test-' + process.pid + '-' + Date.now());
+  const PATHS = {
+    ...actual.PATHS,
+    configDir: dir,
+    secretKey: join(dir, 'secret.key'),
+    config: join(dir, 'config.json'),
+    trustDb: join(dir, 'trust.db'),
+    graphCache: join(dir, 'graph-cache.bin'),
+  };
+  const loadUserConfig = () => undefined;
   return {
-    PATHS: {
-      configDir: dir,
-      secretKey: join(dir, 'secret.key'),
-      config: join(dir, 'config.json'),
-      trustDb: join(dir, 'trust.db'),
-      graphCache: join(dir, 'graph-cache.bin'),
+    ...actual,
+    PATHS,
+    loadUserConfig,
+    mergeUserConfig: () => ({ ...actual.DEFAULT_CONFIG, ...loadUserConfig() }),
+    resolveSqlitePath: (cli: Record<string, unknown>, base: actual.UserConfig) => {
+      if (Object.prototype.hasOwnProperty.call(cli, 'sqlitePath')) {
+        const v = cli['sqlitePath'];
+        if (v !== undefined && v !== null) {
+          const s = String(v).trim();
+          if (s) return s;
+        }
+      }
+      const fromEnv = process.env.TRUST_SQLITE_PATH?.trim();
+      if (fromEnv) return fromEnv;
+      const fromConfig = base.db?.sqlitePath?.trim();
+      if (fromConfig) return fromConfig;
+      return PATHS.trustDb;
     },
-    loadUserConfig: () => undefined,
   };
 });
 

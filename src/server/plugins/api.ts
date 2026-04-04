@@ -9,14 +9,22 @@ import { loadSecretKey } from '../../lib/keys.js';
 import { getPublicKey } from 'nostr-tools/pure';
 import type { VerifiedEvent } from 'nostr-tools';
 import { Score } from '../../lib/trust/resolvers/Score.js';
-import { insertEvent, loadGraph } from '../../lib/trust/graphManager.js';
+import {
+  applyTrustEventToGraph,
+  getLoadedGraph,
+  insertEvent,
+  loadGraph,
+  removeTrustEventFromGraphPacked,
+} from '../../lib/trust/graphManager.js';
 import standardResolver from '../../lib/trust/resolvers/trustResolver.js';
 import { initTrustDb } from '../../lib/db/dbManager.js';
 import { fanOutEvent } from './relay.js';
+import { KIND_TRUST } from '../../lib/nostr/nip32010.js';
+import { getRuntimeConfig, resolveConfig, toFocusResolution } from '../../config.js';
 
 type TrustBody = {
   subjects: string[];
-  context?: string;
+  contexts?: string;
   value?: number;
   content?: string;
   relay?: string[];
@@ -24,8 +32,8 @@ type TrustBody = {
 
 type ResolveBody = {
   subject: string;
-  author?: string;
-  context?: string;
+  authors?: string;
+  contexts?: string;
   strategy?: string;
   maxDepth?: number;
   format?: 'number' | 'default' | 'path';
@@ -37,10 +45,49 @@ function normalizeContext(context: string | undefined): string | undefined {
   return context;
 }
 
-export default fp(async function apiPlugin(app) {
+type ApiOpts = {
+  /** When the relay runs in another process, poll DB notify rows to refresh the in-memory graph. */
+  enableGraphNotifyPoller?: boolean;
+};
+
+export default fp(async function apiPlugin(app, opts: ApiOpts = {}) {
   const healthHandler = async () => {
     return { status: 'ok' };
   };
+
+  app.addHook('onReady', async () => {
+    const store = await initTrustDb();
+    const focus = toFocusResolution(getRuntimeConfig());
+    await loadGraph(store, { author: '*', maxDepth: 4, focus });
+
+    if (!opts.enableGraphNotifyPoller) {
+      return;
+    }
+
+    const pollMs = Math.max(250, Number(process.env.TRUST_GRAPH_NOTIFY_POLL_MS ?? 2000));
+    const timer = setInterval(() => {
+      void (async () => {
+        const graph = getLoadedGraph();
+        if (!graph) return;
+        const st = await initTrustDb();
+        const rows = await st.drainGraphNotifyBatch(500);
+        for (const row of rows) {
+          if (row.op === 'INSERT') {
+            const ev = await st.getEvent(row.event_id);
+            if (ev?.kind === KIND_TRUST) {
+              applyTrustEventToGraph(ev as VerifiedEvent, graph);
+            }
+          } else if (row.op === 'DELETE' && row.raw_event) {
+            removeTrustEventFromGraphPacked(row.raw_event, graph);
+          }
+        }
+      })();
+    }, pollMs);
+
+    app.addHook('onClose', async () => {
+      clearInterval(timer);
+    });
+  });
 
   app.get('/health', healthHandler);
   app.get('/ping', healthHandler);
@@ -61,7 +108,7 @@ export default fp(async function apiPlugin(app) {
       const parsed = parseSubjects(subjects);
       const template = buildTrustEventTemplate({
         subjects: parsed,
-        context: body.context,
+        context: body.contexts,
         value,
         content: body.content ?? '',
       });
@@ -89,11 +136,11 @@ export default fp(async function apiPlugin(app) {
     async (request: FastifyRequest<{ Body: ResolveBody }>, reply: FastifyReply) => {
       const body = request.body;
 
-      const context = normalizeContext(body.context);
+      const context = normalizeContext(body.contexts);
 
       let author: string | null = null;
-      if (body.author) {
-        const parsedAuthor = resolveTargetForQuery(body.author);
+      if (body.authors) {
+        const parsedAuthor = resolveTargetForQuery(body.authors);
         if (parsedAuthor.tag !== 'p') {
           return reply.code(400).send({ error: 'Author must be a pubkey (npub or hex)' });
         }
@@ -109,8 +156,9 @@ export default fp(async function apiPlugin(app) {
         throw new Error('Author is required');
       }
 
-      let store = await initTrustDb();
-      const graph = await loadGraph(store);
+      const store = await initTrustDb();
+      const focus = toFocusResolution(getRuntimeConfig() ?? resolveConfig({}));
+      const graph = await loadGraph(store, { author: '*', maxDepth: body.maxDepth ?? 4, focus });
       const score: Score = standardResolver.resolve(author, subjectId, {
         graph,
         context,

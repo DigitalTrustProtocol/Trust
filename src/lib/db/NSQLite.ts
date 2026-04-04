@@ -11,6 +11,7 @@ import { Kysely, sql } from 'kysely';
 import { getFilterLimit, sortEvents } from 'nostr-tools';
 import { Packr } from 'msgpackr';
 import { KIND_TRUST } from '../nostr/nip32010.js';
+import type { AllEventsOpts, GraphNotifyRow } from './dbManager.js';
 import { ExtendedNRelay } from './dbManager.js';
 
 const DENORMALIZED_TAGS = new Set(['d', 'c', 't']);
@@ -33,6 +34,12 @@ export interface NSQLiteSchema {
     event_id: string;
     name: string;
     value: string;
+  };
+  trust_graph_notify: {
+    seq: number;
+    event_id: string;
+    op: string;
+    raw_event: Buffer | null;
   };
 }
 
@@ -350,16 +357,65 @@ export class NSQLite implements ExtendedNRelay  {
     return allRows.flat();
   }
 
-  async *allEvents(kind: number = KIND_TRUST, opts: { signal?: AbortSignal } = {}): AsyncIterable<NostrEvent> {
-    const rows = this.db
-      .selectFrom('nostr_events')
-      .selectAll('nostr_events')
-      .where('kind', '=', kind)
-      .stream();
+  async *allEvents(kind: number = KIND_TRUST, opts: AllEventsOpts = {}): AsyncIterable<NostrEvent> {
+    let query = this.db.selectFrom('nostr_events').selectAll('nostr_events').where('kind', '=', kind);
+
+    if (Array.isArray(opts.authors) && opts.authors.length > 0) {
+      query = query.where(
+        'pubkey',
+        'in',
+        opts.authors.map((a) => a.toLowerCase()),
+      );
+    }
+
+    if (Array.isArray(opts.contexts) && opts.contexts.length > 0) {
+      const ctxs = opts.contexts;
+      query = query.where((eb) => {
+        const parts = [];
+        for (const c of ctxs) {
+          if (c === '') {
+            parts.push(eb('c', 'is', null));
+            parts.push(eb('c', '=', ''));
+          } else {
+            parts.push(eb('c', '=', c));
+          }
+        }
+        return eb.or(parts);
+      });
+    }
+
+    const rows = query.stream();
 
     for await (const row of rows) {
+      if (opts.signal?.aborted) break;
       yield packr.unpack(row.raw_event) as NostrEvent;
     }
+  }
+
+  async drainGraphNotifyBatch(limit: number): Promise<GraphNotifyRow[]> {
+    let rows: NSQLiteSchema['trust_graph_notify'][];
+    try {
+      rows = await this.db
+        .selectFrom('trust_graph_notify')
+        .selectAll()
+        .orderBy('seq', 'asc')
+        .limit(limit)
+        .execute();
+    } catch {
+      return [];
+    }
+
+    if (!rows.length) return [];
+
+    const seqs = rows.map((r) => r.seq);
+    await this.db.deleteFrom('trust_graph_notify').where('seq', 'in', seqs).execute();
+
+    return rows.map((r) => ({
+      seq: r.seq,
+      event_id: r.event_id,
+      op: r.op as 'INSERT' | 'DELETE',
+      raw_event: r.raw_event ? new Uint8Array(r.raw_event) : null,
+    }));
   }
 
   async query(filters: NostrFilter[], opts: { signal?: AbortSignal; limit?: number } = {}): Promise<NostrEvent[]> {
@@ -516,5 +572,31 @@ export class NSQLite implements ExtendedNRelay  {
       .columns(['search_text'])
       .ifNotExists()
       .execute();
+
+    await this.installGraphNotifySchema();
+  }
+
+  /** Queue rows for API graph processes when relay and API share a DB (split processes). */
+  private async installGraphNotifySchema(): Promise<void> {
+    await sql`
+      CREATE TABLE IF NOT EXISTS trust_graph_notify (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL,
+        op TEXT NOT NULL,
+        raw_event BLOB
+      )
+    `.execute(this.db);
+
+    await sql.raw(`CREATE TRIGGER IF NOT EXISTS trg_nostr_events_ai_graph
+AFTER INSERT ON nostr_events
+BEGIN
+  INSERT INTO trust_graph_notify(event_id, op) VALUES (NEW.id, 'INSERT');
+END`).execute(this.db);
+
+    await sql.raw(`CREATE TRIGGER IF NOT EXISTS trg_nostr_events_ad_graph
+AFTER DELETE ON nostr_events
+BEGIN
+  INSERT INTO trust_graph_notify(event_id, op, raw_event) VALUES (OLD.id, 'DELETE', OLD.raw_event);
+END`).execute(this.db);
   }
 }

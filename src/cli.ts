@@ -6,8 +6,16 @@ import { addCommand } from './commands/add.js';
 import { syncTrustCommand } from './commands/sync.js';
 import { showTrustCommand } from './commands/show.js';
 import { resolveTrustCommand } from './commands/resolve.js';
-import { serverCommand } from './commands/server.js';
+import { parseServerService, serverCommand } from './commands/server.js';
 import { pingCommand } from './commands/ping.js';
+import { registerConfig } from './commands/config.js';
+import {
+  identityGenerateCommand,
+  identityImportCommand,
+  identityListCommand,
+  identityPrimaryCommand,
+  identityRemoveCommand,
+} from './commands/identity.js';
 
 
 const program = new Command();
@@ -73,7 +81,7 @@ program
 program
   .command('add <subject> [subjects...]')
   .description('Add trust for the given subject(s) (kind 32010)')
-  .option('-c, --context <context>', 'Trust context (e.g. development, commerce)')
+  .option('-c, --contexts <contexts>', 'Trust context (e.g. development, commerce)')
   .option('-v, --value <value>', 'Trust value: 1 (trust), 0 (neutral), -1 (distrust)', '1')
   .option('--content <content>', 'Optional note explaining the trust assertion')
   .option('-r, --relay <url...>', 'Relay URL(s) to publish to')
@@ -86,7 +94,7 @@ program
     try {
       await addCommand({
         subjects: [subject, ...(subjects || [])],
-        context: options.context,
+        contexts: options.contexts,
         value: parseInt(options.value, 10),
         content: options.content,
         relay: options.relay,
@@ -105,7 +113,14 @@ program
   .description('Sync trust events from relays into local database')
   .option('-r, --relay <url...>', 'Relay URL(s) to query')
   .option('--since <unix-ts>', 'Start sync from this unix timestamp (overwrites stored value)')
-  .option('--author <hex>', 'Root author pubkey to sync from (default: primary key), use "*" to sync all authors')
+  .option(
+    '--authors <value>',
+    'Omitted: use config authors, else identity pubkeys. * or All = all authors; primary = primary key only; or comma-separated hex pubkeys',
+  )
+  .option(
+    '--contexts <value>',
+    'Trust `c` tag filter: All, or comma-separated contexts (overrides config; matches empty tag with an empty segment in the list)',
+  )
   .option('--max-depth <n>', 'Max trust graph depth to sync (default: 3)', (val: string) => parseInt(val, 10), 3)
   .option('--sync-interval <seconds>', 'Seconds between sync runs (0 = run once)', (val: string) => parseInt(val, 10), 0)
   .option('--json', 'Output sync stats as JSON')
@@ -113,7 +128,8 @@ program
       await syncTrustCommand({
         relay: options.relay,
         since: options.since,
-        author: options.author,
+        authors: options.authors,
+        contexts: options.contexts,
         maxDepth: options.maxDepth,
         syncInterval: options.syncInterval,
         json: options.json,
@@ -122,20 +138,20 @@ program
 
 // resolve - Resolve trust path and reputation
 program
-  .command('resolve <subject> [author]')
-  .description('Resolve trust path and reputation for subject (from author, default: primary key)')
-  .option('-c, --context <context>', 'Filter by context (default: ""). Use -c undefined for all contexts')
+  .command('resolve <subject> [authors]')
+  .description('Resolve trust path and reputation for subject (from authors perspective, default: primary key)')
+  .option('-c, --contexts <contexts>', 'Filter by context (default: ""). Use -c undefined for all contexts')
   .option('-s, --strategy <name>', 'Resolve strategy (default: cache)', 'cache')
   .option('--max-depth <n>', 'Max trust path depth (1-4, default: 4). Limited by strategy max.', '4')
-  .option('--author <npub|hex>', 'Author pubkey (alternative to positional)')
+  .option('--authors <npub|hex>', 'Author pubkey (alternative to positional)')
   .option('-f, --format <name>', 'Output format: number, default, path', 'default')
   .option('--json', 'Output as JSON')
-  .action(async (subject, author, options) => {
+  .action(async (subject, authors, options) => {
     try {
       await resolveTrustCommand({
         subject,
-        author: author ?? options.author,
-        context: options.context,
+        authors: authors ?? options.authors,
+        contexts: options.contexts,
         strategy: options.strategy,
         maxDepth: parseInt(options.maxDepth, 10),
         format: options.format as 'number' | 'default' | 'path',
@@ -167,15 +183,28 @@ program
 // server - Run HTTP server and relay subscription
 program
   .command('server')
-  .description('Run Trust server (default: all services). Use --only to run a single service.')
+  .description(
+    'Run Trust server (default: relay + API + web in one process). Use --service to run one component.',
+  )
   .option('-p, --port <port>', 'HTTP port for the Web API', (val: string) => parseInt(val, 10))
   .option('-h, --host <host>', 'Bind host (e.g. localhost, 0.0.0.0)')
   .option('-r, --relay <url...>', 'Relay URL(s) for websocket subscription')
   .option('--since <unix-ts>', 'Start subscription from this unix timestamp (overwrites stored value)')
-  .option('--author <hex>', 'Root author pubkey to sync from (default: primary key), use "*" to sync all authors')
+  .option(
+    '--authors <value>',
+    'Same as sync: omitted → config then identity; * or All = all; primary = primary only; or comma-separated hex (overrides config when set)',
+  )
+  .option(
+    '--contexts <value>',
+    'Trust `c` tag filter: All or comma-separated contexts (overrides config)',
+  )
   .option('--max-depth <n>', 'Max trust graph depth to sync (default: 3)', (val: string) => parseInt(val, 10), 3)
   .option('--sync-interval <seconds>', 'Seconds between graph sync runs (0 = run once)', (val: string) => parseInt(val, 10), 0)
-  .option('--only <service>', 'Run a single service: relay, api, or web (default: all)')
+  .option(
+    '--service <name>',
+    'Component to run: all (default), relay, api, or web',
+    (val: string) => parseServerService(val),
+  )
   .option(
     '--database <driver>',
     'Trust store: sqlite or postgres (default: postgres if DATABASE_URL / PG* / config URL is set, else sqlite)',
@@ -188,10 +217,11 @@ program
         host: options.host,
         relay: options.relay,
         since: options.since,
-        author: options.author,
+        authors: options.authors,
+        contexts: options.contexts,
         maxDepth: options.maxDepth,
         syncInterval: options.syncInterval,
-        only: options.only,
+        service: options.service,
         database: options.database,
         json: options.json,
       });
@@ -214,6 +244,51 @@ program
     } finally {
       // No relay or DB resources are used directly here
     }
+  });
+
+registerConfig(program);
+
+const identity = program.command('identity').description('Manage signing keys (primary + additional identities)');
+
+identity
+  .command('list')
+  .description('List known public keys and which is primary')
+  .option('--json', 'JSON output')
+  .action(async (options: { json?: boolean }) => {
+    await identityListCommand(options);
+  });
+
+identity
+  .command('import')
+  .description('Import a secret key (hex or nsec) into ~/.trust/keys/')
+  .requiredOption('--secret <hex|nsec>', '64 hex chars or nsec1...')
+  .option('--label <text>', 'Optional label')
+  .action(async (options: { secret: string; label?: string }) => {
+    await identityImportCommand(options);
+  });
+
+identity
+  .command('generate')
+  .description('Generate a new keypair and register it')
+  .option('--label <text>', 'Optional label')
+  .action(async (options: { label?: string }) => {
+    await identityGenerateCommand(options);
+  });
+
+identity
+  .command('primary')
+  .description('Set which registered key signs new events')
+  .argument('<npub|hex>', 'npub or hex pubkey')
+  .action(async (target: string) => {
+    await identityPrimaryCommand(target);
+  });
+
+identity
+  .command('remove')
+  .description('Remove a key from the registry (does not erase relay data)')
+  .argument('<npub|hex>', 'npub or hex pubkey')
+  .action(async (target: string) => {
+    await identityRemoveCommand(target);
   });
 
 export { program };

@@ -3,19 +3,39 @@ import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-vi.mock('../../src/config.js', () => {
-  const { join } = require('node:path');
-  const { tmpdir } = require('node:os');
+vi.mock('../../src/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/config.js')>();
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
   const testDir = join(tmpdir(), 'trust-timestamp-test-' + process.pid + '-' + Date.now());
+  const PATHS = {
+    ...actual.PATHS,
+    configDir: testDir,
+    secretKey: join(testDir, 'secret.key'),
+    config: join(testDir, 'config.json'),
+    trustDb: join(testDir, 'trust.db'),
+  };
+  const loadUserConfig = () => undefined;
   return {
-    PATHS: {
-      configDir: testDir,
-      secretKey: join(testDir, 'secret.key'),
-      config: join(testDir, 'config.json'),
-      trustDb: join(testDir, 'trust.db'),
-    },
+    ...actual,
+    PATHS,
     DEFAULT_RELAYS: ['wss://relay.test'],
-    loadUserConfig: () => undefined,
+    loadUserConfig,
+    mergeUserConfig: () => ({ ...actual.DEFAULT_CONFIG, ...loadUserConfig() }),
+    resolveSqlitePath: (cli: Record<string, unknown>, base: actual.UserConfig) => {
+      if (Object.prototype.hasOwnProperty.call(cli, 'sqlitePath')) {
+        const v = cli['sqlitePath'];
+        if (v !== undefined && v !== null) {
+          const s = String(v).trim();
+          if (s) return s;
+        }
+      }
+      const fromEnv = process.env.TRUST_SQLITE_PATH?.trim();
+      if (fromEnv) return fromEnv;
+      const fromConfig = base.db?.sqlitePath?.trim();
+      if (fromConfig) return fromConfig;
+      return PATHS.trustDb;
+    },
   };
 });
 

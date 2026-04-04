@@ -31,7 +31,7 @@ export async function isServerAvailable(baseUrl?: string): Promise<boolean> {
 
 export interface TrustParams {
   subjects: string[];
-  context?: string;
+  contexts?: string;
   value?: number;
   content?: string;
   relay?: string[];
@@ -39,8 +39,8 @@ export interface TrustParams {
 
 export interface ResolveParams {
   subject: string;
-  author?: string;
-  context?: string;
+  authors?: string;
+  contexts?: string;
   strategy?: string;
   maxDepth?: number;
   format?: 'number' | 'default' | 'path';

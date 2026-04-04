@@ -11,21 +11,21 @@ import { logger } from '../lib/logger.js';
 
 export async function addCommand(options: {
   subjects: string[];
-  context?: string;
+  contexts?: string;
   value: number;
   content?: string;
   relay?: string[];
   json?: boolean;
   server?: boolean;
 }): Promise<void> {
-  const { subjects, context, value, content = '', relay, json, server } = options;
+  const { subjects, contexts: context, value, content = '', relay, json, server } = options;
 
   if (server) {
     const serverUp = await isServerAvailable();
     if (serverUp) {
       const result = await proxyTrust(undefined, {
         subjects,
-        context,
+        contexts: context,
         value,
         content,
         relay,

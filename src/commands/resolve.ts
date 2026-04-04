@@ -20,8 +20,8 @@ function normalizeContext(context: string | undefined): string | undefined {
 
 export async function resolveTrustCommand(options: {
   subject: string;
-  author?: string;
-  context?: string;
+  authors?: string;
+  contexts?: string;
   strategy?: string;
   maxDepth?: number;
   format?: ResolveFormat;
@@ -33,8 +33,8 @@ export async function resolveTrustCommand(options: {
   if (serverUp) {
     const result = await proxyResolve(undefined, {
       subject: options.subject,
-      author: options.author,
-      context: options.context,
+      authors: options.authors,
+      contexts: options.contexts,
       strategy: options.strategy,
       maxDepth: options.maxDepth,
       format,
@@ -44,11 +44,11 @@ export async function resolveTrustCommand(options: {
   }
 
   let store = await initTrustDb();
-  const context = normalizeContext(options.context);
+  const context = normalizeContext(options.contexts);
 
   let author: string | null = null;
-  if (options.author) {
-    const parsed = resolveTargetForQuery(options.author);
+  if (options.authors) {
+    const parsed = resolveTargetForQuery(options.authors);
     if (parsed.tag !== 'p') {
       throw new Error('Author must be a pubkey (npub or hex)');
     }
