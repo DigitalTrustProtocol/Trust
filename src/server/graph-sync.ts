@@ -40,7 +40,7 @@ export async function runTrustedGraphSync(runtimeContext: RuntimeContext): Promi
 
     chunk.forEach((author) => visitedAuthors.add(author));
 
-    const filters = createTrustFilters(chunk, kinds, runtimeContext.since, runtimeContext.contexts);
+    const filters = createTrustFilters(kinds, chunk, runtimeContext.since, runtimeContext.contexts);
     const iterable = runtimeContext.pool?.req(filters, { signal: runtimeContext.abortController?.signal ?? new AbortSignal() }) as AsyncIterable<NostrRelayMsg>;
     const iterator = iterable[Symbol.asyncIterator]();
     let timedOut = false;
@@ -141,23 +141,24 @@ function getUnseenTrustedAuthors(
   return result;
 }
 
-function createTrustFilters(
-  authors: string[],
+export function createTrustFilters(
   kinds: number[],
+  authors?: string[],
   since?: number,
   contexts?: string[],
 ): Filter[] {
-  const filter: Filter = {
-    kinds,
-    authors,
-  };
+  const filter: Filter = { kinds};
+
+  if (authors?.length) {
+    filter.authors = authors;
+  }
 
   if (since !== undefined) {
     filter.since = since;
   }
 
   if (contexts?.length) {
-    filter['#c'] = [...new Set(contexts)];
+    filter['#c'] = contexts!;
   }
 
   return [filter];

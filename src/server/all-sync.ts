@@ -4,7 +4,7 @@ import { KIND_TRUST } from "../lib/nostr/nip32010.js";
 import { insertEvent } from "../lib/trust/graphManager.js";
 import { TIMESTAMP_NS_SYNC, trackLatestTimestamp } from "../lib/timestamp.js";
 import { startRelaySubscription } from "./relay-sub.js";
-import { GraphSyncResult } from "./graph-sync.js";
+import { createTrustFilters, GraphSyncResult } from "./graph-sync.js";
 import { logger } from "../lib/logger.js";
 import { RuntimeContext } from "../lib/runtimeContext.js";
 import { Store } from "../lib/db/dbManager.js";
@@ -20,11 +20,7 @@ export async function subscribeToAll(runtimeContext: RuntimeContext): Promise<Gr
     let eventsReceived = 0;
     let eventsInserted = 0;
 
-    const filter: Filter ={ kinds: [KIND_TRUST] };
-    if (since !== undefined) filter.since = since;
-    //if (until !== undefined) filter.until = runtimeContext.until;
-    if (contexts?.length) filter['#c'] = [...new Set(contexts)];
-    const filters: Filter[] = [filter];
+    const filters: Filter[] = createTrustFilters(runtimeContext.kinds, undefined, since, contexts);
 
     const options: subscriptionOptions = {
       relays,
@@ -55,6 +51,7 @@ export async function subscribeToAll(runtimeContext: RuntimeContext): Promise<Gr
     };
 
     await startRelaySubscription(options);
+
     return {
       processedAuthors: visitedEvent.size,
       eventsReceived,

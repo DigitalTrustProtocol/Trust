@@ -358,13 +358,13 @@ function getCliBoolean(cli: Record<string, unknown>, key: string): boolean | und
   return cli[key] === true;
 }
 
-function getCliStringArray(cli: Record<string, unknown>, key: string): string[] {
+function getCliStringArray(cli: Record<string, unknown>, key: string): string[] | undefined {
   return getStringArray(cli[key] as string | undefined);
 }
 
-function getStringArray(v: string | undefined): string[] {
-  if (v === undefined) return [];
-  if (!Array.isArray(v)) return [];
+function getStringArray(v: string | undefined): string[] | undefined {
+  if (v === undefined) return undefined; // undefined is undefined
+  if (v.trim() === '') return []; // empty string is an empty array
   if (typeof v === 'string' && v.trim() !== '') {
     const parts = v
       .split(',')
@@ -492,8 +492,10 @@ function parseKindsEnv(raw: string | undefined): number[] | undefined {
 }
 
 function mergeEffectiveRelays(cli: Record<string, unknown>, base: UserConfig): string[] {
- let relays = getStringArray(cli['relay'] ? cli['relay'] as string : process.env.TRUST_RELAYS?.trim());
-  if (relays.length > 0) return relays;
+  let relays = getStringArray(cli['relay'] ? cli['relay'] as string : process.env.TRUST_RELAYS?.trim());
+  if (relays) {
+    return relays;
+  }   
   return base.relays;
 }
 
@@ -527,26 +529,32 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
   const kp = loadKeyPair();
   const primaryPubkey = kp?.publicKey.toLowerCase() ?? '0'.repeat(64);
 
-  let authors: string[] = getCliStringArray(cli, 'authors') ?? [];
-  if (authors === undefined) {
-    const authorsString = process.env.TRUST_AUTHORS?.trim();
-    if (authorsString === undefined) {
-      authors = base.authors ?? [];
+  let authorString: string | undefined = (cli['authors'] ? cli['authors'] as string : process.env.TRUST_AUTHORS)?.trim();
+  let authors: string[] = [];
+
+  if (authorString) {
+    authors = parseAuthorsString(authorString);
+  } else {
+    if (base.authors?.length) {
+      authors = base.authors;
     } else {
-      authors = parseAuthorsString(authorsString);
+      let identityPubkeys = listIdentityPubkeysForSync();
+      if (identityPubkeys.length) {
+        authors = identityPubkeys;
+      }
     }
   }
 
-  let contexts: string[] = getCliStringArray(cli, 'contexts') ?? [];
-  if (contexts === undefined) {
-    const contextsString = process.env.TRUST_CONTEXTS?.trim();
-    if (contextsString === undefined) {
-      contexts = base.contexts ?? [];
-    } else {
-      contexts = parseContextsString(contextsString);
+
+  let contextString: string | undefined = (cli['contexts'] ? cli['contexts'] as string : process.env.TRUST_CONTEXTS)?.trim();
+  let contexts: string[] = [];
+  if (contextString) {
+    contexts = parseContextsString(contextString);
+  } else {
+    if (base.contexts?.length) {
+      contexts = [...new Set(base.contexts)];
     }
   }
-
 
   const { host, port } = mergeEffectiveHostPort(cli, base);
 
