@@ -56,8 +56,8 @@ export class EdgeT1 implements IEdge {
     return this;
   }
 
-  isValidAt(now?: number): boolean {
-    const t = now ?? Math.floor(Date.now() / 1000);
+  isValidAt(time?: number): boolean {
+    const t = time ?? Math.floor(Date.now() / 1000);
     if (this.activate !== undefined && t < this.activate) return false;
     if (this.expire !== undefined && t > this.expire) return false;
     return true;

@@ -1,9 +1,8 @@
 import { Graph } from "../graph/Graph.js";
-import { KIND_TRUST, SubjectType } from "../../nostr/nip32010.js";
+import { KIND_TRUST } from "../../nostr/nip32010.js";
 import { IResolveStrategy, IResolveStrategyOptions } from "./IResolveStrategy.js";
 import { Score, ScoreMap } from "./Score.js";
-import { EdgeMap, type EdgeSubject } from "../graph/EdgeMap.js";
-import { getGraph } from "../graphManager.js";
+import { type EdgeSubject } from "../graph/EdgeMap.js";
 import pathStrategy from "./pathStrategy.js";
 
 const MAX_DEPTH = 4;
@@ -25,7 +24,7 @@ function getIncomingFromGraph(
   graph: Graph,
   subjectId: string,
   context: string | undefined,
-  now: number
+  time: number
   //subjectType: SubjectType
 ): Map<string, { value: number }> | undefined {
   const node = graph.nodes.get(subjectId);
@@ -37,7 +36,7 @@ function getIncomingFromGraph(
     if (!contexts) return undefined;
     for (const [, subjectMap] of contexts.entries()) {
       for (const [authorId, edge] of subjectMap.entries()) {
-        if (!edge.isValidAt(now)) continue;
+        if (!edge.isValidAt(time)) continue;
         result.set(authorId, { value: edge.value });
       }
     }
@@ -48,7 +47,7 @@ function getIncomingFromGraph(
   if (!subjectMap) return undefined;
   const result = new Map<string, { value: number }>();
   for (const [authorId, edge] of subjectMap.entries()) {
-    if (!edge.isValidAt(now)) continue;
+    if (!edge.isValidAt(time)) continue;
     result.set(authorId, { value: edge.value });
   }
   return result.size > 0 ? result : undefined;
@@ -67,7 +66,7 @@ class StandardResolver implements IResolveStrategy {
       throw new Error('Graph is required for trust resolution. Call loadGraph() before resolve.');
     }
 
-    const now = Math.floor(Date.now() / 1000);
+    const time = Math.floor(Date.now() / 1000);
     const author = authorId.toLowerCase().trim();
     const subject = subjectId.toLowerCase().trim();
     const maxDepth = Math.min(options.maxDepth ?? MAX_DEPTH, MAX_DEPTH);
@@ -88,7 +87,7 @@ class StandardResolver implements IResolveStrategy {
     }
 
     const subjectScore = scores.getSubject(subject, 0);
-    const subjectIncoming = getIncomingFromGraph(graph, subject, context, now);
+    const subjectIncoming = getIncomingFromGraph(graph, subject, context, time);
     if (!subjectIncoming) {
       return subjectScore;
     }
@@ -121,11 +120,11 @@ class StandardResolver implements IResolveStrategy {
         if (score.trustValue < followTrustThreshold) continue;
 
         const outgoing = getOutgoingFromGraph(graph, nodeId, context, 'p');
-        this.processTrusts(nodeId, degree, outgoing, scores, subjectScore, queue, now);
+        this.processTrusts(nodeId, degree, outgoing, scores, subjectScore, queue, time);
 
         if (context !== '' && context.length > 0) {
           const outgoingGeneric = getOutgoingFromGraph(graph, nodeId, '', 'p');
-          this.processTrusts(nodeId, degree, outgoingGeneric, scores, subjectScore, queue, now);
+          this.processTrusts(nodeId, degree, outgoingGeneric, scores, subjectScore, queue, time);
         }
       }
     }
@@ -145,11 +144,11 @@ class StandardResolver implements IResolveStrategy {
     scores: ScoreMap,
     subjectScore: Score,
     queue: string[],
-    now: number
+    time: number
   ): void {
     if (!outgoing) return;
     for (const [nodeId, edge] of outgoing.entries()) {
-      if (!edge.isValidAt(now)) continue;
+      if (!edge.isValidAt(time)) continue;
       const nodeScore = scores.getSubject(nodeId, degree);
       nodeScore.addTrust(authorId, edge.value, degree);
 

@@ -83,8 +83,8 @@ export class EdgeMap extends Map<string, EdgeContext> {
     return this;
   }
 
-  getSubjects(options: { kind?: number, context?: string, subjectType?: SubjectType }): EdgeSubject | undefined {
-    let { kind = KIND_TRUST, context = '', subjectType = 'p' } = options;
+  getSubjects(options: { kind?: number, context?: string, subjectType?: SubjectType, time?: number }): EdgeSubject | undefined {
+    let { kind = KIND_TRUST, context = '', subjectType = 'p', time = undefined } = options;
 
     let key = EdgeMap.createKey(kind, subjectType);
 
