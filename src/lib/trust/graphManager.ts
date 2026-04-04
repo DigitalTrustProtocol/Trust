@@ -47,18 +47,17 @@ async function insertTrustEvent(event: VerifiedEvent, store?: Store, graph?: Gra
     let opt = { };
     await store?.event(trustEvent, opt);
 
-    //let inserted = (opt as any).isInserted ?? false;
-    //let deleted = (opt as any).isDeleted ?? false;
+    let inserted = (opt as any).isInserted ?? false;
+    let deleted = (opt as any).isDeleted ?? false;
 
 
-    let inserted = false;
-    if(graph) {
+    if(graph && inserted) {
         inserted = graph.applyTrustEvent(trustEvent);
     }
     
-    //if(graph && deleted)  {
-    //    graph.removeTrustEvent(trustEvent);
-    //}
+    if(graph && deleted)  {
+        graph.removeTrustEvent(trustEvent);
+    }
 
     return inserted;
 }

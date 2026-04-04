@@ -112,7 +112,8 @@ export class NPostgres implements ExtendedNRelay {
         (opts as any).isDeleted = true; // indicate that the event was deleted
         (opts as any).isInserted = false; // indicate that the event was not inserted into the database
       }
-      throw new RelayError('invalid', 'the event has been deleted');
+      //throw new RelayError('invalid', 'the event has been deleted');
+      return;
     }
 
     try {
