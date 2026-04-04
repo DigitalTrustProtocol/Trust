@@ -204,7 +204,7 @@ trust
 src/
 ├── cli.ts
 ├── commands/
-│   └── trust.ts           -- trust issue, sync, resolve, query, show, list
+│   └── add.ts             -- add trust (issue); sync, resolve, show in other command files
 └── lib/
     └── trust/
         ├── trust-db.ts    -- DB init, close
@@ -396,7 +396,7 @@ Commands (issue, resolve) call this wrapper first; on success, return the HTTP r
 src/
 ├── cli.ts
 ├── commands/
-│   └── trust.ts           -- issue, sync, resolve, query, show, list (client-aware)
+│   └── add.ts             -- add trust (issue); other commands in separate files (client-aware)
 ├── lib/
 │   ├── client.ts          -- isServerAvailable, proxyIssue, proxyResolve
 │   └── trust/

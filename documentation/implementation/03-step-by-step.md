@@ -91,16 +91,16 @@ Implementation order: **Database first** (schema and access), then **business la
 
 ## Phase 3: Commands
 
-### Step 3.1: Trust issue command
+### Step 3.1: Add trust command
 
-1. **Create** `src/commands/trust.ts`.
-2. **Implement** `issueTrustCommand(subjects: string[], options)`:
+1. **Create** `src/commands/add.ts`.
+2. **Implement** `addCommand(subjects: string[], options)`:
    - Parse subjects via `parseSubjects`.
    - Build template via `buildTrustEventTemplate`.
    - Sign with `signEvent`, publish with `publishEvent`.
 3. **Arguments:** `subject [subjects...]`; options: `-c, --context`, `-v, --value`, `--content`, `-r, --relay`.
-4. **Wire** in `cli.ts`: `program.command('trust')` with subcommand `issue`.
-5. **Manual test:** `trust trust issue npub1... -v 1 -c development`
+4. **Wire** in `cli.ts`: `program.command('add <subject> [subjects...]')`.
+5. **Manual test:** `trust add npub1... -v 1 -c development`
 
 ### Step 3.2: Trust sync command
 
@@ -109,7 +109,7 @@ Implementation order: **Database first** (schema and access), then **business la
    - Query relays: `{ kinds: [32010], since: cursor }`.
    - For each event: `insertTrustEvent(event)`.
    - Set cursor to `max(created_at) + 1`.
-2. **Wire** `trust trust sync`.
+2. **Wire** `trust sync`.
 3. **Manual test:** Issue events, run sync, verify DB populated.
 
 ### Step 3.3: Trust resolve command
@@ -120,7 +120,7 @@ Implementation order: **Database first** (schema and access), then **business la
    - Aggregate via `aggregateByTarget`.
    - Format output (counts, optional list).
 2. **Options:** `-c, --context`, `--json`.
-3. **Wire** `trust trust resolve <target>`.
+3. **Wire** `trust resolve <target>`.
 4. **Manual test:** Sync, then resolve by npub.
 
 ### Step 3.4: Trust query command
@@ -131,7 +131,7 @@ Implementation order: **Database first** (schema and access), then **business la
    - Call `queryEvents`.
    - Run `resolveLatestWins`, then `aggregateByTarget`.
    - Format output.
-2. **Wire** `trust trust query <target>`.
+2. **Wire** `trust query <target>` (when implemented).
 3. **Manual test:** Query by npub, compare with resolve after sync.
 
 ### Step 3.5: Trust show command
@@ -141,13 +141,13 @@ Implementation order: **Database first** (schema and access), then **business la
    - Try local DB first (`raw_events` by id).
    - Fallback: `queryEventById` from relays.
    - Pretty-print event.
-2. **Wire** `trust trust show <event-ref>`.
+2. **Wire** `trust show <event-ref>`.
 
 ### Step 3.6: Polish
 
 1. Add `--json` to issue, sync, show.
 2. Add `closeTrustDb()` to CLI exit path when trust commands run.
-3. Update README with `trust trust` usage.
+3. Update README with `trust add` usage.
 4. Add integration/e2e tests.
 
 ### Step 3.7: Extended resolve formats
@@ -262,7 +262,7 @@ When synchronizing with relays, we need a timestamp from where to begin so we do
 2. **Server startup – automatic rollforward:** When the server runs, **before** starting the relay subscription, automatically roll the timestamp forward: if `last_seen` is set, promote it to `latest` (e.g. `latest = last_seen + 1`). This ensures the subscription starts from the most recent processed point without requiring a manual `trust timestamp --rollforward`.
 3. **Subscription behavior:** Read `getLatestTimestamp()` as the `since` value for the relay subscription. After processing each event (or batch), call `trackLatestTimestamp(events)` to update `last_seen` from `max(created_at)`.
 4. **Validation:** The stored timestamp must never automatically exceed the current time. When advancing `last_seen` from event `created_at`, use `min(created_at, Math.floor(Date.now() / 1000))` so a malformed or future-dated event cannot push the cursor into the future.
-5. **CLI override:** Use `trust timestamp --set <unix-ts>` to overwrite `latest` manually. Add `--since <unix-ts>` (or equivalent) to `trust trust sync` and `trust server` so callers can override the stored value for that run; if provided, it overwrites `latest` in the database for the next subscription run.
+5. **CLI override:** Use `trust timestamp --set <unix-ts>` to overwrite `latest` manually. Add `--since <unix-ts>` (or equivalent) to `trust sync` and `trust server` so callers can override the stored value for that run; if provided, it overwrites `latest` in the database for the next subscription run.
 
 
 
@@ -279,7 +279,7 @@ When synchronizing with relays, we need a timestamp from where to begin so we do
 | 2 | 2.2 | Trust event builder |
 | 2 | 2.3 | Reputation aggregation |
 | 2 | 2.4 | Target resolution |
-| 3 | 3.1 | Trust issue command |
+| 3 | 3.1 | Add trust command |
 | 3 | 3.2 | Trust sync command |
 | 3 | 3.3 | Trust resolve command |
 | 3 | 3.4 | Trust query command |

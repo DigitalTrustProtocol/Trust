@@ -1,5 +1,5 @@
 /**
- * Trust command - publishes kind 32010 (NIP-32010) trust events only.
+ * Add command — publish kind 32010 (NIP-32010) trust events to add trust to the system.
  */
 
 import { parseSubjects } from '../lib/trust/subject.js';
@@ -9,7 +9,7 @@ import { getAvailableRelays, publishEvent } from '../lib/nostr/pool.js';
 import { isServerAvailable, proxyTrust } from '../lib/client.js';
 import { logger } from '../lib/logger.js';
 
-export async function trustCommand(options: {
+export async function addCommand(options: {
   subjects: string[];
   context?: string;
   value: number;
@@ -39,7 +39,7 @@ export async function trustCommand(options: {
           relays?: string[];
         };
 
-        logger.info('Published trust event via server');
+        logger.info('Added trust via server');
         if (anyResult.event?.id) {
           logger.info(`Event ID: ${anyResult.event.id}`);
         }
@@ -76,7 +76,7 @@ export async function trustCommand(options: {
   if (json) {
     console.log(JSON.stringify(event));
   } else {
-    logger.info('Published trust event via relay(s)');
+    logger.info('Added trust to the system via relay(s)');
     logger.info(`Event ID: ${event.id}`);
     logger.info(`Relay(s): ${relays.join(', ')}`);
   }

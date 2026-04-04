@@ -117,10 +117,10 @@ describe('trust e2e tests', () => {
     });
   });
 
-  describe('trust trust', () => {
-    it('should require init before trust', async () => {
+  describe('trust add', () => {
+    it('should require init before add', async () => {
       const { stderr, code } = await runCli([
-        'trust',
+        'add',
         'a'.repeat(64),
         '-v',
         '1',
@@ -137,13 +137,13 @@ describe('trust e2e tests', () => {
       const pubkey = JSON.parse(whoami.stdout).publicKey as string;
 
       const { stdout, stderr, code } = await runCli(
-        ['trust', pubkey, '-v', '1', '-c', 'e2e-test', '--no-server'],
+        ['add', pubkey, '-v', '1', '-c', 'e2e-test', '--no-server'],
         { timeout: 30000, flushDelayMs: 400 },
       );
 
       const logOut = stdout + stderr;
       expect(code).toBe(0);
-      expect(logOut).toMatch(/Published trust event/);
+      expect(logOut).toMatch(/Added trust to the system/);
       expect(logOut).toMatch(/Event ID:/);
     });
   });

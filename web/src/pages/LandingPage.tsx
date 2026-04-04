@@ -31,7 +31,7 @@ export function LandingPage() {
           <code>{`npm install -g @trust/cli
 
 trust init --name "Alice"
-trust trust <npub-or-hex> -c development
+trust add <npub-or-hex> -c development
 trust resolve <npub-or-hex>
 trust server`}</code>
         </pre>

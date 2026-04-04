@@ -76,12 +76,12 @@ Options:
   --json                    Output both timestamps as JSON
 ```
 
-### `trust trust`
+### `trust add`
 
-Publish a trust event (kind 32010, NIP-32010). Requires `trust init`.
+Add trust to the system (kind 32010, NIP-32010). Requires `trust init`.
 
 ```bash
-trust trust <subject> [subjects...] [options]
+trust add <subject> [subjects...] [options]
 # Options: -c, --context, -v, --value (1|0|-1), --content, -r, --relay, --json
 ```
 
@@ -139,7 +139,7 @@ Options:
 When running, the server exposes a small HTTP API:
 
 - `GET /health` – returns `{ "status": "ok" }` when the server is running.
-- `POST /trust` – publish a trust event (same semantics as `trust trust`).
+- `POST /trust` – add trust to the system (same semantics as `trust add`).
 - `POST /resolve` – resolve trust and reputation (same semantics as `trust resolve`).
 
 ### `trust ping`
@@ -156,7 +156,7 @@ Options:
 
 **Examples:**
 ```bash
-trust trust npub1abc... -v 1 -c development
+trust add npub1abc... -v 1 -c development
 trust sync
 trust resolve npub1abc... -c development
 trust query npub1abc...

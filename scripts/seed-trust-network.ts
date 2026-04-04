@@ -307,6 +307,7 @@ async function main() {
     if (keys[80]) console.log(`  Key 80:           ${encodeNpub(keys[80]!.pubkey)} - spam`);
   }
   console.log('\nNext steps:');
+  console.log('  TRUST_CONFIG_DIR=trust trust add <npub> -v 1 -c dev');
   console.log('  TRUST_CONFIG_DIR=trust trust resolve <subject-npub> [issuer-npub] -c dev');
   console.log('  TRUST_CONFIG_DIR=trust trust query <npub>');
 }

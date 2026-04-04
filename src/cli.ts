@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { initCommand } from './commands/init.js';
 import { whoamiCommand } from './commands/whoami.js';
 import { timestampCommand } from './commands/timestamp.js';
-import { trustCommand } from './commands/trust.js';
+import { addCommand } from './commands/add.js';
 import { syncTrustCommand } from './commands/sync.js';
 import { showTrustCommand } from './commands/show.js';
 import { resolveTrustCommand } from './commands/resolve.js';
@@ -69,10 +69,10 @@ program
     }
   });
 
-// trust - Publish kind 32010 trust event (NIP-32010)
+// add - Add trust to the system (kind 32010, NIP-32010)
 program
-  .command('trust <subject> [subjects...]')
-  .description('Publish a trust event (kind 32010) for the given subject(s)')
+  .command('add <subject> [subjects...]')
+  .description('Add trust for the given subject(s) (kind 32010)')
   .option('-c, --context <context>', 'Trust context (e.g. development, commerce)')
   .option('-v, --value <value>', 'Trust value: 1 (trust), 0 (neutral), -1 (distrust)', '1')
   .option('--content <content>', 'Optional note explaining the trust assertion')
@@ -84,7 +84,7 @@ program
   .option('--json', 'Output event as JSON')
   .action(async (subject, subjects, options) => {
     try {
-      await trustCommand({
+      await addCommand({
         subjects: [subject, ...(subjects || [])],
         context: options.context,
         value: parseInt(options.value, 10),
