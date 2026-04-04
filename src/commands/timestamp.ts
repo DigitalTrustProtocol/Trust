@@ -4,6 +4,7 @@ import {
   setLatestTimestamp,
   getLastSeenTimestamp,
   setLastSeenTimestamp,
+  TIMESTAMP_NS_SYNC,
 } from '../lib/timestamp.js';
 import { logger } from '../lib/logger.js';
 
@@ -34,7 +35,7 @@ export async function timestampCommand(options: {
       logger.error(`Invalid timestamp value "${options.set}". Must be a unix timestamp.`);
       process.exit(1);
     }
-    await setLatestTimestamp(num);
+    await setLatestTimestamp(TIMESTAMP_NS_SYNC, num);
     logger.info(`Latest timestamp set to ${num} (${new Date(num * 1000).toLocaleString()})`);
     return;
   }
@@ -46,23 +47,23 @@ export async function timestampCommand(options: {
       logger.error(`Invalid timestamp value "${options.setLastSeen}". Must be a unix timestamp.`);
       process.exit(1);
     }
-    await setLastSeenTimestamp(num);
+    await setLastSeenTimestamp(TIMESTAMP_NS_SYNC, num);
     logger.info(`Last seen timestamp set to ${num} (${new Date(num * 1000).toLocaleString()})`);
     return;
   }
 
   // --rollforward: promote last_seen + 1 → latest
   if (options.rollforward) {
-    const lastSeen = await getLastSeenTimestamp();
+    const lastSeen = await getLastSeenTimestamp(TIMESTAMP_NS_SYNC);
     const next = lastSeen !== undefined ? lastSeen + 1 : 0;
-    await setLatestTimestamp(next);
+    await setLatestTimestamp(TIMESTAMP_NS_SYNC, next);
     logger.info(`Latest timestamp rolled forward to ${next} (${new Date(next * 1000).toLocaleString()})`);
     return;
   }
 
   // --get: print raw latest timestamp value
   if (options.get) {
-    const latest = await getLatestTimestamp();
+    const latest = await getLatestTimestamp(TIMESTAMP_NS_SYNC);
     if (latest === undefined) {
       console.log('not set');
     } else {
@@ -73,8 +74,8 @@ export async function timestampCommand(options: {
 
   // --json: output both values as JSON
   if (options.json) {
-    const latest = await getLatestTimestamp();
-    const lastSeen = await getLastSeenTimestamp();
+    const latest = await getLatestTimestamp(TIMESTAMP_NS_SYNC);
+    const lastSeen = await getLastSeenTimestamp(TIMESTAMP_NS_SYNC);
     console.log(JSON.stringify({
       latest: latest ?? null,
       lastSeen: lastSeen ?? null,
@@ -83,8 +84,8 @@ export async function timestampCommand(options: {
   }
 
   // Default: human-readable status
-  const latest = await getLatestTimestamp();
-  const lastSeen = await getLastSeenTimestamp();
+  const latest = await getLatestTimestamp(TIMESTAMP_NS_SYNC);
+  const lastSeen = await getLastSeenTimestamp(TIMESTAMP_NS_SYNC);
 
   console.log('\nTimestamp status:');
   if (latest !== undefined) {

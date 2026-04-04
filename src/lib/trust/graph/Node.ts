@@ -3,9 +3,6 @@ import type { SubjectType, Identity } from '../../nostr/nip32010.js';
 import { parseIdentityFromKind0, mergeIdentity } from '../identity.js';
 import { EdgeMap, OutTrust } from './EdgeMap.js';
 
-/** @deprecated Use Identity from identity.js */
-export type NodeIdentity = Identity;
-
 export class Node {
   index: number = 0;
   id: string; // pubkey or subject id (e.g. event id)

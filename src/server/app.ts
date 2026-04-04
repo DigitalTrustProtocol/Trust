@@ -8,9 +8,6 @@ import { RuntimeContext } from '../lib/runtimeContext.js';
 /** Which parts of the Trust stack to run in this process (`all` = relay + API + web together). */
 export type ServerService = 'all' | 'relay' | 'api' | 'web';
 
-/** @deprecated Use ServerService */
-export type ServerMode = ServerService;
-
 export async function createApp(service: ServerService = 'all', runtimeContext: RuntimeContext): Promise<FastifyInstance> {
 
   const app = Fastify({

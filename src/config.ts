@@ -24,7 +24,6 @@ const DEFAULT_SERVER_PORT = 3417;
 // Configuration paths
 export const PATHS = {
   configDir: CONFIG_DIR,
-  secretKey: join(CONFIG_DIR, 'secret.key'),
   config: join(CONFIG_DIR, 'config.json'),
   identity: join(CONFIG_DIR, 'identity.json'),
   keysDir: join(CONFIG_DIR, 'keys'),
@@ -657,5 +656,10 @@ export function getRuntimeConfig(opts?: Record<string, unknown>): ResolvedRuntim
 
 export function setRuntimeConfig(config: ResolvedRuntimeConfig): void {
   runtimeConfig = config;
+}
+
+/** Clear cached runtime config (e.g. between tests that mock different paths). */
+export function resetRuntimeConfig(): void {
+  runtimeConfig = null;
 }
 

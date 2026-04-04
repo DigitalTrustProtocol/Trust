@@ -1,10 +1,6 @@
-import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { nsecEncode, npubEncode } from 'nostr-tools/nip19';
-import { bytesToHex, hexToBytes } from 'nostr-tools/utils';
-import { PATHS } from '../config.js';
-import { loadPrimarySecretKey } from './identityStore.js';
+import { addIdentityKey, loadPrimarySecretKey } from './identityStore.js';
 
 export interface KeyPair {
   secretKey: Uint8Array;
@@ -28,17 +24,12 @@ export function generateKeyPair(): KeyPair {
   };
 }
 
-/**
- * Whether a signing key is available (legacy `secret.key`, `identity.json`, or `keys/*.key`).
- */
+/** Whether a signing key is available (`identity.json` + `keys/<pub>.key`). */
 export function hasSecretKey(): boolean {
   return loadSecretKey() !== null;
 }
 
-/**
- * Load the primary secret key (identity.json + keys/ or legacy secret.key).
- * Returns null if not found
- */
+/** Load the primary secret key from identity storage. Returns null if not found. */
 export function loadSecretKey(): Uint8Array | null {
   return loadPrimarySecretKey();
 }
@@ -64,20 +55,7 @@ export function loadKeyPair(): KeyPair | null {
 }
 
 /**
- * Save a secret key to disk (hex format)
- */
-export function saveSecretKey(secretKey: Uint8Array): void {
-  const dir = dirname(PATHS.secretKey);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
-
-  const hex = bytesToHex(secretKey);
-  writeFileSync(PATHS.secretKey, hex + '\n', { mode: 0o600 });
-}
-
-/**
- * Get keypair - load existing or generate new
+ * Get keypair — load existing from identity storage or generate and persist via identity.json + keys/.
  */
 export function getOrCreateKeyPair(): { keyPair: KeyPair; isNew: boolean } {
   const existing = loadKeyPair();
@@ -86,6 +64,6 @@ export function getOrCreateKeyPair(): { keyPair: KeyPair; isNew: boolean } {
   }
 
   const keyPair = generateKeyPair();
-  saveSecretKey(keyPair.secretKey);
+  addIdentityKey(keyPair.secretKey);
   return { keyPair, isNew: true };
 }

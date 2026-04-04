@@ -76,7 +76,7 @@ async function main() {
   const issuerPubkey = getPublicKey(primarySk).toLowerCase();
   console.log(`Issuer: ${issuerPubkey.slice(0, 16)}...\n`);
 
-  // Ensure config dir exists; clear only DB and cache (preserve secret.key)
+  // Ensure config dir exists; clear only DB and cache (preserve identity storage)
   mkdirSync(PATHS.configDir, { recursive: true });
   if (existsSync(PATHS.trustDb)) rmSync(PATHS.trustDb);
   if (existsSync(PATHS.graphCache)) rmSync(PATHS.graphCache, { recursive: true });

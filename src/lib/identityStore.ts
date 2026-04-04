@@ -44,26 +44,16 @@ export function saveIdentityFile(data: IdentityFile): void {
   writeFileSync(PATHS.identity, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
-/** Resolve primary pubkey: identity.json, else secret.key. */
+/** Resolve primary pubkey from identity.json. */
 export function getPrimaryPublicKeyHex(): string | null {
   const id = loadIdentityFile();
   if (id?.primary) return id.primary.toLowerCase();
-  if (!existsSync(PATHS.secretKey)) return null;
-  try {
-    const content = readFileSync(PATHS.secretKey, 'utf-8').trim();
-    if (/^[0-9a-f]{64}$/i.test(content)) {
-      const sk = hexToBytes(content);
-      return getPublicKey(sk).toLowerCase();
-    }
-  } catch {
-    return null;
-  }
   return null;
 }
 
 /**
  * Load secret key bytes for the primary identity.
- * Order: identity.primary → keys/<pub>.key → legacy secret.key
+ * Order: identity.primary → keys/<pub>.key
  */
 export function loadPrimarySecretKey(): Uint8Array | null {
   const id = loadIdentityFile();
@@ -73,9 +63,6 @@ export function loadPrimarySecretKey(): Uint8Array | null {
     if (existsSync(perKey)) {
       return readSecretKeyFile(perKey);
     }
-  }
-  if (existsSync(PATHS.secretKey)) {
-    return readSecretKeyFile(PATHS.secretKey);
   }
   return null;
 }

@@ -48,7 +48,7 @@ Options:
   --skip-profile        Skip publishing profile to relays
 ```
 
-The secret key is stored at `~/.trust/secret.key` with restricted permissions (0600).
+The signing key is stored under `~/.trust/keys/<pubkey>.key` with metadata in `~/.trust/identity.json` (mode 0600 on key files).
 
 ### `trust whoami`
 
@@ -179,7 +179,7 @@ trust identity primary <npub|hex>
 trust identity remove <npub|hex>
 ```
 
-Secrets live under `~/.trust/keys/<pubkey>.key` with metadata in `~/.trust/identity.json`. A legacy `~/.trust/secret.key` is still supported.
+Secrets live under `~/.trust/keys/<pubkey>.key` with metadata in `~/.trust/identity.json`.
 
 ### `trust ping`
 
@@ -207,9 +207,8 @@ All configuration is stored in `~/.trust/`:
 
 ```
 ~/.trust/
-├── secret.key     # Legacy single private key (hex, mode 0600)
-├── identity.json  # Optional: primary pubkey + registered keys
-├── keys/          # Per-pubkey secret files (hex) when using `trust identity`
+├── identity.json  # Primary pubkey + registered keys (from `trust init` / `trust identity`)
+├── keys/          # Per-pubkey secret files (hex, mode 0600)
 ├── config.json    # User config (relays, focus, server, profile)
 └── trust.db       # Trust events, timestamps, KV (NIP-32010) when using SQLite
 ```

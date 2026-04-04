@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { verifyEvent } from 'nostr-tools/pure';
+import { hexToBytes } from 'nostr-tools/utils';
 
 const TEST_SECRET_KEY = 'a'.repeat(64);
 let TEST_DIR: string;
@@ -13,14 +14,16 @@ vi.mock('../../src/config.js', () => {
   return {
     PATHS: {
       configDir: testDir,
-      secretKey: join(testDir, 'secret.key'),
       config: join(testDir, 'config.json'),
+      identity: join(testDir, 'identity.json'),
+      keysDir: join(testDir, 'keys'),
     },
     DEFAULT_RELAYS: ['wss://relay.test'],
   };
 });
 
 import { signEvent, createEventTemplate, createSignedEvent } from '../../src/lib/signer.js';
+import { addIdentityKey } from '../../src/lib/identityStore.js';
 import { PATHS } from '../../src/config.js';
 
 describe('signer module', () => {
@@ -30,7 +33,7 @@ describe('signer module', () => {
       rmSync(TEST_DIR, { recursive: true });
     }
     mkdirSync(TEST_DIR, { recursive: true });
-    writeFileSync(PATHS.secretKey, TEST_SECRET_KEY);
+    addIdentityKey(hexToBytes(TEST_SECRET_KEY));
   });
 
   afterEach(() => {
@@ -89,7 +92,8 @@ describe('signer module', () => {
     });
 
     it('should throw when no secret key', () => {
-      rmSync(PATHS.secretKey);
+      rmSync(TEST_DIR, { recursive: true });
+      mkdirSync(TEST_DIR, { recursive: true });
 
       expect(() => signEvent(createEventTemplate(1, 'test'))).toThrow(
         'No secret key found'

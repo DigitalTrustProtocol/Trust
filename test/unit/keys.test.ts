@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getPublicKey } from 'nostr-tools/pure';
+import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { bytesToHex, hexToBytes } from 'nostr-tools/utils';
 
 // Create a unique test directory
@@ -15,8 +15,11 @@ vi.mock('../../src/config.js', () => {
   return {
     PATHS: {
       configDir: testDir,
-      secretKey: join(testDir, 'secret.key'),
       config: join(testDir, 'config.json'),
+      identity: join(testDir, 'identity.json'),
+      keysDir: join(testDir, 'keys'),
+      trustDb: join(testDir, 'trust.db'),
+      graphCache: join(testDir, 'graph-cache.bin'),
     },
     DEFAULT_RELAYS: ['wss://relay.test'],
     DEFAULT_MINT: 'https://mint.test',
@@ -29,9 +32,9 @@ import {
   hasSecretKey,
   loadSecretKey,
   loadKeyPair,
-  saveSecretKey,
   getOrCreateKeyPair,
 } from '../../src/lib/keys.js';
+import { addIdentityKey, identityPathForPubkey } from '../../src/lib/identityStore.js';
 import { PATHS } from '../../src/config.js';
 
 describe('keys module', () => {
@@ -81,21 +84,9 @@ describe('keys module', () => {
       expect(hasSecretKey()).toBe(false);
     });
 
-    it('should return true when key exists', () => {
-      writeFileSync(PATHS.secretKey, 'a'.repeat(64));
+    it('should return true when identity key exists', () => {
+      addIdentityKey(generateSecretKey());
       expect(hasSecretKey()).toBe(true);
-    });
-  });
-
-  describe('saveSecretKey', () => {
-    it('should save secret key as hex', () => {
-      const secretKey = hexToBytes('a'.repeat(64));
-      saveSecretKey(secretKey);
-
-      expect(existsSync(PATHS.secretKey)).toBe(true);
-
-      const content = readFileSync(PATHS.secretKey, 'utf-8').trim();
-      expect(content).toBe('a'.repeat(64));
     });
   });
 
@@ -106,7 +97,7 @@ describe('keys module', () => {
 
     it('should load hex format secret key', () => {
       const hex = 'c'.repeat(64);
-      writeFileSync(PATHS.secretKey, hex);
+      addIdentityKey(hexToBytes(hex));
 
       const secretKey = loadSecretKey();
       expect(secretKey).toBeInstanceOf(Uint8Array);
@@ -115,7 +106,7 @@ describe('keys module', () => {
 
     it('should handle uppercase hex', () => {
       const hex = 'D'.repeat(64);
-      writeFileSync(PATHS.secretKey, hex);
+      addIdentityKey(hexToBytes(hex));
 
       const secretKey = loadSecretKey();
       expect(secretKey).toBeInstanceOf(Uint8Array);
@@ -123,14 +114,14 @@ describe('keys module', () => {
     });
 
     it('should throw on invalid format', () => {
-      writeFileSync(PATHS.secretKey, 'invalid');
+      const { publicKey } = addIdentityKey(generateSecretKey());
+      writeFileSync(identityPathForPubkey(publicKey), 'invalid');
       expect(() => loadSecretKey()).toThrow('Invalid secret key format');
     });
 
     it('should throw on nsec format (not yet supported)', () => {
-      writeFileSync(PATHS.secretKey, 'nsec1test');
-      // The code tries to decode 'nsec1test' which starts with 'nsec1' and fails
-      // The error message may vary based on hex parsing
+      const { publicKey } = addIdentityKey(generateSecretKey());
+      writeFileSync(identityPathForPubkey(publicKey), 'nsec1test');
       expect(() => loadSecretKey()).toThrow();
     });
   });
@@ -142,7 +133,7 @@ describe('keys module', () => {
 
     it('should load complete keypair', () => {
       const hex = 'e'.repeat(64);
-      writeFileSync(PATHS.secretKey, hex);
+      addIdentityKey(hexToBytes(hex));
 
       const keyPair = loadKeyPair();
       expect(keyPair).not.toBeNull();
@@ -158,13 +149,13 @@ describe('keys module', () => {
 
       expect(isNew).toBe(true);
       expect(keyPair.publicKey).toMatch(/^[0-9a-f]{64}$/);
-      expect(existsSync(PATHS.secretKey)).toBe(true);
+      expect(existsSync(PATHS.identity)).toBe(true);
+      expect(existsSync(identityPathForPubkey(keyPair.publicKey.toLowerCase()))).toBe(true);
     });
 
     it('should load existing keypair', () => {
-      // Use a valid private key (cannot be all f's as that's outside the curve order)
       const hex = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
-      writeFileSync(PATHS.secretKey, hex);
+      addIdentityKey(hexToBytes(hex));
 
       const { keyPair, isNew } = getOrCreateKeyPair();
 

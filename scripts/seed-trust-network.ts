@@ -73,7 +73,7 @@ async function main() {
   // Load primary key from ./trust
   const primarySk = loadSecretKey();
   if (!primarySk) {
-    console.error('❌ No secret key found. Run `trust init` first or ensure ./trust/secret.key exists.');
+    console.error('❌ No signing key found. Run `trust init` first (or ensure identity.json and keys/ under the config dir).');
     process.exit(1);
   }
 

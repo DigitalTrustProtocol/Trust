@@ -107,7 +107,7 @@ export class NSQLite implements ExtendedNRelay  {
     // Future format: <trust_kind>|<hex(64)>[|context]
     const m = dTagValue.match(/^(\d+)\|([a-fA-F0-9]{64})(\|.*)?$/);
     if (m?.[1]) return m[1]!;
-    // Legacy format may not include trust kind; fall back to default.
+    // d tag without kind prefix; use default kind.
     return fallback;
   }
 

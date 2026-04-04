@@ -3,8 +3,6 @@ import { generateSecretKey } from 'nostr-tools/pure';
 import { hexToBytes } from 'nostr-tools/utils';
 import { logger } from '../lib/logger.js';
 import { addIdentityKey, listIdentityKeys, removeIdentityKey, setPrimaryIdentity } from '../lib/identityStore.js';
-import { PATHS } from '../config.js';
-import { existsSync } from 'node:fs';
 
 function parseIncomingSecret(raw: string): Uint8Array {
   const t = raw.trim();
@@ -21,9 +19,6 @@ function parseIncomingSecret(raw: string): Uint8Array {
 
 export async function identityListCommand(options: { json?: boolean }): Promise<void> {
   const rows = listIdentityKeys();
-  if (rows.length === 0 && existsSync(PATHS.secretKey) && !existsSync(PATHS.identity)) {
-    logger.info('Using legacy secret.key only; run `trust identity import --secret <hex|nsec>` to create identity.json.');
-  }
   if (options.json) {
     console.log(JSON.stringify(rows, null, 2));
     return;

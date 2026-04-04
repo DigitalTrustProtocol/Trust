@@ -1,14 +1,8 @@
 import { existsSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { Kysely, PostgresDialect, SqliteDialect } from 'kysely';
 import { Pool } from 'pg';
-import {
-  PATHS,
-  getRuntimeConfig,
-  mergeUserConfig,
-  resolveDatabaseDriver,
-  resolvePostgresUrl,
-  resolveSqlitePath,
-} from '../../config.js';
+import { getRuntimeConfig } from '../../config.js';
 import type { FocusAxis, ResolvedRuntimeConfig } from '../../config.js';
 import { NSQLite, NSQLiteOpts, NSQLiteSchema } from './NSQLite.js';
 import Database from 'better-sqlite3';
@@ -50,6 +44,14 @@ interface RuntimeDbConfig {
 */
 
 let storeInstance: Store | null = null;
+let cachedStoreKey: string | null = null;
+
+function resolvedStoreCacheKey(cfg: ResolvedRuntimeConfig): string {
+  if (cfg.database === 'postgres') {
+    return `pg:${cfg.postgresUrl ?? ''}`;
+  }
+  return `sqlite:${cfg.sqlitePath}`;
+}
 
 /** Set by `server` CLI before init when `--database` is passed. */
 let dbDriverCliOverride: DbDriver | undefined;
@@ -90,8 +92,9 @@ export async function createStore(cfg: ResolvedRuntimeConfig): Promise<Store> {
   }
 
   if (cfg.database === 'sqlite') {
-    if (!existsSync(PATHS.configDir)) {
-      mkdirSync(PATHS.configDir, { recursive: true });
+    const dbDir = dirname(cfg.sqlitePath);
+    if (!existsSync(dbDir)) {
+      mkdirSync(dbDir, { recursive: true });
     }
 
     const store = await createNSQLiteStore(cfg.sqlitePath);
@@ -125,28 +128,39 @@ export async function createNSQLiteStore(db: NSQLiteDbInput, opts?: NSQLiteOpts)
 }
 
 
+/** Default CLI fragment so cold `resolveConfig` does not require identity keys (DB init only). */
+const DB_INIT_CLI: Record<string, unknown> = { authors: '*' };
+
 export async function getStore(cfg: ResolvedRuntimeConfig | undefined = undefined): Promise<Store> {
-  if (!storeInstance) {
-    if (!cfg) {
-      cfg = getRuntimeConfig();
-    }
-    storeInstance = await createStore(cfg);
+  const resolved = cfg ?? getRuntimeConfig(DB_INIT_CLI);
+  const key = resolvedStoreCacheKey(resolved);
+  if (storeInstance && cachedStoreKey === key) {
+    return storeInstance;
   }
+  if (storeInstance) {
+    await storeInstance.close();
+    storeInstance = null;
+    cachedStoreKey = null;
+  }
+  cachedStoreKey = key;
+  storeInstance = await createStore(resolved);
   return storeInstance;
 }
 
 export async function closeStore(store: Store | null = storeInstance): Promise<void> {
   if (store) {
     await store.close();
+  }
+  if (!store || store === storeInstance) {
     storeInstance = null;
+    cachedStoreKey = null;
   }
 }
 
 /** Initialize trust database using configured backend. Creates config dir if needed. */
 export async function initTrustDb(): Promise<Store> {
-  let cfg = getRuntimeConfig();
-  storeInstance = await getStore(cfg);
-  return storeInstance;
+  const cfg = getRuntimeConfig(DB_INIT_CLI);
+  return getStore(cfg);
 }
 
 /** Close the trust database connection. */

@@ -9,10 +9,18 @@ export interface KVSchema {
 }
 
 export const KV_KEYS = {
-  LATEST_TIMESTAMP: 'latest_timestamp',
-  LAST_SEEN_TIMESTAMP: 'last_seen_timestamp',
   TRUST_SYNC_SINCE: 'trust_sync_since',
 } as const;
+
+/** KV key for the "latest" cursor used with `--since latest` (per namespace). */
+export function kvKeyLatestTimestamp(namespace: string): string {
+  return `latest_timestamp:${namespace}`;
+}
+
+/** KV key for the auto-tracked last-seen cursor (per namespace). */
+export function kvKeyLastSeenTimestamp(namespace: string): string {
+  return `last_seen_timestamp:${namespace}`;
+}
 
 export async function migrateSQLiteKV(db: Kysely<any>): Promise<void> {
   await db.schema

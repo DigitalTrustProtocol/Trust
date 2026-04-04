@@ -112,7 +112,7 @@ Both cache strategies reuse the same DB schema and resolution logic; they only d
 
 ```mermaid
 flowchart TB
-    subgraph ServerMode [Server Mode]
+    subgraph ServerService [Server Service]
         WebAPI[Web API localhost]
         WebSocket[WebSockets to Relays]
         DB[(trust.db)]

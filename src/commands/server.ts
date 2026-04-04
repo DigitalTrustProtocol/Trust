@@ -1,5 +1,4 @@
-import { getLatestTimestamp } from '../lib/timestamp.js';
-import { rollForwardTimestamp } from '../lib/timestamp.js';
+import { getLatestTimestamp, rollForwardTimestamp, TIMESTAMP_NS_SYNC } from '../lib/timestamp.js';
 import { getPinoInstance, initLogger, logger } from '../lib/logger.js';
 import { createApp, type ServerService } from '../server/app.js';
 import { setDbDriverOverride, type DbDriver } from '../lib/db/dbManager.js';
@@ -109,7 +108,7 @@ export async function getSinceFromTimestamp(since: string | undefined): Promise<
     }
     return num;
   }
-  await rollForwardTimestamp();
-  const result = (await getLatestTimestamp()) ?? 0;
+  await rollForwardTimestamp(TIMESTAMP_NS_SYNC);
+  const result = (await getLatestTimestamp(TIMESTAMP_NS_SYNC)) ?? 0;
   return result;
 }

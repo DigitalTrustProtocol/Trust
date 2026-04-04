@@ -1,49 +1,52 @@
-import { KV_KEYS } from './db/kv.js';
+import { kvKeyLatestTimestamp, kvKeyLastSeenTimestamp } from './db/kv.js';
 import { kvGet, kvSet } from './db/kv.js';
 import type { VerifiedEvent } from 'nostr-tools';
 import { logger } from './logger.js';
 
+/** Namespace for relay sync / incremental fetch cursors (`latest_timestamp:sync`, `last_seen_timestamp:sync`). */
+export const TIMESTAMP_NS_SYNC = 'sync' as const;
 
-export async function getLatestTimestamp(): Promise<number | undefined> {
-  const val = await kvGet(KV_KEYS.LATEST_TIMESTAMP);
+export async function getLatestTimestamp(namespace: string): Promise<number | undefined> {
+  const val = await kvGet(kvKeyLatestTimestamp(namespace));
   return val !== undefined ? parseInt(val, 10) : undefined;
 }
 
-export async function setLatestTimestamp(ts: number): Promise<void> {
-  await kvSet(KV_KEYS.LATEST_TIMESTAMP, String(ts));
+export async function setLatestTimestamp(namespace: string, ts: number): Promise<void> {
+  await kvSet(kvKeyLatestTimestamp(namespace), String(ts));
 }
 
-export async function getLastSeenTimestamp(): Promise<number | undefined> {
-  const val = await kvGet(KV_KEYS.LAST_SEEN_TIMESTAMP);
+export async function getLastSeenTimestamp(namespace: string): Promise<number | undefined> {
+  const val = await kvGet(kvKeyLastSeenTimestamp(namespace));
   return val !== undefined ? parseInt(val, 10) : undefined;
 }
 
-export async function setLastSeenTimestamp(ts: number): Promise<void> {
-  await kvSet(KV_KEYS.LAST_SEEN_TIMESTAMP, String(ts));
+export async function setLastSeenTimestamp(namespace: string, ts: number): Promise<void> {
+  await kvSet(kvKeyLastSeenTimestamp(namespace), String(ts));
 }
 
-export async function updateLastSeenTimestamp(createdAt: number): Promise<void> {
+export async function updateLastSeenTimestamp(namespace: string, createdAt: number): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const capped = Math.min(createdAt, now);
-  const current = await getLastSeenTimestamp();
+  const current = await getLastSeenTimestamp(namespace);
   const next = capped + 1;
   if (current === undefined || next > current) {
-    await setLastSeenTimestamp(next);
+    await setLastSeenTimestamp(namespace, next);
   }
 }
 
-
 /**
  * Resolve a --since or --until value.
- * - If "latest", resolve to the stored latest_timestamp from the key/value store.
+ * - If "latest", resolve to the stored latest timestamp for `namespace`.
  * - If a numeric string, parse as integer (unix seconds).
- * - Returns undefined if the value is not provided or "latest" has no stored value.
  */
-export async function resolveTimestampParam(value: string | undefined): Promise<number | undefined> {
+export async function resolveTimestampParam(
+  value: string | undefined,
+  namespace: string,
+): Promise<number | undefined> {
   if (value === undefined) return undefined;
 
   if (value === 'latest') {
-    const ts = await getLatestTimestamp();
+    const ts = await getLatestTimestamp(namespace);
     if (ts === undefined) {
       logger.error('No "latest" timestamp stored. Use `trust timestamp <value>` to set one.');
       process.exit(1);
@@ -60,29 +63,24 @@ export async function resolveTimestampParam(value: string | undefined): Promise<
 }
 
 /**
- * Track the latest created_at from a set of query results.
- * Updates last_seen_timestamp to max(created_at) + 1 of the returned events,
- * but only if that value is greater than what is already stored.
- * Caps at current time so a malformed or future-dated event cannot push the cursor.
- * Use `trust timestamp --rollforward` to promote last_seen to latest when ready.
+ * Track the latest created_at from a set of query results for `namespace`.
+ * Updates last_seen to max(created_at) + 1 when greater than stored.
  */
-export async function trackLatestTimestamp(events: VerifiedEvent[]): Promise<number> {
+export async function trackLatestTimestamp(namespace: string, events: VerifiedEvent[]): Promise<number> {
   if (events.length === 0) return 0;
-  const maxCreatedAt = Math.max(...events.map(e => e.created_at));
-  if (maxCreatedAt) await updateLastSeenTimestamp(maxCreatedAt);
+  const maxCreatedAt = Math.max(...events.map((e) => e.created_at));
+  if (maxCreatedAt) await updateLastSeenTimestamp(namespace, maxCreatedAt);
   return maxCreatedAt;
 }
 
 /**
- * Promote last_seen + 1 to latest. Call before starting relay subscription
- * so the server starts from the most recent processed point.
- * No-op if last_seen is not set.
+ * Promote last_seen + 1 to latest for `namespace`.
  * @returns The new latest timestamp, or undefined if last_seen was not set.
  */
-export async function rollForwardTimestamp(): Promise<number | undefined> {
-  const lastSeen = await getLastSeenTimestamp();
+export async function rollForwardTimestamp(namespace: string): Promise<number | undefined> {
+  const lastSeen = await getLastSeenTimestamp(namespace);
   if (lastSeen === undefined) return undefined;
   const next = lastSeen + 1;
-  await setLatestTimestamp(next);
+  await setLatestTimestamp(namespace, next);
   return next;
 }

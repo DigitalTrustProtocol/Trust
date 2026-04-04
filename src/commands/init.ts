@@ -17,8 +17,8 @@ export async function initCommand(options: {
   logger.info('Initializing Trust identity...');
 
   if (hasSecretKey()) {
-    logger.warn(`Secret key already exists at ${PATHS.secretKey}`);
-    logger.warn('To reset, delete the file and run init again.');
+    logger.warn(`Identity already exists at ${PATHS.identity}`);
+    logger.warn('To reset, remove identity storage and run init again.');
 
     await initTrustDb();
 
@@ -34,7 +34,7 @@ export async function initCommand(options: {
 
   if (isNew) {
     logger.info('Generated new Nostr keypair');
-    logger.info(`Saved to: ${PATHS.secretKey}`);
+    logger.info(`Saved to: ${PATHS.identity} and ${PATHS.keysDir}/`);
   }
 
   console.log('Your identity:');

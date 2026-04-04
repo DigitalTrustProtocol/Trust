@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { existsSync, rmSync, mkdirSync } from 'node:fs';
 
 vi.mock('../../../src/config.js', async (importOriginal) => {
@@ -9,7 +10,6 @@ vi.mock('../../../src/config.js', async (importOriginal) => {
   const PATHS = {
     ...actual.PATHS,
     configDir: dir,
-    secretKey: join(dir, 'secret.key'),
     config: join(dir, 'config.json'),
     trustDb: join(dir, 'trust.db'),
     graphCache: join(dir, 'graph-cache.bin'),
@@ -46,11 +46,12 @@ import {
   setLastSeenTimestamp,
   updateLastSeenTimestamp,
 } from '../../../src/lib/timestamp.js';
-import { PATHS } from '../../../src/config.js';
+import { PATHS, resetRuntimeConfig } from '../../../src/config.js';
 
 describe('trust-db module (SQLite)', () => {
   beforeEach(async () => {
     await closeTrustDb();
+    resetRuntimeConfig();
     if (existsSync(PATHS.configDir)) {
       rmSync(PATHS.configDir, { recursive: true });
     }
@@ -59,6 +60,7 @@ describe('trust-db module (SQLite)', () => {
 
   afterEach(async () => {
     await closeTrustDb();
+    resetRuntimeConfig();
     if (existsSync(PATHS.configDir)) {
       rmSync(PATHS.configDir, { recursive: true });
     }
@@ -89,24 +91,27 @@ describe('trust-db module (SQLite)', () => {
     beforeEach(async () => await initTrustDb());
 
     it('should get and set latest timestamp', async () => {
-      expect(await getLatestTimestamp()).toBeUndefined();
-      await setLatestTimestamp(1700000000);
-      expect(await getLatestTimestamp()).toBe(1700000000);
+      const ns = randomUUID();
+      expect(await getLatestTimestamp(ns)).toBeUndefined();
+      await setLatestTimestamp(ns, 1700000000);
+      expect(await getLatestTimestamp(ns)).toBe(1700000000);
     });
 
     it('should get and set last seen timestamp', async () => {
-      expect(await getLastSeenTimestamp()).toBeUndefined();
-      await setLastSeenTimestamp(1700000001);
-      expect(await getLastSeenTimestamp()).toBe(1700000001);
+      const ns = randomUUID();
+      expect(await getLastSeenTimestamp(ns)).toBeUndefined();
+      await setLastSeenTimestamp(ns, 1700000001);
+      expect(await getLastSeenTimestamp(ns)).toBe(1700000001);
     });
 
     it('should update last seen only when greater', async () => {
-      await updateLastSeenTimestamp(1700000000);
-      expect(await getLastSeenTimestamp()).toBe(1700000001);
-      await updateLastSeenTimestamp(1700000005);
-      expect(await getLastSeenTimestamp()).toBe(1700000006);
-      await updateLastSeenTimestamp(1700000000);
-      expect(await getLastSeenTimestamp()).toBe(1700000006);
+      const ns = randomUUID();
+      await updateLastSeenTimestamp(ns, 1700000000);
+      expect(await getLastSeenTimestamp(ns)).toBe(1700000001);
+      await updateLastSeenTimestamp(ns, 1700000005);
+      expect(await getLastSeenTimestamp(ns)).toBe(1700000006);
+      await updateLastSeenTimestamp(ns, 1700000000);
+      expect(await getLastSeenTimestamp(ns)).toBe(1700000006);
     });
   });
 });

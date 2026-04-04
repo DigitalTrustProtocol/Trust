@@ -2,7 +2,7 @@ import { NPool } from "@nostrify/nostrify";
 import { subscriptionOptions } from "./relay-sub.js";
 import { KIND_TRUST } from "../lib/nostr/nip32010.js";
 import { insertEvent } from "../lib/trust/graphManager.js";
-import { trackLatestTimestamp } from "../lib/timestamp.js";
+import { TIMESTAMP_NS_SYNC, trackLatestTimestamp } from "../lib/timestamp.js";
 import { startRelaySubscription } from "./relay-sub.js";
 import { GraphSyncResult } from "./graph-sync.js";
 import { logger } from "../lib/logger.js";
@@ -36,7 +36,7 @@ export async function subscribeToAll(runtimeContext: RuntimeContext): Promise<Gr
         let inserted = await insertEvent(event, { store: store as Store, graph: graph as Graph });
         if (inserted) {
           eventsInserted++;
-          latestTimestamp = Math.max(latestTimestamp, await trackLatestTimestamp([event]));
+          latestTimestamp = Math.max(latestTimestamp, await trackLatestTimestamp(TIMESTAMP_NS_SYNC, [event]));
         }
         statusCallback?.(`Received ${eventsReceived} events. Inserted ${eventsInserted} events.` as string);
       },

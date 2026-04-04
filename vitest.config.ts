@@ -2,6 +2,12 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    sequence: {
+      concurrent: false,
+    },
+    maxWorkers: 1,
+    /** Avoid cross-test KV races (shared store + same namespace). */
+    maxConcurrency: 1,
     globals: true,
     environment: 'node',
     include: ['src/**/*.test.ts', 'test/**/*.test.ts'],

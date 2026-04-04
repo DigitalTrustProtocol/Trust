@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -68,11 +68,14 @@ describe('identity e2e tests', () => {
   });
 
   describe('trust init', () => {
-    it('should create secret key file', async () => {
+    it('should create identity.json and keys directory', async () => {
       const { code } = await runCli(['init', '--skip-profile']);
 
       expect(code).toBe(0);
-      expect(existsSync(join(TRUST_DIR, 'secret.key'))).toBe(true);
+      expect(existsSync(join(TRUST_DIR, 'identity.json'))).toBe(true);
+      const keysDir = join(TRUST_DIR, 'keys');
+      expect(existsSync(keysDir)).toBe(true);
+      expect(readdirSync(keysDir).some((f) => f.endsWith('.key'))).toBe(true);
     });
 
     it('should generate valid keypair', async () => {
@@ -160,13 +163,14 @@ describe('identity e2e tests', () => {
       expect(id1.npub).toBe(id2.npub);
     });
 
-    it('should preserve secret key format', async () => {
+    it('should store primary key as 64-char hex in keys/', async () => {
       await runCli(['init', '--skip-profile']);
 
-      const keyPath = join(TRUST_DIR, 'secret.key');
-      const keyContent = readFileSync(keyPath, 'utf-8').trim();
+      const keysDir = join(TRUST_DIR, 'keys');
+      const keyFile = readdirSync(keysDir).find((f) => f.endsWith('.key'));
+      expect(keyFile).toBeDefined();
+      const keyContent = readFileSync(join(keysDir, keyFile!), 'utf-8').trim();
 
-      // Should be 64-char hex
       expect(keyContent).toMatch(/^[0-9a-f]{64}$/i);
     });
   });

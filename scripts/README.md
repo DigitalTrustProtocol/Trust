@@ -12,11 +12,10 @@ Generates keys and creates a trust network. Uses the primary key from `./trust` 
 
    ```bash
    mkdir -p trust
-   # Copy your secret key to trust/secret.key, or run init:
    TRUST_CONFIG_DIR=trust trust init --skip-profile
    ```
 
-2. Ensure `trust/secret.key` exists (hex format, 64 chars).
+2. Ensure `trust/identity.json` and `trust/keys/*.key` exist (from `trust init` or `trust identity import`).
 
 ### Usage
 
