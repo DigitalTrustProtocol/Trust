@@ -30,7 +30,8 @@ export async function resolveTrustCommand(options: {
   json?: boolean;
 }): Promise<void> {
   const format = options.format ?? 'default';
-  const serverUp = await isServerAvailable();
+  const serverUp =
+    process.env.TRUST_E2E_OFFLINE === '1' ? false : await isServerAvailable();
 
   const cfg = getRuntimeConfig(options);
   const runtimeContext = await initRuntimeContext(cfg);

@@ -28,13 +28,10 @@ export async function getGraph(): Promise<Graph | null> {
 export async function loadGraph(runtimeContext: RuntimeContext): Promise<Graph> {
   if (graph) return graph;
 
-  //const opts = normalizeLoadArgs(authorOrOpts, maxDepthArg);
-
   graph = new Graph();
+  runtimeContext.graph = graph;
 
-  const store = await getStore();
   const authors = runtimeContext.authors;
-  const maxDepth = runtimeContext.maxDepth;
 
   if(authors?.length) {
     await getGraphFromDB(runtimeContext);
