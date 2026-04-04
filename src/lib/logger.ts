@@ -1,6 +1,4 @@
 import pino from 'pino';
-import { join } from 'node:path';
-import { PATHS } from '../config.js';
 
 type LogMode = 'server' | 'cli';
 

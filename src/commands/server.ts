@@ -1,9 +1,10 @@
 import { getLatestTimestamp } from '../lib/timestamp.js';
 import { rollForwardTimestamp } from '../lib/timestamp.js';
-import { initLogger, logger } from '../lib/logger.js';
+import { getPinoInstance, initLogger, logger } from '../lib/logger.js';
 import { createApp, type ServerService } from '../server/app.js';
 import { setDbDriverOverride, type DbDriver } from '../lib/db/dbManager.js';
 import { getRuntimeConfig, resolveConfig, setRuntimeConfig, type ResolvedRuntimeConfig } from '../config.js';
+import { getRuntimeContext, RuntimeContext, setupRelayPool, setupStore } from '../lib/runtimeContext.js';
 
 const VALID_SERVICES = new Set<string>(['all', 'relay', 'api', 'web']);
 
@@ -33,22 +34,41 @@ export async function serverCommand(options: {
 }): Promise<void> {
   initLogger('server');
 
-  const resolved = getRuntimeConfig(options);
+  const cfg = getRuntimeConfig(options);
+  const runtimeContext = await initRuntimeContext(cfg);
 
-  setDbDriverOverride(resolved.database as DbDriver);
+  setDbDriverOverride(cfg.database as DbDriver);
 
-  const service = resolved.service;
-  await runWebServer(resolved);
+  await runWebServer(runtimeContext);
 }
 
-async function runWebServer(resolved: ResolvedRuntimeConfig): Promise<void> {
-  const host = resolved.host;
-  const port = resolved.port;
-  const relays = resolved.relays;
-  const json = resolved.json;
-  const service = resolved.service;
 
-  const app = await createApp(service);
+async function initRuntimeContext(resolved: ResolvedRuntimeConfig): Promise<RuntimeContext> {
+  const runtimeContext = await getRuntimeContext(resolved);
+  await setupStore(runtimeContext);
+  runtimeContext.loggerInstance = getPinoInstance();
+
+  if(runtimeContext.service === 'all' || runtimeContext.service === 'relay') {
+    await setupRelayPool(runtimeContext);
+  }
+  if(runtimeContext.service === 'api') {
+    //await setupApi(runtimeContext);
+  }
+  if(runtimeContext.service === 'all' || runtimeContext.service === 'web') {
+  }
+
+  
+  return runtimeContext;
+}
+
+async function runWebServer(runtimeContext: RuntimeContext): Promise<void> {
+  const host = runtimeContext.host;
+  const port = runtimeContext.port;
+  const relays = runtimeContext.relays;
+  const json = runtimeContext.json;
+  const service = runtimeContext.service;
+
+  const app = await createApp(service, runtimeContext);
   await app.listen({ host, port });
 
   if (json) {

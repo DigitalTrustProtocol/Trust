@@ -1,9 +1,10 @@
 import { NPool } from "@nostrify/nostrify";
-import { getStore, initTrustDb, Store } from "./db/dbManager.js";
+import { getStore, Store } from "./db/dbManager.js";
 import { Graph } from "./trust/graph/Graph.js";
-import { getRuntimeConfig, ResolvedRuntimeConfig } from "../config.js";
+import {  ResolvedRuntimeConfig } from "../config.js";
 import { getAvailableRelays, getPool } from "./nostr/pool.js";
-import { clearGraphMemory, loadGraph } from "./trust/graphManager.js";
+import pino from "pino";
+import { getLoadedGraph } from "./trust/graphManager.js";
 
 let runtimeContext: RuntimeContext | null = null;
 
@@ -15,6 +16,7 @@ export interface RuntimeContext extends ResolvedRuntimeConfig {
 
     statusCallback?: (status: string) => void;
     abortController: AbortController;
+    loggerInstance?: pino.Logger;
 }
 
 
@@ -59,4 +61,9 @@ export async function setupRelayPool(runtimeContext: RuntimeContext): Promise<vo
 export async function setupStore(runtimeContext: RuntimeContext): Promise<void> {
     runtimeContext.statusCallback?.('Initializing trust database...');
     runtimeContext.store = await getStore(runtimeContext);
+}
+
+export async function setupApi(runtimeContext: RuntimeContext): Promise<void> {
+    runtimeContext.statusCallback?.('Initializing API...');
+    //runtimeContext.graph = await getLoadedGraph(runtimeContext.store, { author: '*', maxDepth: 4, focus: runtimeContext.focus });
 }

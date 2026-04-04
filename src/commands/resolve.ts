@@ -7,7 +7,9 @@ import type { ResolveFormat } from '../lib/trust/resolvers/IResolveStrategy.js';
 import { Score } from '../lib/trust/resolvers/Score.js';
 import standardResolver from '../lib/trust/resolvers/trustResolver.js';
 import { loadGraph } from '../lib/trust/graphManager.js';
-import { logger } from '../lib/logger.js';
+import { getPinoInstance, logger } from '../lib/logger.js';
+import { getRuntimeContext, RuntimeContext, setupStore } from '../lib/runtimeContext.js';
+import { getRuntimeConfig, ResolvedRuntimeConfig } from '../config.js';
 
 export type { ResolveFormat };
 
@@ -29,6 +31,10 @@ export async function resolveTrustCommand(options: {
 }): Promise<void> {
   const format = options.format ?? 'default';
   const serverUp = await isServerAvailable();
+
+  const cfg = getRuntimeConfig(options);
+  const runtimeContext = await initRuntimeContext(cfg);
+
 
   if (serverUp) {
     const result = await proxyResolve(undefined, {
@@ -63,7 +69,7 @@ export async function resolveTrustCommand(options: {
   let score: Score | undefined;
 
   if (author) {
-    const graph = await loadGraph(store);
+    const graph = await loadGraph(runtimeContext);
     score = standardResolver.resolve(author, subjectId, {
       graph,
       context,
@@ -76,6 +82,13 @@ export async function resolveTrustCommand(options: {
   }
 
   throw new Error('Author is required');
+}
+
+async function initRuntimeContext(cfg: ResolvedRuntimeConfig): Promise<RuntimeContext> {
+  const runtimeContext = await getRuntimeContext(cfg);
+  await setupStore(runtimeContext);
+  runtimeContext.loggerInstance = getPinoInstance();
+  return runtimeContext;
 }
 
 function outputResolveResult(

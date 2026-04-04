@@ -17,10 +17,11 @@ import {
   removeTrustEventFromGraphPacked,
 } from '../../lib/trust/graphManager.js';
 import standardResolver from '../../lib/trust/resolvers/trustResolver.js';
-import { initTrustDb } from '../../lib/db/dbManager.js';
+import { initTrustDb, Store } from '../../lib/db/dbManager.js';
 import { fanOutEvent } from './relay.js';
 import { KIND_TRUST } from '../../lib/nostr/nip32010.js';
 import { getRuntimeConfig, resolveConfig, toFocusResolution } from '../../config.js';
+import { RuntimeContext } from '../../lib/runtimeContext.js';
 
 type TrustBody = {
   subjects: string[];
@@ -45,24 +46,15 @@ function normalizeContext(context: string | undefined): string | undefined {
   return context;
 }
 
-type ApiOpts = {
-  /** When the relay runs in another process, poll DB notify rows to refresh the in-memory graph. */
-  enableGraphNotifyPoller?: boolean;
-};
-
-export default fp(async function apiPlugin(app, opts: ApiOpts = {}) {
+export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) {
   const healthHandler = async () => {
     return { status: 'ok' };
   };
 
   app.addHook('onReady', async () => {
-    const store = await initTrustDb();
-    const focus = toFocusResolution(getRuntimeConfig());
-    await loadGraph(store, { author: '*', maxDepth: 4, focus });
 
-    if (!opts.enableGraphNotifyPoller) {
-      return;
-    }
+    const focus = toFocusResolution(getRuntimeConfig());
+    await loadGraph(runtimeContext);
 
     const pollMs = Math.max(250, Number(process.env.TRUST_GRAPH_NOTIFY_POLL_MS ?? 2000));
     const timer = setInterval(() => {
@@ -158,7 +150,7 @@ export default fp(async function apiPlugin(app, opts: ApiOpts = {}) {
 
       const store = await initTrustDb();
       const focus = toFocusResolution(getRuntimeConfig() ?? resolveConfig({}));
-      const graph = await loadGraph(store, { author: '*', maxDepth: body.maxDepth ?? 4, focus });
+      const graph = await loadGraph(runtimeContext);
       const score: Score = standardResolver.resolve(author, subjectId, {
         graph,
         context,

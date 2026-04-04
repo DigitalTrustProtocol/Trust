@@ -9,6 +9,7 @@ import { KIND_USER_METADATA } from '../nostr/nip01.js';
 import { getPublicKey, getRuntimeConfig, toFocusResolution } from '../../config.js';
 import type { FocusAxis, FocusResolution } from '../../config.js';
 import { eventAllowedByFocus } from './eventFocus.js';
+import { RuntimeContext } from '../runtimeContext.js';
 
 const packr = new Packr({ structuredClone: false });
 
@@ -47,19 +48,15 @@ function normalizeLoadArgs(authorOrOpts?: LoadGraphArg, maxDepthArg?: number): L
   };
 }
 
-export async function loadGraph(store: Store, authorOrOpts?: LoadGraphArg, maxDepthArg?: number): Promise<Graph> {
-  const opts = normalizeLoadArgs(authorOrOpts, maxDepthArg);
+export async function loadGraph(runtimeContext: RuntimeContext): Promise<Graph> {
   if (graph) return graph;
+
+  //const opts = normalizeLoadArgs(authorOrOpts, maxDepthArg);
 
   graph = new Graph();
 
-  let author = opts.author ?? '*';
-  const maxDepth = Math.max(1, opts.maxDepth ?? 3);
-  const focus = opts.focus;
-
-  if (author === 'default') {
-    author = getPublicKey();
-  }
+  /*
+  let authors =runtimeContext.authors;
 
   if (author === '*') {
     if (focus?.authors !== undefined && focus.authors !== '') {
@@ -73,7 +70,7 @@ export async function loadGraph(store: Store, authorOrOpts?: LoadGraphArg, maxDe
   } else {
     await getGraphFromDB(author, maxDepth, store, graph, focus);
   }
-
+*/
   return graph;
 }
 
