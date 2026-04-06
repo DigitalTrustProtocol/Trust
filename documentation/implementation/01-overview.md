@@ -1,148 +1,337 @@
-# NIP-32010 Implementation Overview
+# System Architecture
 
-## Purpose
+This document describes the architecture of the Trust application as implemented. Trust is a single npm package (`@dtp/trust`) that serves as CLI client, HTTP server, Nostr relay facade, and web dashboard — one app for all deployment modes.
 
-The **Trust CLI** implements [NIP-32010](../nips/NIP-32010.md) (Digital Web of Trust Reputation) to handle trust assertions on Nostr. Users can **issue** trust events (kind 32010) and **query** reputation for any target—identity, event, content hash, URL, or NIP-73 external content ID.
+---
 
-## Goals
+## 1. High-Level Architecture
 
-1. **Issue trust** – Publish signed kind 32010 events to Nostr relays with subject (`p`, `e`, `a`, `h`, `r`, `i`/`k`), context (`c`), and value (`v`).
-2. **Regular sync** – Efficiently synchronize with Nostr relay servers using configurable subscription strategies (subscribe-all vs graph-based subsets) to avoid downloading irrelevant trust events.
-3. **Local resolve** – Use a local SQLite database plus in-memory cache and configurable loading strategies so that resolution only needs the part of the global trust graph that is relevant for the current client.
-
-## Features
-
-| Feature | Description |
-|---------|-------------|
-| Issue trust | Create and publish trust (1), distrust (-1), or neutral (0) assertions on pubkeys, events, content hashes, URLs, or NIP-73 IDs |
-| Batch trust | Issue multiple subjects in a single event (e.g. distrust a botnet) |
-| Local DB | Persist kind 32010 events in SQLite for quick reputation resolution |
-| Relay sync | Incrementally fetch new trust events and update local DB |
-| Context filtering | Filter by context (`development`, `commerce`, `security`, etc.) |
-| NIP-73 support | Trust on ISBN, DOI, podcast GUIDs, blockchain tx/address, and other external IDs |
-| Query reputation | Resolve a target (npub, event ID, URL, etc.) and show aggregated trust from followed/trusted authors |
-
-## Scope (In / Out)
-
-**In scope:**
-- Issue single and batch trust events
-- Query and sync trust events from relays (author-focused or target-focused)
-- Local DB schema for trust events and reputation queries
-- Resolve reputation from local DB for a target
-- All subject types: `p`, `e`, `a`, `h`, `r`, `i`+`k`
-
-**Out of scope (for initial implementation):**
-- Full graph-based reputation scoring (weighted paths from user)
-- Integration with follow graph (kind 3) for "trusted authors"
-- Implementing additional sync event kinds defined in NIP-32011 and NIP-32012 (these NIPs are documented but their event kinds are wired in only after the efficient resolve/sync strategies below are implemented)
-
-**Phase 2 adds (see below):**
-- Server mode (Web API, websockets to relays)
-- Client delegation to server
-- Cache-backed DB for searches
-
-## Resolve & Synchronization Strategies
-
-To keep relay traffic and local resource usage manageable, the implementation supports pluggable strategies at two layers: **relay subscription** and **memory cache loading**. The goal is that the client does **not** need to download all global trust events, only those that matter for its current web-of-trust graph.
-
-### Relay subscription strategies
-
-- **Subscribe-all (filter on client side)**:  
-  Subscribe to all trust events (kind 32010; later extended to additional sync-related kinds from NIP-32011 and NIP-32012). The client then filters events locally based on its own trust graph and query context. This is simple and robust but can mean a very large subscription and higher bandwidth usage on busy relays.
-
-- **Graph-based subset (trusted npubs only)**:  
-  Build the user's current web-of-trust graph from the `trust` table and subscribe only to events authored by npub keys that are in, or on the frontier of, that graph. This dramatically reduces the number of events the client needs to download, at the cost of more complex graph maintenance and a risk of missing events from currently unknown authors.
-
-- **Runtime-selectable**:  
-  The chosen strategy is **optional and switchable on the fly** (e.g. via CLI flags or config). If a graph-based strategy behaves poorly for a very large graph or a specific relay, the user can quickly fall back to the subscribe-all strategy without any database migration.
-
-### Memory cache strategies
-
-When using the in-memory cache to accelerate resolve operations, there are two parallel strategies:
-
-- **Load-all cache**:  
-  Load all relevant trust rows from `trust.db` into the cache, regardless of whether the corresponding identities are currently in the client's trust graph. This gives the fastest warm-up and query performance for small/medium datasets, but can bloat memory when the global dataset is large.
-
-- **Graph-limited cache**:  
-  Load only events that are in, or immediately adjacent to, the client's current trust graph. This keeps the in-memory working set smaller at the cost of slower initial loading and more on-demand DB lookups when the graph changes.
-
-Both cache strategies reuse the same DB schema and resolution logic; they only differ in how big a subset of the global trust graph they materialize in memory.
-
-## Phase 2: Server/Client Architecture
-
-### Focus and split processes
-
-- **Config:** `authors` and `contexts` in `config.json` scope what is retained (use the single token **`All`** in a one-element list when you want no filter on that axis). Omitted `authors` / `contexts` default to **all** authors and **all** contexts unless narrowed by **`--authors`** / **`--contexts`** on sync/server.
-- **CLI precedence:** **`--authors`** and **`--contexts`** override `config.json` for that sync/server process when set.
-- **Split processes:** `trust server --service relay` and `trust server --service api` can share one database (SQLite file or Postgres). The API process polls `trust_graph_notify` (filled by DB triggers on `nostr_events` insert/delete) to refresh the graph when the relay process writes events. **`trust sync`** writes the relay feed to the database only; the API process refreshes its graph from the DB (notify queue / triggers).
-
-### Cache-Backed DB Layer
-
-- **Principle:** All searches (resolve, query paths) go against the in-memory cache for speed.
-- **Reads/writes:** Go to the DB and update the cache (write-through or invalidate-on-write).
-- **Existing cache:** Reuse current implementation in [`src/lib/trust/trust-cache.ts`](../../src/lib/trust/trust-cache.ts) (`authorCache`, `subjectCache`, `loadTrustCache`, `getIncomingTrusts`, `getOutgoingTrusts`) without modifying it.
-- **Needed code:** Add wiring so that:
-  - `insertTrustEvent` (and any other DB writes) updates the cache after write.
-  - Resolve/query commands use the cache for lookups by default when the app is running.
-  - No change to the cache module's public API.
-
-### Server Mode
-
-- **CLI command:** `trust server` with options `-p/--port`, `-h/--host`, `-r/--relay`.
-- **Purpose:** Run a long-lived process that keeps the cache loaded and continuously synced with relay servers.
-- **Components:**
-  - Web API (e.g. Express or Fastify) on localhost for:
-    - Submitting new trust events (equivalent to `issue`)
-    - Submitting resolve requests
-  - WebSocket connections to relay servers for continuous synchronization of kind 32010 events
-  - On startup: load DB into cache, then subscribe to relays via websockets; on each new event, insert to DB and update cache
-- **Benefit:** Cache is always warm; resolve requests are fast and reflect live data.
-
-### Client Mode
-
-- **Principle:** Same app can run as server (long-lived) or client (short-lived CLI).
-- **Client flow:**
-  1. Check if server is available (e.g. `GET /health` or `GET /available` on localhost).
-  2. **If available:** Send HTTP requests to the server (issue, resolve).
-  3. **If not available:** Run the command locally.
-- **Client running locally:**
-  - Load DB into cache before any resolve request (same as current `loadTrustCache()` behavior when using cache strategy).
-
-### Architecture Diagram
-
-```mermaid
-flowchart TB
-    subgraph ServerService [Server Service]
-        WebAPI[Web API localhost]
-        WebSocket[WebSockets to Relays]
-        DB[(trust.db)]
-        Cache[In-Memory Cache]
-        WebAPI --> DB
-        WebAPI --> Cache
-        WebSocket -->|"new events"| DB
-        DB -->|"write-through"| Cache
-        WebSocket -->|"continuous sync"| DB
-    end
-
-    subgraph ClientMode [Client Mode]
-        CLI[trust CLI]
-        ServerCheck{Server available?}
-        HTTP[HTTP to Server]
-        LocalDB[(trust.db)]
-        LoadCache[Load cache from DB]
-        CLI --> ServerCheck
-        ServerCheck -->|yes| HTTP
-        ServerCheck -->|no| LocalDB
-        LocalDB --> LoadCache
-        LoadCache --> Resolve[Resolve locally]
-    end
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     @dtp/trust (Node.js)                        │
+│                                                                 │
+│  ┌────────────┐  ┌────────────┐  ┌──────────┐  ┌────────────┐  │
+│  │    CLI     │  │   HTTP     │  │  Relay   │  │    Web     │  │
+│  │  Commands  │  │   API      │  │  Facade  │  │    SPA     │  │
+│  │ (Commander)│  │ (Fastify)  │  │ (WS/NIP) │  │  (React)   │  │
+│  └─────┬──────┘  └─────┬──────┘  └────┬─────┘  └─────┬──────┘  │
+│        │               │              │               │         │
+│        └───────────────┬┴──────────────┘               │         │
+│                        │                               │         │
+│              ┌─────────┴─────────┐                     │         │
+│              │  RuntimeContext    │                     │         │
+│              │  (config + graph  │                     │         │
+│              │   + store + pool) │                     │         │
+│              └─────────┬─────────┘                     │         │
+│                        │                               │         │
+│         ┌──────────────┼──────────────┐                │         │
+│         │              │              │                │         │
+│   ┌─────┴─────┐ ┌──────┴─────┐ ┌─────┴──────┐        │         │
+│   │ In-Memory │ │  Database  │ │ Relay Pool │        │         │
+│   │   Graph   │ │  (Store)   │ │  (NPool)   │        │         │
+│   │ Node/Edge │ │SQLite / PG │ │ NRelay1    │        │         │
+│   └───────────┘ └────────────┘ └────────────┘        │         │
+│                                                       │         │
+└───────────────────────────────────────────────────────┘         │
+                         │                                        │
+                  Nostr Relay Network                              │
+                                                    Built with Vite
 ```
 
-## References
+---
 
-- [NIP-32010 Specification](../nips/NIP-32010.md)
-- [NIP-32011 Specification](../nips/NIP-32011.md) – additional sync-related event kinds (deferred)
-- [NIP-32012 Specification](../nips/NIP-32012.md) – additional sync-related event kinds (deferred)
-- [Project Description](../description.md)
-- [Design Document](02-design.md) – Database, business layer, commands; Phase 2 (server mode, client mode, cache-backed DB)
-- [Step-by-Step Implementation](03-step-by-step.md) – Phased implementation order
+## 2. Entry Points
+
+The application has a single binary (`trust`) and two build outputs:
+
+| Entry | Path | Purpose |
+|-------|------|---------|
+| CLI binary | `src/index.ts` → `dist/index.js` | `#!/usr/bin/env node`, loads dotenv, runs Commander |
+| Web SPA | `web/src/main.tsx` → `dist/web/` | React app built by Vite, served by the server |
+
+The CLI binary handles all modes: client commands run directly, `trust server` starts the long-lived Fastify process.
+
+---
+
+## 3. Module Map
+
+### 3.1 Source Structure
+
+```
+src/
+├── index.ts                    # Process entry (shebang, dotenv, program.parse)
+├── cli.ts                      # Commander program: all commands and options
+├── config.ts                   # PATHS, UserConfig, resolveConfig, runtime config
+│
+├── commands/                   # CLI command implementations
+│   ├── init.ts                 # trust init — create identity + config + DB
+│   ├── whoami.ts               # trust whoami — display identity
+│   ├── add.ts                  # trust add — create and publish trust events
+│   ├── sync.ts                 # trust sync — relay → DB sync loop
+│   ├── resolve.ts              # trust resolve — trust path resolution
+│   ├── show.ts                 # trust show — lookup trust event by d-tag
+│   ├── server.ts               # trust server — start Fastify process
+│   ├── ping.ts                 # trust ping — health check
+│   ├── timestamp.ts            # trust timestamp — sync cursor management
+│   ├── config.ts               # trust config — edit config.json
+│   └── identity.ts             # trust identity — multi-key management
+│
+├── server/                     # Server-mode components
+│   ├── app.ts                  # Fastify factory, plugin composition by ServerService
+│   ├── graph-sync.ts           # BFS-based author-focused sync from relays
+│   ├── relay-sub.ts            # Generic relay subscription helpers
+│   ├── all-sync.ts             # Broad subscription (all authors) sync
+│   └── plugins/
+│       ├── relay.ts            # WebSocket /relay (NIP-01), /relay-info (NIP-11)
+│       ├── api.ts              # REST: /health, /ping, /trust, /resolve
+│       └── web.ts              # Static SPA serving from dist/web/
+│
+├── lib/                        # Core libraries
+│   ├── runtimeContext.ts       # RuntimeContext: config + graph + store + pool
+│   ├── client.ts               # HTTP client: server availability, proxy calls
+│   ├── keys.ts                 # Nostr keypair generation and loading
+│   ├── identityStore.ts        # Identity registry (identity.json + key files)
+│   ├── signer.ts               # Event signing with stored secret key
+│   ├── logger.ts               # Pino logger (CLI pretty / server JSON)
+│   ├── timestamp.ts            # KV-backed sync cursors (latest / last_seen)
+│   ├── utils.ts                # statusLine, chunksOf
+│   ├── BitArray.ts             # Fixed-size bitset utility
+│   │
+│   ├── nostr/                  # Nostr protocol helpers
+│   │   ├── nip32010.ts         # KIND_TRUST (32010), d-tag hashing, template builder
+│   │   ├── nip01.ts            # KIND_USER_METADATA (0)
+│   │   ├── nip09.ts            # Deletion request kind (5)
+│   │   ├── nip19.ts            # bech32 encode/decode wrappers
+│   │   ├── subject.ts          # Parse subject strings → Nostr tags
+│   │   ├── pool.ts             # NPool construction, publish/query helpers
+│   │   └── relayManager.ts     # Relay probing, NIP-65, availability
+│   │
+│   ├── trust/                  # Trust domain logic
+│   │   ├── graphManager.ts     # Singleton graph lifecycle, insertEvent dispatch
+│   │   ├── identity.ts         # Kind-0 profile parsing, Identity model
+│   │   ├── subject.ts          # CLI subject parsing (npub, URL, hash, NIP-73)
+│   │   ├── reputation.ts       # Aggregate trust counts, latest-wins
+│   │   │
+│   │   ├── graph/              # In-memory graph model
+│   │   │   ├── Graph.ts        # Graph class: nodes, edges, context index, cache file
+│   │   │   ├── Node.ts         # Vertex: id, type, identity, EdgeMaps
+│   │   │   ├── Edge.ts         # EdgeT1: value, context, time windows
+│   │   │   ├── EdgeMap.ts      # Nested maps: context → subject → edge
+│   │   │   └── index.ts        # Re-exports
+│   │   │
+│   │   └── resolvers/          # Trust resolution strategies
+│   │       ├── IResolveStrategy.ts  # Strategy interface and options
+│   │       ├── trustResolver.ts     # Default BFS resolver (standardResolver)
+│   │       ├── Score.ts             # Per-node scoring during resolution
+│   │       └── pathStrategy.ts      # Trust path construction for explainability
+│   │
+│   └── db/                     # Database layer
+│       ├── dbManager.ts        # Store factory, graph notify, Kysely dialects
+│       ├── NSQLite.ts          # SQLite Nostr store (better-sqlite3 + Kysely)
+│       ├── NPostgres.ts        # Postgres Nostr store (pg + Kysely)
+│       └── kv.ts               # KV table for sync cursors and metadata
+
+web/                            # React SPA (Vite)
+├── src/
+│   ├── main.tsx                # React entry
+│   ├── App.tsx                 # Router setup
+│   ├── pages/
+│   │   ├── LandingPage.tsx     # Landing page
+│   │   └── NotFoundPage.tsx    # 404
+│   └── components/
+│       └── Layout.tsx          # App layout shell
+├── vite.config.ts              # Vite build config → dist/web/
+└── tsconfig.json               # Web-specific TypeScript config
+
+test/
+├── setup.ts                    # Temp dir helpers, test fixtures
+├── unit/                       # Unit tests (keys, signer, timestamp, trust/*)
+├── e2e/                        # End-to-end CLI tests
+└── fixtures/                   # Test data (trust-graph.json, etc.)
+
+scripts/                        # Development utilities
+├── seed-trust-network.ts       # Generate test trust data
+├── verify-trust-graph.ts       # Graph verification
+└── server/                     # Ad-hoc server scripts
+```
+
+### 3.2 Key Dependencies
+
+| Category | Package | Purpose |
+|----------|---------|---------|
+| CLI | commander | Command parsing and help generation |
+| Server | fastify, @fastify/static, @fastify/websocket | HTTP server, static files, WebSocket |
+| Nostr | nostr-tools, @nostrify/nostrify, @nostrify/db | Event model, relay protocol, store interface |
+| Crypto | @noble/hashes | SHA-256 for d-tag computation |
+| Database | better-sqlite3, pg, kysely | SQLite and Postgres with query builder |
+| Serialization | msgpackr | Graph cache file, compact event storage |
+| Logging | pino, pino-pretty | Structured logging |
+| Web | react, react-dom, react-router-dom | SPA frontend |
+| Build | typescript, vite, vitest | Compilation, bundling, testing |
+
+---
+
+## 4. RuntimeContext
+
+The central runtime object that ties all components together:
+
+```typescript
+interface RuntimeContext extends ResolvedRuntimeConfig {
+  graph: Graph;             // In-memory trust graph
+  store: Store;             // Database handle (NSQLite | NPostgres)
+  pool: NPool;              // Nostr relay pool
+  abortController: AbortController;
+  loggerInstance?: Logger;
+}
+```
+
+**Created by:** `createRuntimeContext()` in `src/lib/runtimeContext.ts`
+**Used by:** Server plugins, sync commands, resolve commands — anything that needs graph + store + relays.
+
+### Configuration Resolution
+
+`resolveConfig(cli)` merges layers with this precedence:
+
+```
+CLI flags  →  Environment variables  →  config.json  →  Identity defaults  →  Hardcoded defaults
+```
+
+Key resolved fields: `primaryPubkey`, `authors`, `contexts`, `relays`, `host`, `port`, `database`, `sqlitePath`, `postgresUrl`, `syncAuthor`, `syncSubscribeAll`, `since`, `maxDepth`, `syncIntervalSeconds`.
+
+---
+
+## 5. Data Flow
+
+### 5.1 Trust Event Lifecycle
+
+```
+1. CREATE       trust add <subject> -v 1 -c dev
+                    │
+2. SIGN         signEvent(template, secretKey)
+                    │
+3. PUBLISH      ┌───┴───────────────────────┐
+                │ Server available?          │
+                │ Yes → POST /trust          │
+                │ No  → publishEvent(relays) │
+                └───┬───────────────────────┘
+                    │
+4. STORE        insertEvent(store, event)
+                    │  → DB write (events table)
+                    │  → trust_graph_notify trigger
+                    │
+5. GRAPH        applyTrustEvent(graph, event)
+                    │  → create/update nodes
+                    │  → create/update edges
+                    │
+6. RESOLVE      standardResolver.resolve(author, subject, options)
+                    │  → BFS traversal of in-memory graph
+                    │  → Score aggregation
+                    └  → optional path trace
+```
+
+### 5.2 Sync Flow
+
+Two sync strategies feed events into the database and graph:
+
+**Graph-based sync** (`graph-sync.ts`): BFS from configured root authors, expanding along trusted pubkeys up to `maxDepth`. Efficient — only fetches events from authors in the trust graph.
+
+**Subscribe-all sync** (`all-sync.ts`): Subscribes to all kind 32010 events without author filtering. Simple, complete, but high bandwidth on large networks.
+
+```
+Nostr Relays
+    │
+    ├── [graph-sync] BFS: author₁ → trusted authors → depth N
+    │       │
+    │       └── For each batch of authors:
+    │           Filter: { kinds: [32010], authors: [...chunk] }
+    │           → insertEvent per event
+    │           → Discover new trusted authors → next BFS level
+    │
+    └── [all-sync] Broad: { kinds: [32010], since: cursor }
+            │
+            └── insertEvent per event
+                → trackLatestTimestamp
+```
+
+### 5.3 Server Graph Refresh
+
+When running split services (relay and API as separate processes sharing a database), the API process stays in sync through the **graph notify** mechanism:
+
+```
+Relay process                    Database                    API process
+     │                              │                            │
+     │── insertEvent ──────────────►│                            │
+     │                              │── trigger ─► notify row    │
+     │                              │                            │
+     │                              │◄──── drainGraphNotifyBatch │
+     │                              │                  │         │
+     │                              │         apply to graph ────┘
+```
+
+The `trust_graph_notify` table is populated by DB triggers on insert/delete of events. The API plugin polls this table and applies changes to the in-memory graph.
+
+---
+
+## 6. Deployment Modes
+
+### 6.1 CLI Client
+
+```bash
+trust init && trust add <subject> -v 1 && trust sync && trust resolve <subject>
+```
+
+Short-lived process. If a server is running, commands like `add` and `resolve` proxy to it automatically. Otherwise, they operate directly against the local database and graph.
+
+### 6.2 Single-Instance Server
+
+```bash
+trust server
+```
+
+Runs all services (relay + API + web) in one process. Default for development and small deployments.
+
+### 6.3 Enterprise Split Services
+
+```bash
+# Process 1: Relay facade + sync (writes events)
+trust server --service relay --database postgres
+
+# Process 2: REST API + graph (serves queries)
+trust server --service api --database postgres
+
+# Process 3: Web dashboard (static SPA)
+trust server --service web
+```
+
+Each service runs independently. The relay and API share the same Postgres database. The API stays in sync via `trust_graph_notify` polling. This enables horizontal scaling and service isolation.
+
+### 6.4 Configuration Scoping
+
+The `authors` and `contexts` configuration controls what data each instance retains:
+
+- **Focused** (default): Only events from `authors` in the trust graph, scoped to configured `contexts`. Efficient for per-agent or per-team deployments.
+- **All** (`--authors All --contexts All`): Retain everything. For central aggregation nodes or network-wide analysis.
+- **Custom**: Any combination of specific pubkeys and contexts.
+
+---
+
+## 7. File System Layout
+
+```
+~/.trust/                       # Default config directory (override: TRUST_CONFIG_DIR)
+├── identity.json               # Primary pubkey + registered key list
+├── keys/                       # Per-pubkey secret files (hex, mode 0600)
+│   └── <pubkey>.key
+├── config.json                 # User configuration
+├── trust.db                    # SQLite database (when using SQLite driver)
+└── graph-cache.bin             # Optional msgpack graph snapshot for fast startup
+```
+
+---
+
+## 8. References
+
+- [Technical Design](02-design.md) — Data model, graph internals, resolver algorithm
+- [Implementation Status & Roadmap](03-roadmap.md) — What's complete, what's planned
+- [Resolve Algorithm](../resolve.md) — BFS details and context semantics
+- [NIP-32010](../nips/NIP-32010.md) — Trust event specification
