@@ -106,16 +106,10 @@ Driver selection: Postgres is used when `DATABASE_URL`, `PGHOST`, or `config.db.
 | `sync:<ns>:latest` | Sync start point (unix timestamp) |
 | `sync:<ns>:last_seen` | Auto-tracked max created_at from processed events |
 
-**Graph notify table** (`trust_graph_notify`): Queue for cross-process graph synchronization.
+**Cross-process graph sync**: When relay and API run as separate processes, the database notifies the API of changes:
 
-| Column | Type | Purpose |
-|--------|------|---------|
-| `seq` | INTEGER PK AUTO | Sequence number |
-| `event_id` | TEXT | The event that was inserted or deleted |
-| `op` | TEXT | `INSERT` or `DELETE` |
-| `raw_event` | BLOB/TEXT | Event data (for DELETE operations, since the event is gone from the events table) |
-
-Populated by database triggers on `nostr_events` insert/delete. Consumed by the API plugin's `drainGraphNotifyBatch()`.
+- **Postgres**: DB triggers fire `pg_notify('trust_graph_change', ...)` with a JSON payload containing `{ op, event_id, raw_event? }`. The API process uses `LISTEN` to receive these instantly — no intermediate table, no polling.
+- **SQLite**: The API polls `nostr_events` by `created_at` timestamp on a configurable interval (default 5s). A KV high-water mark (`graph_last_created_at`) tracks the latest processed event to avoid re-reading.
 
 ### 2.3 Replaceable Event Semantics
 
@@ -164,7 +158,7 @@ Where `EdgeKindKey` combines event kind and subject type (e.g., `32010:p` for pu
 
 **applyTrustEvent(event)**: Parse subjects from the event, create/update nodes and edges. If the event is newer than the existing edge for the same `(author, d-tag)`, replace it. If value is `0`, remove the edge (neutral = retracted assertion).
 
-**removeTrustEvent(event)**: Remove the edge and clean up node references. Used when processing kind 5 deletions or graph notify DELETE operations.
+**removeTrustEvent(event)**: Remove the edge and clean up node references. Used when processing kind 5 deletions or cross-process DELETE notifications.
 
 **trustedSubjects(author, context?)**: Walk outgoing edges from an author node, return pubkey subjects with positive trust. Used by graph-sync to discover the next BFS level.
 
@@ -317,9 +311,10 @@ This allows any Nostr client to interact with the Trust database as if it were a
 
 When relay and API run as separate processes:
 
-1. The **relay** process writes events to the shared database. DB triggers insert rows into `trust_graph_notify`.
-2. The **API** process calls `drainGraphNotifyBatch()` on a polling interval, reads pending notify rows, and applies INSERT/DELETE operations to its in-memory graph.
-3. This keeps the API graph consistent with the database without requiring inter-process communication beyond the shared DB.
+1. The **relay** process writes events to the shared database.
+2. **Postgres**: DB triggers fire `pg_notify()` directly. The API process holds a `LISTEN` connection and applies changes to its graph instantly on each notification. No intermediate table — the database calls back the API directly.
+3. **SQLite** (rare for split-process): The API polls `nostr_events` by `created_at`, applying any events newer than its last-seen timestamp.
+4. **service=all** (single process): No sync mechanism needed — `insertEvent()` applies changes to the graph directly in the same process.
 
 ---
 

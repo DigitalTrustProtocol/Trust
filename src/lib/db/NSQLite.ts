@@ -10,7 +10,6 @@ import type {
 import { Kysely, sql } from 'kysely';
 import { getFilterLimit, sortEvents } from 'nostr-tools';
 import { Packr } from 'msgpackr';
-import type { GraphNotifyRow } from './dbManager.js';
 import { ExtendedNRelay } from './dbManager.js';
 
 const DENORMALIZED_TAGS = new Set(['d', 'c', 't']);
@@ -33,12 +32,6 @@ export interface NSQLiteSchema {
     event_id: string;
     name: string;
     value: string;
-  };
-  trust_graph_notify: {
-    seq: number;
-    event_id: string;
-    op: string;
-    raw_event: Buffer | null;
   };
 }
 
@@ -388,30 +381,21 @@ export class NSQLite implements ExtendedNRelay  {
   }
 
 
-  async drainGraphNotifyBatch(limit: number): Promise<GraphNotifyRow[]> {
-    let rows: NSQLiteSchema['trust_graph_notify'][];
+  /** Query events created after the given timestamp. Used for SQLite-based graph polling. */
+  async getEventsSince(sinceCreatedAt: number, kinds: number[], limit: number = 500): Promise<NostrEvent[]> {
     try {
-      rows = await this.db
-        .selectFrom('trust_graph_notify')
-        .selectAll()
-        .orderBy('seq', 'asc')
+      const rows = await this.db
+        .selectFrom('nostr_events')
+        .select('raw_event')
+        .where('created_at', '>', sinceCreatedAt)
+        .where('kind', 'in', kinds)
+        .orderBy('created_at', 'asc')
         .limit(limit)
         .execute();
+      return rows.map((r) => packr.unpack(r.raw_event) as NostrEvent);
     } catch {
       return [];
     }
-
-    if (!rows.length) return [];
-
-    const seqs = rows.map((r) => r.seq);
-    await this.db.deleteFrom('trust_graph_notify').where('seq', 'in', seqs).execute();
-
-    return rows.map((r) => ({
-      seq: r.seq,
-      event_id: r.event_id,
-      op: r.op as 'INSERT' | 'DELETE',
-      raw_event: r.raw_event ? new Uint8Array(r.raw_event) : null,
-    }));
   }
 
   async query(filters: NostrFilter[], opts: { signal?: AbortSignal; limit?: number } = {}): Promise<NostrEvent[]> {
@@ -569,30 +553,5 @@ export class NSQLite implements ExtendedNRelay  {
       .ifNotExists()
       .execute();
 
-    await this.installGraphNotifySchema();
-  }
-
-  /** Queue rows for API graph processes when relay and API share a DB (split processes). */
-  private async installGraphNotifySchema(): Promise<void> {
-    await sql`
-      CREATE TABLE IF NOT EXISTS trust_graph_notify (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_id TEXT NOT NULL,
-        op TEXT NOT NULL,
-        raw_event BLOB
-      )
-    `.execute(this.db);
-
-    await sql.raw(`CREATE TRIGGER IF NOT EXISTS trg_nostr_events_ai_graph
-AFTER INSERT ON nostr_events
-BEGIN
-  INSERT INTO trust_graph_notify(event_id, op) VALUES (NEW.id, 'INSERT');
-END`).execute(this.db);
-
-    await sql.raw(`CREATE TRIGGER IF NOT EXISTS trg_nostr_events_ad_graph
-AFTER DELETE ON nostr_events
-BEGIN
-  INSERT INTO trust_graph_notify(event_id, op, raw_event) VALUES (OLD.id, 'DELETE', OLD.raw_event);
-END`).execute(this.db);
   }
 }

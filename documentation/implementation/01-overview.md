@@ -131,7 +131,7 @@ src/
 │   │       └── pathStrategy.ts      # Trust path construction for explainability
 │   │
 │   └── db/                     # Database layer
-│       ├── dbManager.ts        # Store factory, graph notify, Kysely dialects
+│       ├── dbManager.ts        # Store factory, Kysely dialects
 │       ├── NSQLite.ts          # SQLite Nostr store (better-sqlite3 + Kysely)
 │       ├── NPostgres.ts        # Postgres Nostr store (pg + Kysely)
 │       └── kv.ts               # KV table for sync cursors and metadata
@@ -222,7 +222,7 @@ Key resolved fields: `primaryPubkey`, `authors`, `contexts`, `relays`, `host`, `
                     │
 4. STORE        insertEvent(store, event)
                     │  → DB write (events table)
-                    │  → trust_graph_notify trigger
+                    │  → pg_notify trigger (Postgres)
                     │
 5. GRAPH        applyTrustEvent(graph, event)
                     │  → create/update nodes
@@ -260,20 +260,16 @@ Nostr Relays
 
 ### 5.3 Server Graph Refresh
 
-When running split services (relay and API as separate processes sharing a database), the API process stays in sync through the **graph notify** mechanism:
+When running split services (relay and API as separate processes sharing a database), the API process stays in sync through database-native notification:
 
 ```
-Relay process                    Database                    API process
-     │                              │                            │
-     │── insertEvent ──────────────►│                            │
-     │                              │── trigger ─► notify row    │
-     │                              │                            │
-     │                              │◄──── drainGraphNotifyBatch │
-     │                              │                  │         │
-     │                              │         apply to graph ────┘
+Postgres:  nostr_events INSERT/DELETE ──trigger──► pg_notify(JSON) ──LISTEN──► API applies to graph
+SQLite:    nostr_events INSERT        ──poll─────► getEventsSince() ─────────► API applies to graph
 ```
 
-The `trust_graph_notify` table is populated by DB triggers on insert/delete of events. The API plugin polls this table and applies changes to the in-memory graph.
+**Postgres**: Trigger functions call `pg_notify('trust_graph_change', ...)` with a JSON payload containing `{ op, event_id, raw_event? }`. The API process holds a `LISTEN` connection — changes are applied instantly with zero polling. No intermediate table.
+
+**SQLite**: The API polls `nostr_events` by `created_at` with a high-water mark stored in KV. This is a gap-stop solution; SQLite is intended for single-instance local use.
 
 ---
 
@@ -308,7 +304,7 @@ trust server --service api --database postgres
 trust server --service web
 ```
 
-Each service runs independently. The relay and API share the same Postgres database. The API stays in sync via `trust_graph_notify` polling. This enables horizontal scaling and service isolation.
+Each service runs independently. The relay and API share the same Postgres database. The API stays in sync via Postgres `LISTEN/NOTIFY` — DB triggers call `pg_notify()` directly and the API receives changes instantly. This enables horizontal scaling and service isolation.
 
 ### 6.4 Configuration Scoping
 

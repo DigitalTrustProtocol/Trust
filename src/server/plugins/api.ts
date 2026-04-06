@@ -1,6 +1,7 @@
 import fp from 'fastify-plugin';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { existsSync, readFileSync } from 'node:fs';
+import { Packr } from 'msgpackr';
 import { parseSubjects } from '../../lib/trust/subject.js';
 import { buildTrustEventTemplate } from '../../lib/nostr/nip32010.js';
 import { signEvent } from '../../lib/signer.js';
@@ -19,12 +20,17 @@ import {
 } from '../../lib/trust/graphManager.js';
 import standardResolver from '../../lib/trust/resolvers/trustResolver.js';
 import { initTrustDb, Store } from '../../lib/db/dbManager.js';
+import { NPostgres } from '../../lib/db/NPostgres.js';
+import { NSQLite } from '../../lib/db/NSQLite.js';
 import { fanOutEvent } from './relay.js';
 import { KIND_TRUST } from '../../lib/nostr/nip32010.js';
 import { RuntimeContext } from '../../lib/runtimeContext.js';
 import { ok, fail, sendError, ErrorCode } from '../errors.js';
 import { PATHS, type UserConfig } from '../../config.js';
-import { kvGet, kvKeyLastSeenTimestamp } from '../../lib/db/kv.js';
+import { kvGet, kvSet, kvKeyLastSeenTimestamp } from '../../lib/db/kv.js';
+import type { Graph } from '../../lib/trust/graph/Graph.js';
+
+const packr = new Packr({ structuredClone: false });
 
 type TrustBody = {
   subjects: string[];
@@ -70,35 +76,73 @@ function resolveAuthor(authors?: string): { author: string | null; error?: strin
 }
 
 const startTime = Date.now();
+const KV_GRAPH_LAST_CREATED_AT = 'graph_last_created_at';
 
 export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) {
+  const isSplitApi = runtimeContext.service === 'api';
 
   app.addHook('onReady', async () => {
     await loadGraph(runtimeContext);
 
-    const pollMs = Math.max(250, Number(process.env.TRUST_GRAPH_NOTIFY_POLL_MS ?? 2000));
-    const timer = setInterval(() => {
-      void (async () => {
-        const graph = getLoadedGraph();
-        if (!graph) return;
-        const st = await initTrustDb();
-        const rows = await st.drainGraphNotifyBatch(500);
-        for (const row of rows) {
-          if (row.op === 'INSERT') {
-            const ev = await st.getEvent(row.event_id);
-            if (ev?.kind === KIND_TRUST) {
-              applyTrustEventToGraph(ev as VerifiedEvent, graph);
-            }
-          } else if (row.op === 'DELETE' && row.raw_event) {
-            removeTrustEventFromGraphPacked(row.raw_event, graph);
-          }
-        }
-      })();
-    }, pollMs);
+    // In service=all mode, insertEvent() already applies changes to the graph
+    // in-process — no cross-process sync needed.
+    if (!isSplitApi) return;
 
-    app.addHook('onClose', async () => {
-      clearInterval(timer);
-    });
+    const store = runtimeContext.store ?? await initTrustDb();
+    const graph = getLoadedGraph();
+    if (!graph) return;
+
+    // ── Postgres: direct LISTEN/NOTIFY from DB triggers ──────────
+    // The trigger sends a JSON payload with { op, event_id, raw_event? }.
+    // No intermediate table — Postgres calls back the API directly.
+    if (store instanceof NPostgres && store.pgPool) {
+      await store.listenForGraphChanges((payload) => {
+        void (async () => {
+          try {
+            if (payload.op === 'INSERT') {
+              const ev = await store.getEvent(payload.event_id);
+              if (ev?.kind === KIND_TRUST) {
+                applyTrustEventToGraph(ev as VerifiedEvent, graph);
+              }
+            } else if (payload.op === 'DELETE' && payload.raw_event) {
+              const raw = Buffer.from(payload.raw_event, 'base64');
+              removeTrustEventFromGraphPacked(new Uint8Array(raw), graph);
+            }
+          } catch { /* log and continue on individual event failure */ }
+        })();
+      });
+
+      app.addHook('onClose', async () => { await store.stopListening(); });
+      return;
+    }
+
+    // ── SQLite: poll nostr_events by created_at ──────────────────
+    // SQLite is intended for single-instance local use. In the rare
+    // split-process case, poll for new events by created_at timestamp.
+    if (store instanceof NSQLite) {
+      const savedTs = await kvGet(KV_GRAPH_LAST_CREATED_AT);
+      let lastCreatedAt = savedTs ? Number(savedTs) : 0;
+
+      const pollMs = Math.max(1000, Number(process.env.TRUST_GRAPH_NOTIFY_POLL_MS ?? 5000));
+      const timer = setInterval(() => {
+        void (async () => {
+          try {
+            const events = await store.getEventsSince(lastCreatedAt, [KIND_TRUST], 500);
+            for (const ev of events) {
+              applyTrustEventToGraph(ev as VerifiedEvent, graph);
+              if (ev.created_at > lastCreatedAt) {
+                lastCreatedAt = ev.created_at;
+              }
+            }
+            if (events.length > 0) {
+              await kvSet(KV_GRAPH_LAST_CREATED_AT, String(lastCreatedAt));
+            }
+          } catch { /* poll failure — retry next cycle */ }
+        })();
+      }, pollMs);
+
+      app.addHook('onClose', async () => { clearInterval(timer); });
+    }
   });
 
   // ── Health & Ping ──────────────────────────────────────────────────

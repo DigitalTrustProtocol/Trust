@@ -15,17 +15,9 @@ export type DbDriver = 'sqlite' | 'postgres';
 
 export type Store = NSQLite | NPostgres;
 
-export type GraphNotifyRow = {
-  seq: number;
-  event_id: string;
-  op: 'INSERT' | 'DELETE';
-  raw_event: Uint8Array | null;
-};
-
 export interface ExtendedNRelay extends NRelay {
   getEvent(id: string): Promise<NostrEvent | null>;
   allEvents(kinds: number[], authors: string[], contexts: string[], signal?: AbortSignal): AsyncIterable<NostrEvent>;
-  drainGraphNotifyBatch(limit: number): Promise<GraphNotifyRow[]>;
 }
 
 
@@ -107,6 +99,7 @@ export async function createNPostgresStore(url: string): Promise<NPostgres> {
     dialect: new PostgresDialect({ pool }),
   });
   const store = new NPostgres(db);
+  store.setPool(pool);
   await store.migrate();
   return store;
 }

@@ -11,7 +11,6 @@ import { Machina } from '@nostrify/nostrify/utils';
 import { Kysely, type SelectQueryBuilder, sql } from 'kysely';
 import { getFilterLimit, sortEvents } from 'nostr-tools';
 import { Packr } from 'msgpackr';
-import type { GraphNotifyRow } from './dbManager.js';
 import { ExtendedNRelay } from './dbManager.js';
 
 const DENORMALIZED_TAGS = new Set(['d', 'c', 't']);
@@ -33,12 +32,6 @@ export interface NPostgresSchema {
     c: string | null;
     search: unknown;
     search_ext: Record<string, string>;
-  };
-  trust_graph_notify: {
-    seq: number | string | bigint;
-    event_id: string;
-    op: string;
-    raw_event: Buffer | Uint8Array | null;
   };
 }
 
@@ -72,10 +65,13 @@ type SelectEventsQuery = SelectQueryBuilder<
 
 export class NPostgres implements ExtendedNRelay {
   db: Kysely<NPostgresSchema>;
+  /** Raw pg.Pool reference — set via `setPool()` after construction for LISTEN/NOTIFY. */
+  pgPool: import('pg').Pool | null = null;
   private indexTags: (event: NostrEvent) => string[][];
   private indexSearch: (event: NostrEvent) => string | undefined;
   private indexExtensions: (event: NostrEvent) => Record<string, string> | Promise<Record<string, string>>;
   private chunkSize: number;
+  private listenClient: import('pg').PoolClient | null = null;
 
   constructor(db: Kysely<any>, opts?: NPostgresOpts) {
     this.db = db as Kysely<NPostgresSchema>;
@@ -83,6 +79,10 @@ export class NPostgres implements ExtendedNRelay {
     this.indexSearch = opts?.indexSearch ?? NPostgres.indexSearch;
     this.indexExtensions = opts?.indexExtensions ?? (() => ({}));
     this.chunkSize = opts?.chunkSize ?? 20;
+  }
+
+  setPool(pool: import('pg').Pool): void {
+    this.pgPool = pool;
   }
 
   private deriveTrustKindFromD(dTagValue: string | null, fallback: string): string | null {
@@ -455,33 +455,6 @@ export class NPostgres implements ExtendedNRelay {
     }
   }
 
-  async drainGraphNotifyBatch(limit: number): Promise<GraphNotifyRow[]> {
-    let rows: NPostgresSchema['trust_graph_notify'][];
-    try {
-      rows = await this.db
-        .selectFrom('trust_graph_notify')
-        .selectAll()
-        .orderBy('seq', 'asc')
-        .limit(limit)
-        .execute();
-    } catch {
-      return [];
-    }
-
-    if (!rows.length) return [];
-
-    const seqs = rows.map((r) => r.seq);
-    await this.db.deleteFrom('trust_graph_notify').where('seq', 'in', seqs).execute();
-
-    return rows.map((r) => ({
-      seq: Number(r.seq),
-      event_id: r.event_id,
-      op: r.op as 'INSERT' | 'DELETE',
-      raw_event: r.raw_event ? new Uint8Array(r.raw_event) : null,
-    }));
-  }
-
-
   /**
    * Stream events, mimicking a relay.
    *
@@ -684,7 +657,38 @@ export class NPostgres implements ExtendedNRelay {
     }
   }
 
+  /**
+   * Subscribe to Postgres LISTEN/NOTIFY for graph changes.
+   * The trigger sends a JSON payload: { op: 'INSERT'|'DELETE', event_id, raw_event? }.
+   * For INSERT, the callback receives the event_id to fetch from nostr_events.
+   * For DELETE, the payload includes the base64-encoded raw_event for graph removal.
+   */
+  async listenForGraphChanges(
+    onNotify: (payload: { op: 'INSERT' | 'DELETE'; event_id: string; raw_event?: string }) => void,
+  ): Promise<void> {
+    if (!this.pgPool) throw new Error('pgPool not set — call setPool() first');
+    if (this.listenClient) return;
+    this.listenClient = await this.pgPool.connect();
+    this.listenClient.on('notification', (msg) => {
+      if (msg.channel === 'trust_graph_change' && msg.payload) {
+        try {
+          onNotify(JSON.parse(msg.payload));
+        } catch { /* malformed payload — skip */ }
+      }
+    });
+    await this.listenClient.query('LISTEN trust_graph_change');
+  }
+
+  async stopListening(): Promise<void> {
+    if (this.listenClient) {
+      try { await this.listenClient.query('UNLISTEN trust_graph_change'); } catch { /* closing */ }
+      this.listenClient.release();
+      this.listenClient = null;
+    }
+  }
+
   async close(): Promise<void> {
+    await this.stopListening();
     await this.db.destroy();
   }
 
@@ -789,29 +793,28 @@ export class NPostgres implements ExtendedNRelay {
       .ifNotExists()
       .execute();
 
-    await this.installGraphNotifySchema();
+    await this.installGraphNotifyTriggers();
   }
 
-  private async installGraphNotifySchema(): Promise<void> {
-    await sql`
-      CREATE TABLE IF NOT EXISTS trust_graph_notify (
-        seq BIGSERIAL PRIMARY KEY,
-        event_id TEXT NOT NULL,
-        op TEXT NOT NULL,
-        raw_event BYTEA
-      )
-    `.execute(this.db);
-
-    await sql.raw(`CREATE OR REPLACE FUNCTION trust_graph_notify_insert_fn() RETURNS trigger AS $$
+  /**
+   * Install triggers that fire pg_notify directly with a JSON payload.
+   * No intermediate table — the LISTEN/NOTIFY channel IS the transport.
+   */
+  private async installGraphNotifyTriggers(): Promise<void> {
+    await sql.raw(`CREATE OR REPLACE FUNCTION trust_pg_notify_insert_fn() RETURNS trigger AS $$
 BEGIN
-  INSERT INTO trust_graph_notify(event_id, op) VALUES (NEW.id, 'INSERT');
+  PERFORM pg_notify('trust_graph_change',
+    json_build_object('op', 'INSERT', 'event_id', NEW.id)::text
+  );
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql`).execute(this.db);
 
-    await sql.raw(`CREATE OR REPLACE FUNCTION trust_graph_notify_delete_fn() RETURNS trigger AS $$
+    await sql.raw(`CREATE OR REPLACE FUNCTION trust_pg_notify_delete_fn() RETURNS trigger AS $$
 BEGIN
-  INSERT INTO trust_graph_notify(event_id, op, raw_event) VALUES (OLD.id, 'DELETE', OLD.raw_event);
+  PERFORM pg_notify('trust_graph_change',
+    json_build_object('op', 'DELETE', 'event_id', OLD.id, 'raw_event', encode(OLD.raw_event, 'base64'))::text
+  );
   RETURN OLD;
 END;
 $$ LANGUAGE plpgsql`).execute(this.db);
@@ -820,14 +823,14 @@ $$ LANGUAGE plpgsql`).execute(this.db);
     await sql.raw(`
 CREATE TRIGGER trg_nostr_events_ai_graph
 AFTER INSERT ON nostr_events
-FOR EACH ROW EXECUTE PROCEDURE trust_graph_notify_insert_fn()
+FOR EACH ROW EXECUTE PROCEDURE trust_pg_notify_insert_fn()
 `).execute(this.db);
 
     await sql.raw(`DROP TRIGGER IF EXISTS trg_nostr_events_ad_graph ON nostr_events`).execute(this.db);
     await sql.raw(`
 CREATE TRIGGER trg_nostr_events_ad_graph
 AFTER DELETE ON nostr_events
-FOR EACH ROW EXECUTE PROCEDURE trust_graph_notify_delete_fn()
+FOR EACH ROW EXECUTE PROCEDURE trust_pg_notify_delete_fn()
 `).execute(this.db);
   }
 }
