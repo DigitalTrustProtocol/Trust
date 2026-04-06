@@ -32,12 +32,14 @@ program
   .option('-n, --name <name>', 'Profile name')
   .option('-a, --about <about>', 'Profile bio')
   .option('--skip-profile', 'Skip publishing profile to relays (useful for testing)')
+  .option('--json', 'Output as JSON')
   .action(async (options) => {
     try {
       await initCommand({
         name: options.name,
         about: options.about,
         skipProfile: options.skipProfile,
+        json: options.json,
       });
     } finally {
     }

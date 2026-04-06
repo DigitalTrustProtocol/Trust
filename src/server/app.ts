@@ -1,4 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import fastifySwagger from '@fastify/swagger';
+import fastifySwaggerUi from '@fastify/swagger-ui';
 import { getPinoInstance } from '../lib/logger.js';
 import relayPlugin from './plugins/relay.js';
 import apiPlugin from './plugins/api.js';
@@ -13,6 +15,28 @@ export async function createApp(service: ServerService = 'all', runtimeContext: 
   const app = Fastify({
     loggerInstance: runtimeContext.loggerInstance ?? getPinoInstance(),
   }) as unknown as FastifyInstance;
+
+  if (service === 'all' || service === 'api') {
+    await app.register(fastifySwagger, {
+      openapi: {
+        openapi: '3.0.3',
+        info: {
+          title: 'Trust API',
+          description: 'Decentralized Web of Trust identity and reputation for AI agents',
+          version: '0.1.0',
+        },
+        servers: [{ url: '/' }],
+        tags: [
+          { name: 'health', description: 'Health and status' },
+          { name: 'trust', description: 'Trust assertions' },
+          { name: 'resolve', description: 'Trust resolution' },
+          { name: 'graph', description: 'Graph queries' },
+          { name: 'identity', description: 'Identity management' },
+        ],
+      },
+    });
+    await app.register(fastifySwaggerUi, { routePrefix: '/docs' });
+  }
 
   if (service === 'all' || service === 'relay') {
     await app.register(relayPlugin, runtimeContext);

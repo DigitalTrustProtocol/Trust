@@ -59,8 +59,11 @@ The CLI binary handles all modes: client commands run directly, `trust server` s
 
 ```
 src/
-├── index.ts                    # Process entry (shebang, dotenv, program.parse)
+├── index.ts                    # CLI entry (shebang, dotenv, program.parse)
 ├── cli.ts                      # Commander program: all commands and options
+├── sdk.ts                      # Programmatic SDK (import { resolve, add } from '@dtp/trust')
+├── mcp.ts                      # MCP server entry (stdio transport)
+├── mcp-server.ts               # MCP tool definitions (wraps SDK)
 ├── config.ts                   # PATHS, UserConfig, resolveConfig, runtime config
 │
 ├── commands/                   # CLI command implementations
@@ -77,13 +80,15 @@ src/
 │   └── identity.ts             # trust identity — multi-key management
 │
 ├── server/                     # Server-mode components
-│   ├── app.ts                  # Fastify factory, plugin composition by ServerService
+│   ├── app.ts                  # Fastify factory, plugin composition, OpenAPI setup
+│   ├── errors.ts               # API envelope (ok/fail), error codes
 │   ├── graph-sync.ts           # BFS-based author-focused sync from relays
 │   ├── relay-sub.ts            # Generic relay subscription helpers
 │   ├── all-sync.ts             # Broad subscription (all authors) sync
 │   └── plugins/
 │       ├── relay.ts            # WebSocket /relay (NIP-01), /relay-info (NIP-11)
-│       ├── api.ts              # REST: /health, /ping, /trust, /resolve
+│       ├── api.ts              # REST: /health, /identity, /trust, /resolve, /resolve/batch,
+│       │                       #       /graph/stats, /events, /trusted + OpenAPI at /docs
 │       └── web.ts              # Static SPA serving from dist/web/
 │
 ├── lib/                        # Core libraries

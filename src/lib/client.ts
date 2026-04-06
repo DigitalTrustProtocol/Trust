@@ -1,5 +1,6 @@
 import { DEFAULT_CONFIG, getServerHost, getServerPort } from '../config.js';
 import type { Score } from '../lib/trust/resolvers/Score.js';
+import type { ApiEnvelope } from '../server/errors.js';
 
 function getDefaultBaseUrl(): string {
   const host = getServerHost(DEFAULT_CONFIG);
@@ -29,6 +30,19 @@ export async function isServerAvailable(baseUrl?: string): Promise<boolean> {
   }
 }
 
+/** Unwrap the API envelope, throwing on error responses. */
+async function unwrap<T>(res: Response): Promise<T> {
+  const body = await res.json() as ApiEnvelope<T>;
+  if (body && typeof body === 'object' && 'ok' in body) {
+    if (!body.ok) {
+      const msg = body.error?.message ?? `Request failed with status ${res.status}`;
+      throw new Error(msg);
+    }
+    return body.data as T;
+  }
+  return body as unknown as T;
+}
+
 export interface TrustParams {
   subjects: string[];
   contexts?: string;
@@ -46,6 +60,14 @@ export interface ResolveParams {
   format?: 'number' | 'default' | 'path';
 }
 
+export interface ResolveBatchParams {
+  subjects: string[];
+  authors?: string;
+  contexts?: string;
+  maxDepth?: number;
+  format?: 'number' | 'default' | 'path';
+}
+
 export async function proxyTrust(
   baseUrl: string | undefined,
   params: TrustParams,
@@ -54,17 +76,16 @@ export async function proxyTrust(
 
   const res = await fetch(`${base}/trust`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   });
 
   if (!res.ok) {
-    throw new Error(`Server /trust request failed with status ${res.status}`);
+    const body = await res.json().catch(() => null) as ApiEnvelope | null;
+    throw new Error(body?.error?.message ?? `Server /trust request failed with status ${res.status}`);
   }
 
-  return res.json() as Promise<unknown>;
+  return unwrap(res);
 }
 
 export async function proxyResolve(
@@ -75,15 +96,34 @@ export async function proxyResolve(
 
   const res = await fetch(`${base}/resolve`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   });
 
   if (!res.ok) {
-    throw new Error(`Server /resolve request failed with status ${res.status}`);
+    const body = await res.json().catch(() => null) as ApiEnvelope | null;
+    throw new Error(body?.error?.message ?? `Server /resolve request failed with status ${res.status}`);
   }
 
-  return res.json() as Promise<Score>;
+  return unwrap<Score>(res);
+}
+
+export async function proxyResolveBatch(
+  baseUrl: string | undefined,
+  params: ResolveBatchParams,
+): Promise<unknown[]> {
+  const base = normalizeBaseUrl(baseUrl);
+
+  const res = await fetch(`${base}/resolve/batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as ApiEnvelope | null;
+    throw new Error(body?.error?.message ?? `Server /resolve/batch request failed with status ${res.status}`);
+  }
+
+  return unwrap<unknown[]>(res);
 }

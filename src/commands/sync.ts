@@ -20,19 +20,30 @@ export async function syncTrustCommand(options: {
   syncInterval?: number;
   json?: boolean;
 }): Promise<void> {
+  const isJson = options.json ?? false;
 
   if (process.env.TRUST_E2E_OFFLINE === '1') {
     await initTrustDb();
     statusLine('');
-    logger.info('Synced 0 events from 0 authors');
+    if (isJson) {
+      console.log(JSON.stringify({ eventsReceived: 0, eventsInserted: 0, processedAuthors: 0 }));
+    } else {
+      logger.info('Synced 0 events from 0 authors');
+    }
     return;
   }
 
-
-
   const runtimeContext = await initRuntimeContext(options);
+  const result = await runSync(runtimeContext);
 
-  await runSync(runtimeContext);
+  if (isJson && result) {
+    console.log(JSON.stringify({
+      eventsReceived: result.eventsReceived,
+      eventsInserted: result.eventsInserted,
+      processedAuthors: result.processedAuthors,
+      latestTimestamp: result.latestTimestamp,
+    }));
+  }
 }
 
 export async function initRuntimeContext(

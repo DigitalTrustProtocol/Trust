@@ -46,10 +46,11 @@ describe('client wrapper', () => {
   });
 
   it('proxyTrust posts to /trust and returns JSON', async () => {
-    const responseData = { ok: true };
+    const innerData = { event: { id: 'abc' }, relays: [] };
+    const envelope = { ok: true, data: innerData };
     const fetchMock = vi
       .fn()
-      .mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(responseData) });
+      .mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(envelope) });
     (globalThis as unknown as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
 
     const result = await proxyTrust(undefined, {
@@ -73,7 +74,7 @@ describe('client wrapper', () => {
         relay: ['wss://relay.test'],
       }),
     });
-    expect(result).toEqual(responseData);
+    expect(result).toEqual(innerData);
   });
 
   it('proxyTrust throws on non-2xx response', async () => {
@@ -92,10 +93,11 @@ describe('client wrapper', () => {
   });
 
   it('proxyResolve posts to /resolve and returns JSON', async () => {
-    const responseData = { trust: 1 };
+    const innerData = { trust: 1 };
+    const envelope = { ok: true, data: innerData };
     const fetchMock = vi
       .fn()
-      .mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(responseData) });
+      .mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(envelope) });
     (globalThis as unknown as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
 
     const result = await proxyResolve(undefined, {
@@ -117,7 +119,7 @@ describe('client wrapper', () => {
         maxDepth: 3,
       }),
     });
-    expect(result).toEqual(responseData);
+    expect(result).toEqual(innerData);
   });
 
   it('proxyResolve throws on non-2xx response', async () => {

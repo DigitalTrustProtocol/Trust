@@ -35,6 +35,7 @@ export async function showTrustCommand(options: {
   source?: 'database' | 'server' | 'relay';
 }): Promise<void> {
   const dTag = options.dTag.trim();
+  const isJson = options.json ?? false;
 
   const source = options.source || '';
   let found = false;
@@ -45,9 +46,9 @@ export async function showTrustCommand(options: {
     const localResults = await store.query([{ kinds: [KIND_TRUST], '#d': [dTag], limit: 1 }]);
     const local = localResults[0] ?? null;
     if (local) {
-      logger.info('Event was found in local database.');
+      if (!isJson) logger.info('Event was found in local database.');
       found = true;
-      if (options.json) {
+      if (isJson) {
         console.log(JSON.stringify(local));
       } else {
         prettyPrintEvent(local);
@@ -55,10 +56,10 @@ export async function showTrustCommand(options: {
     }
   }
 
-  if (source === 'relay' || source === '') {
+  if (!found && (source === 'relay' || source === '')) {
     const relaySelection = await getAvailableRelays(options.relay);
     const relays = relaySelection.selected;
-    if (relaySelection.offline.length > 0) {
+    if (!isJson && relaySelection.offline.length > 0) {
       logger.warn(`Skipping offline relays: ${relaySelection.offline.map((status) => status.url).join(', ')}`);
     }
     const events = await queryEvents(
@@ -67,9 +68,9 @@ export async function showTrustCommand(options: {
     );
     const remote = events[0] ?? null;
     if (remote) {
-      logger.info('Event was found via relays.');
+      if (!isJson) logger.info('Event was found via relays.');
       found = true;
-      if (options.json) {
+      if (isJson) {
         console.log(JSON.stringify(remote));
       } else {
         prettyPrintEvent(remote);
@@ -78,7 +79,12 @@ export async function showTrustCommand(options: {
   }
 
   if (!found) {
-    logger.error(`Event not found: ${dTag}`);
-    process.exit(1);
+    if (isJson) {
+      console.log(JSON.stringify({ error: 'not_found', dTag }));
+      process.exitCode = 1;
+    } else {
+      logger.error(`Event not found: ${dTag}`);
+      process.exit(1);
+    }
   }
 }

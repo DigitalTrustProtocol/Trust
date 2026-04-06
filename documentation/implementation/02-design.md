@@ -266,16 +266,41 @@ The server (`src/server/app.ts`) composes Fastify with three plugins, selectable
 
 ### 5.3 REST API
 
+All endpoints return responses in the standard envelope format (see Section 5.6).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check with graph stats, sync status, and uptime |
+| GET | `/ping` | Simple health check |
+| GET | `/identity` | Server's identity (pubkey, npub, profile) |
+| POST | `/trust` | Create and publish a trust event |
+| POST | `/resolve` | Resolve trust for a single subject |
+| POST | `/resolve/batch` | Resolve trust for multiple subjects in one call |
+| GET | `/graph/stats` | Graph node/edge counts and sync metadata |
+| GET | `/events` | Query events with filters (?author, ?context, ?kind, ?since, ?until, ?limit) |
+| GET | `/trusted` | List subjects trusted by an author (?author, ?context) |
+| GET | `/docs` | OpenAPI Swagger UI |
+| GET | `/openapi.json` | OpenAPI 3.0 specification (auto-generated) |
+
 **POST /trust**
 ```json
 Request:  { "subjects": ["npub1..."], "value": 1, "contexts": "dev", "content": "..." }
-Response: { "event": { ... }, "relays": ["wss://..."] }
+Response: { "ok": true, "data": { "event": { ... }, "relays": ["wss://..."] } }
 ```
 
 **POST /resolve**
 ```json
 Request:  { "subject": "npub1...", "authors": "npub1...", "contexts": "dev", "format": "default" }
-Response: { "trustValue": 3, "trust": 3, "distrust": 0, "degree": 2, "connected": true, ... }
+Response: { "ok": true, "data": { "trustValue": 3, "trust": 3, "distrust": 0, "degree": 2, "connected": true } }
+```
+
+**POST /resolve/batch**
+```json
+Request:  { "subjects": ["npub1...", "npub2..."], "contexts": "dev", "format": "number" }
+Response: { "ok": true, "data": [
+  { "subject": "npub1...", "ok": true, "score": { "trustValue": 3, ... } },
+  { "subject": "npub2...", "ok": false, "error": { "code": "INVALID_SUBJECT", "message": "..." } }
+]}
 ```
 
 ### 5.4 Relay Facade
@@ -381,7 +406,111 @@ Sync cursors are stored in the KV table under namespaced keys:
 
 ---
 
-## 9. References
+## 9. API Response Envelope
+
+All HTTP API endpoints use a consistent response envelope:
+
+**Success:**
+```json
+{ "ok": true, "data": { ... } }
+```
+
+**Error:**
+```json
+{ "ok": false, "error": { "code": "INVALID_SUBJECT", "message": "Author must be a pubkey" } }
+```
+
+AI consumers can check `response.ok` without inspecting HTTP status codes. Error codes are machine-readable constants defined in `src/server/errors.ts`:
+
+| Code | Meaning |
+|------|---------|
+| `INVALID_SUBJECT` | Subject or author format is invalid |
+| `MISSING_AUTHOR` | Author is required but not provided |
+| `MISSING_SUBJECT` | Subject is required but not provided |
+| `NO_IDENTITY` | No identity configured on the server |
+| `STORE_ERROR` | Database operation failed |
+| `INTERNAL_ERROR` | Unexpected server error |
+
+---
+
+## 10. OpenAPI Specification
+
+The server auto-generates an OpenAPI 3.0 spec from route schemas using `@fastify/swagger`. When the API service is running:
+
+- `GET /docs` — Interactive Swagger UI for exploring and testing endpoints
+- `GET /openapi.json` — Machine-readable OpenAPI spec
+
+AI agents that support OpenAPI tool-calling can consume the spec directly to discover and use all endpoints.
+
+---
+
+## 11. SDK (Programmatic API)
+
+The `@dtp/trust` package exports a programmatic SDK (`src/sdk.ts`) for use as a library, in addition to the CLI and HTTP server.
+
+### 11.1 Import Pattern
+
+```typescript
+import { resolve, add, whoami, resolveBatch, trusted, createServer } from '@dtp/trust';
+```
+
+### 11.2 Available Functions
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `init(options?)` | Create or load identity | `Identity` |
+| `whoami()` | Get current identity | `Identity \| null` |
+| `add(subjects, options?)` | Issue a trust assertion | `VerifiedEvent` |
+| `resolve(subject, options?)` | Resolve trust for a single subject | `Score` |
+| `resolveBatch(subjects, options?)` | Resolve trust for multiple subjects | `Array<{ subject, ok, score? }>` |
+| `sync(options?)` | Sync from relays | `GraphSyncResult` |
+| `trusted(author?, options?)` | List trusted subjects | `string[]` |
+| `createServer(options?)` | Create a Fastify instance | `FastifyInstance` |
+
+### 11.3 Design
+
+SDK functions handle `RuntimeContext` setup internally (lazy init, singleton reuse). They are thin wrappers around the same logic the CLI commands use, but return structured data instead of writing to stdout.
+
+The `package.json` `exports` field routes `import '@dtp/trust'` to the SDK and `import '@dtp/trust/cli'` to the CLI entry point. The `bin` field is unchanged for CLI usage.
+
+---
+
+## 12. MCP Server (AI Tool Integration)
+
+The MCP (Model Context Protocol) server enables AI agents in MCP-compatible environments (Cursor, Claude Desktop, VS Code Copilot) to use Trust natively as tools.
+
+### 12.1 Architecture
+
+```
+AI Agent  ──stdio──►  trust-mcp  ──SDK──►  Trust core (graph, DB, relays)
+```
+
+The MCP server (`src/mcp.ts` + `src/mcp-server.ts`) is a thin adapter that maps MCP tool calls to SDK functions. No logic duplication.
+
+### 12.2 Available Tools
+
+| Tool | Description | Key Parameters |
+|------|-------------|----------------|
+| `trust_resolve` | Resolve trust from author to subject | `subject`, `author?`, `context?`, `format?` |
+| `trust_resolve_batch` | Resolve for multiple subjects | `subjects[]`, `author?`, `context?` |
+| `trust_add` | Issue a trust assertion | `subjects[]`, `value`, `context?`, `content?` |
+| `trust_whoami` | Get current identity | (none) |
+| `trust_trusted` | List trusted subjects | `author?`, `context?` |
+| `trust_graph_stats` | Graph statistics | (none) |
+
+### 12.3 Running
+
+```bash
+# Direct
+trust-mcp
+
+# In MCP client config (e.g. Claude Desktop)
+{ "mcpServers": { "trust": { "command": "trust-mcp" } } }
+```
+
+---
+
+## 13. References
 
 - [System Architecture](01-overview.md) — Module map and deployment modes
 - [Implementation Status & Roadmap](03-roadmap.md) — Completion status

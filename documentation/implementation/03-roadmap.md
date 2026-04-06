@@ -115,6 +115,7 @@ This document tracks the implementation status of each component and outlines re
 | Server availability check | `src/lib/client.ts` | Done |
 | Proxy trust (add → POST /trust) | `src/lib/client.ts` | Done |
 | Proxy resolve (resolve → POST /resolve) | `src/lib/client.ts` | Done |
+| Proxy resolve/batch | `src/lib/client.ts` | Done |
 | Automatic fallback to local execution | `src/commands/add.ts`, `resolve.ts` | Done |
 
 ### 1.11 Testing — Partial
@@ -126,6 +127,55 @@ This document tracks the implementation status of each component and outlines re
 | E2E tests (CLI flows) | `test/e2e/` | Done |
 | Test fixtures | `test/fixtures/` | Done |
 | Benchmark scripts | `scripts/` | Done |
+
+### 1.12 API Envelope and Extended Endpoints — Complete
+
+| Component | Files | Status |
+|-----------|-------|--------|
+| Consistent `{ ok, data/error }` response envelope | `src/server/errors.ts` | Done |
+| Error code constants | `src/server/errors.ts` | Done |
+| `GET /identity` — server identity | `src/server/plugins/api.ts` | Done |
+| `POST /resolve/batch` — multi-subject resolve | `src/server/plugins/api.ts` | Done |
+| `GET /graph/stats` — graph node/edge counts | `src/server/plugins/api.ts` | Done |
+| `GET /events` — query events with filters | `src/server/plugins/api.ts` | Done |
+| `GET /trusted` — list trusted subjects | `src/server/plugins/api.ts` | Done |
+| Enhanced `GET /health` with graph stats and uptime | `src/server/plugins/api.ts` | Done |
+
+### 1.13 SDK Module — Complete
+
+| Component | Files | Status |
+|-----------|-------|--------|
+| SDK entry point with all public functions | `src/sdk.ts` | Done |
+| `init`, `whoami`, `add` | `src/sdk.ts` | Done |
+| `resolve`, `resolveBatch` | `src/sdk.ts` | Done |
+| `sync`, `trusted`, `createServer` | `src/sdk.ts` | Done |
+| `package.json` exports field (`.` → SDK, `./cli` → CLI) | `package.json` | Done |
+
+### 1.14 MCP Server — Complete
+
+| Component | Files | Status |
+|-----------|-------|--------|
+| MCP server entry point (stdio transport) | `src/mcp.ts` | Done |
+| Tool definitions (resolve, batch, add, whoami, trusted, stats) | `src/mcp-server.ts` | Done |
+| `trust-mcp` binary in package.json | `package.json` | Done |
+| `@modelcontextprotocol/sdk` dependency | `package.json` | Done |
+
+### 1.15 CLI JSON Hardening — Complete
+
+| Component | Files | Status |
+|-----------|-------|--------|
+| `trust init --json` (structured output, suppressed logger) | `src/commands/init.ts` | Done |
+| `trust show --json` (suppressed info messages) | `src/commands/show.ts` | Done |
+| `trust sync --json` (structured result output) | `src/commands/sync.ts` | Done |
+| All commands: clean single JSON to stdout in `--json` mode | All command files | Done |
+
+### 1.16 OpenAPI Specification — Complete
+
+| Component | Files | Status |
+|-----------|-------|--------|
+| `@fastify/swagger` auto-generation | `src/server/app.ts` | Done |
+| `@fastify/swagger-ui` at `/docs` | `src/server/app.ts` | Done |
+| OpenAPI 3.0 spec at `/openapi.json` | Auto-generated | Done |
 
 ---
 
@@ -157,13 +207,17 @@ The web SPA (`web/`) currently has a minimal shell (landing page, layout, router
 - Relay connection status
 
 #### API Integration
-- The web app should use the existing REST API endpoints (`/resolve`, `/trust`, `/health`)
-- Add additional API endpoints as needed for dashboard data:
-  - `GET /graph/stats` — Node/edge counts, graph metadata
-  - `GET /graph/nodes` — Paginated node list with filtering
-  - `GET /graph/edges` — Paginated edge list with filtering
-  - `GET /events` — List events with filtering (extend existing)
-  - `GET /identities` — List known identities with metadata
+The web app should use the existing REST API endpoints. Most dashboard data endpoints are now available:
+- `GET /health` — Status, graph stats, sync info, uptime
+- `GET /graph/stats` — Node/edge counts
+- `GET /events` — Event listing with filters
+- `GET /trusted` — Trusted subjects list
+- `GET /identity` — Current identity
+- `POST /resolve` and `POST /resolve/batch` — Trust resolution
+
+Additional endpoints may be needed:
+- `GET /graph/nodes` — Paginated node list with filtering
+- `GET /graph/edges` — Paginated edge list with filtering
 
 ### 2.2 Additional NIP Support — Deferred
 
@@ -187,10 +241,10 @@ The current architecture supports these extensions — the database stores event
 | npm publish | Publish `@dtp/trust` to npm registry for `npm install -g` | High |
 | Docker image | Containerized deployment for server mode | Medium |
 | Follow graph integration | Import kind 3 (contact list) as initial trust seeds | Medium |
-| Graph-limited cache loading | BFS-bounded graph loading for very large datasets | Low |
-| WebSocket push for resolve | Real-time trust score updates via WebSocket | Low |
-| Rate limiting | API rate limiting for public deployments | Low |
 | Authentication | API key or NIP-98 HTTP auth for write endpoints | Medium |
+| Graph-limited cache loading | BFS-bounded graph loading for very large datasets | Low |
+| SSE/WebSocket push for trust changes | Real-time trust score updates | Low |
+| Rate limiting | API rate limiting for public deployments | Low |
 | Metrics/monitoring | Prometheus metrics for server health | Low |
 
 ---
@@ -200,7 +254,17 @@ The current architecture supports these extensions — the database stores event
 These decisions were made during implementation and should be preserved:
 
 ### Single Package, Multiple Roles
-The application is a single npm package that serves all roles (CLI, server, relay, web). This was a deliberate choice to keep deployment simple — install once, configure for your use case. The codebase is not large enough to justify splitting into separate packages.
+The application is a single npm package that serves all roles (CLI, SDK, server, relay, MCP, web). This was a deliberate choice to keep deployment simple — install once, configure for your use case. The codebase is not large enough to justify splitting into separate packages.
+
+### AI-First Interface Design
+The application provides four interface layers, all sharing the same core logic:
+
+1. **SDK** (`import from '@dtp/trust'`) — Direct library import for Node.js AI agents
+2. **MCP Server** (`trust-mcp`) — Tool integration for MCP-compatible AI environments
+3. **HTTP API** (`trust server`) — REST endpoints with consistent JSON envelopes
+4. **CLI** (`trust`) — Command-line with `--json` for scripting
+
+Each layer is a thin adapter over the core modules. No logic duplication.
 
 ### SQLite as Default, Postgres for Scale
 SQLite provides zero-configuration local storage for single-node deployments and CLI usage. Postgres enables multi-instance deployments where relay and API processes share a database. Both use the same Kysely query builder and Nostr store interface.
@@ -214,6 +278,9 @@ Raw Nostr events are the canonical data. The graph is derived and disposable —
 ### Context as First-Class Concept
 Trust is always scoped by context. An empty context acts as "general" (applies everywhere when a specific context is queried). This enables domain-specific trust without requiring separate trust graphs.
 
+### Consistent API Envelope
+All HTTP responses use `{ ok: true, data: ... }` / `{ ok: false, error: { code, message } }`. This allows AI consumers to parse responses without inspecting HTTP status codes, and provides machine-readable error codes for programmatic handling.
+
 ---
 
 ## 4. File Quick Reference
@@ -224,6 +291,8 @@ For developers starting work on remaining features, these are the key entry poin
 |------|------------|
 | Add a new CLI command | `src/cli.ts` (register), `src/commands/` (implement) |
 | Add a new API endpoint | `src/server/plugins/api.ts` |
+| Add a new MCP tool | `src/mcp-server.ts` |
+| Add an SDK function | `src/sdk.ts` |
 | Modify the graph model | `src/lib/trust/graph/` |
 | Add a new resolver strategy | `src/lib/trust/resolvers/` (implement `IResolveStrategy`) |
 | Change database schema | `src/lib/db/NSQLite.ts` and `NPostgres.ts` |
@@ -236,6 +305,6 @@ For developers starting work on remaining features, these are the key entry poin
 ## 5. References
 
 - [System Architecture](01-overview.md) — Module map and deployment modes
-- [Technical Design](02-design.md) — Data model, graph, resolver details
+- [Technical Design](02-design.md) — Data model, graph, resolver, SDK, MCP, API envelope
 - [Resolve Algorithm](../resolve.md) — BFS trust resolution
 - [Project Description](../description.md) — Vision and AI-first philosophy

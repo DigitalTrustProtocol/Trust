@@ -115,7 +115,7 @@ trust server --service api --database postgres
 
 ## Project Status
 
-The core implementation is complete:
+The core implementation and AI interface are complete:
 
 | Component | Status |
 |-----------|--------|
@@ -127,9 +127,14 @@ The core implementation is complete:
 | SQLite storage | Done |
 | Postgres storage | Done |
 | HTTP server (Fastify) with REST API | Done |
+| API envelope (`{ ok, data/error }`) and extended endpoints | Done |
+| Batch resolve (`POST /resolve/batch`) | Done |
+| SDK (programmatic API: `import from '@dtp/trust'`) | Done |
+| MCP server (`trust-mcp` for AI tool integration) | Done |
+| OpenAPI spec (auto-generated at `/docs`) | Done |
+| CLI with full command set and `--json` hardening | Done |
 | WebSocket relay facade (NIP-01) | Done |
 | Split service architecture | Done |
-| CLI with full command set | Done |
 | Web dashboard (graph visualization, search, management) | Planned |
 
 ## Related Documentation

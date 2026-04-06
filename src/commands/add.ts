@@ -65,10 +65,14 @@ export async function addCommand(options: {
   });
 
   const event = signEvent(template);
-  const relaySelection = await getAvailableRelays(relay);
-  const relays = relaySelection.selected;
-  if (relaySelection.offline.length > 0) {
-    logger.warn(`Skipping offline relays: ${relaySelection.offline.map((status) => status.url).join(', ')}`);
+
+  let relays: string[] = [];
+  if (process.env.TRUST_E2E_OFFLINE !== '1') {
+    const relaySelection = await getAvailableRelays(relay);
+    relays = relaySelection.selected;
+    if (relaySelection.offline.length > 0) {
+      logger.warn(`Skipping offline relays: ${relaySelection.offline.map((status) => status.url).join(', ')}`);
+    }
   }
 
   await publishEvent(event, relays);

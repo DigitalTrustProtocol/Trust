@@ -6,41 +6,51 @@ import { publishEvent, queryEvents } from '../lib/nostr/pool.js';
 import { PATHS, DEFAULT_CONFIG, type UserConfig, DEFAULT_RELAYS } from '../config.js';
 import { logger } from '../lib/logger.js';
 
-/**
- * Initialize a new Trust identity
- */
 export async function initCommand(options: {
   name?: string;
   about?: string;
   skipProfile?: boolean;
+  json?: boolean;
 }): Promise<void> {
-  logger.info('Initializing Trust identity...');
+  const isJson = options.json ?? false;
 
   if (hasSecretKey()) {
-    logger.warn(`Identity already exists at ${PATHS.identity}`);
-    logger.warn('To reset, remove identity storage and run init again.');
+    if (!isJson) {
+      logger.warn(`Identity already exists at ${PATHS.identity}`);
+      logger.warn('To reset, remove identity storage and run init again.');
+    }
 
     await initTrustDb();
 
     const { keyPair } = getOrCreateKeyPair();
-    console.log('Your existing identity:');
-    console.log(`  Public Key: ${keyPair.publicKey}`);
-    console.log(`  npub:       ${keyPair.npub}`);
-    console.log(`  Profile:    https://trust.dance/${keyPair.npub}`);
+    if (isJson) {
+      console.log(JSON.stringify({
+        publicKey: keyPair.publicKey,
+        npub: keyPair.npub,
+        configDir: PATHS.configDir,
+        existing: true,
+      }));
+    } else {
+      console.log('Your existing identity:');
+      console.log(`  Public Key: ${keyPair.publicKey}`);
+      console.log(`  npub:       ${keyPair.npub}`);
+      console.log(`  Profile:    https://trust.dance/${keyPair.npub}`);
+    }
     return;
   }
 
   const { keyPair, isNew } = getOrCreateKeyPair();
 
-  if (isNew) {
-    logger.info('Generated new Nostr keypair');
-    logger.info(`Saved to: ${PATHS.identity} and ${PATHS.keysDir}/`);
+  if (!isJson) {
+    if (isNew) {
+      logger.info('Generated new Nostr keypair');
+      logger.info(`Saved to: ${PATHS.identity} and ${PATHS.keysDir}/`);
+    }
+    console.log('Your identity:');
+    console.log(`  Public Key: ${keyPair.publicKey}`);
+    console.log(`  npub:       ${keyPair.npub}`);
+    console.log(`  Profile:    https://trust.dance/${keyPair.npub}`);
   }
-
-  console.log('Your identity:');
-  console.log(`  Public Key: ${keyPair.publicKey}`);
-  console.log(`  npub:       ${keyPair.npub}`);
-  console.log(`  Profile:    https://trust.dance/${keyPair.npub}`);
 
   if (!existsSync(PATHS.configDir)) {
     mkdirSync(PATHS.configDir, { recursive: true, mode: 0o700 });
@@ -56,13 +66,13 @@ export async function initCommand(options: {
   };
 
   writeFileSync(PATHS.config, JSON.stringify(config, null, 2), { mode: 0o600 });
-  logger.info(`Config saved to ${PATHS.config}`);
+  if (!isJson) logger.info(`Config saved to ${PATHS.config}`);
 
   await initTrustDb();
-  logger.info(`Trust database initialized at ${PATHS.trustDb}`);
+  if (!isJson) logger.info(`Trust database initialized at ${PATHS.trustDb}`);
 
   if ((name || about) && !options.skipProfile) {
-    logger.info('Checking for existing profile on Nostr relays...');
+    if (!isJson) logger.info('Checking for existing profile on Nostr relays...');
 
     try {
       const existingProfiles = await queryEvents(
@@ -71,10 +81,12 @@ export async function initCommand(options: {
       );
 
       if (existingProfiles.length > 0) {
-        logger.info('Found existing profile on relays. Skipping publication to avoid overwriting.');
-        logger.info('Use a profile update command if you want to modify your existing profile.');
+        if (!isJson) {
+          logger.info('Found existing profile on relays. Skipping publication to avoid overwriting.');
+          logger.info('Use a profile update command if you want to modify your existing profile.');
+        }
       } else {
-        logger.info('Publishing profile to Nostr relays...');
+        if (!isJson) logger.info('Publishing profile to Nostr relays...');
 
         const metadata = JSON.stringify({
           name: name || undefined,
@@ -85,17 +97,26 @@ export async function initCommand(options: {
         const relays = await publishEvent(event);
 
         if (relays.length > 0) {
-          logger.info(`Profile published to ${relays.length} relay(s): ${relays.join(', ')}`);
+          if (!isJson) logger.info(`Profile published to ${relays.length} relay(s): ${relays.join(', ')}`);
         } else {
-          logger.warn('Could not publish to any relays. You can retry later with a profile publish command');
+          if (!isJson) logger.warn('Could not publish to any relays. You can retry later with a profile publish command');
         }
       }
     } catch (error) {
-      logger.error(`Failed to check/publish profile: ${error instanceof Error ? error.message : error}`);
+      if (!isJson) logger.error(`Failed to check/publish profile: ${error instanceof Error ? error.message : error}`);
     }
   }
 
-  logger.info('Initialization complete!');
-  console.log('\nNext steps:');
-  console.log('  trust whoami  - View your identity');
+  if (isJson) {
+    console.log(JSON.stringify({
+      publicKey: keyPair.publicKey,
+      npub: keyPair.npub,
+      configDir: PATHS.configDir,
+      existing: false,
+    }));
+  } else {
+    logger.info('Initialization complete!');
+    console.log('\nNext steps:');
+    console.log('  trust whoami  - View your identity');
+  }
 }
