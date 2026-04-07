@@ -97,7 +97,7 @@ trust server --service api --database postgres
 | `trust config show` | Display current configuration |
 | `trust config authors set\|add\|remove\|clear [values]` | Manage author focus list |
 | `trust config contexts set\|add\|remove\|clear [values]` | Manage context filter list |
-| `trust timestamp [--get, --set, --rollforward, --json]` | Manage sync timestamps |
+| `trust sync-time [--get, --set, --rollforward, --json]` | Manage sync times (incremental fetch cursors) |
 
 ## Server API
 

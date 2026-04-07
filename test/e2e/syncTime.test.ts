@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const CLI_PATH = join(__dirname, '../../dist/index.js');
-const TEST_HOME = join(tmpdir(), 'trust-timestamp-e2e-' + process.pid);
+const TEST_HOME = join(tmpdir(), 'trust-sync-time-e2e-' + process.pid);
 
 function runCli(
   args: string[],
@@ -40,7 +40,7 @@ function runCli(
   });
 }
 
-describe('trust timestamp e2e', () => {
+describe('trust sync-time e2e', () => {
   beforeEach(() => {
     if (existsSync(TEST_HOME)) rmSync(TEST_HOME, { recursive: true });
     mkdirSync(TEST_HOME, { recursive: true });
@@ -52,26 +52,26 @@ describe('trust timestamp e2e', () => {
 
   // ── No options: human-readable status ──────────────────────────────────────
 
-  describe('trust timestamp (no options)', () => {
-    it('should show "not set" for both timestamps when nothing stored', async () => {
-      const { stdout, code } = await runCli(['timestamp']);
+  describe('trust sync-time (no options)', () => {
+    it('should show "not set" for both sync times when nothing stored', async () => {
+      const { stdout, code } = await runCli(['sync-time']);
 
       expect(code).toBe(0);
-      expect(stdout).toContain('Timestamp status');
+      expect(stdout).toContain('Sync time status');
       expect(stdout).toContain('not set');
     });
 
-    it('should display latest timestamp after --set', async () => {
-      await runCli(['timestamp', '--set', '1700000000']);
-      const { stdout, code } = await runCli(['timestamp']);
+    it('should display latest sync time after --set', async () => {
+      await runCli(['sync-time', '--set', '1700000000']);
+      const { stdout, code } = await runCli(['sync-time']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('1700000000');
     });
 
-    it('should display last seen timestamp after --set-last-seen', async () => {
-      await runCli(['timestamp', '--set-last-seen', '1700000001']);
-      const { stdout, code } = await runCli(['timestamp']);
+    it('should display last seen sync time after --set-last-seen', async () => {
+      await runCli(['sync-time', '--set-last-seen', '1700000001']);
+      const { stdout, code } = await runCli(['sync-time']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('1700000001');
@@ -80,39 +80,40 @@ describe('trust timestamp e2e', () => {
 
   // ── --set ──────────────────────────────────────────────────────────────────
 
-  describe('trust timestamp --set', () => {
-    it('should set the latest timestamp to a specific value', async () => {
-      const { stdout, code } = await runCli(['timestamp', '--set', '1700000000']);
+  describe('trust sync-time --set', () => {
+    it('should set the latest sync time to a specific value', async () => {
+      const { stdout, code } = await runCli(['sync-time', '--set', '1700000000']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('1700000000');
     });
 
-    it('should overwrite a previously set timestamp', async () => {
-      await runCli(['timestamp', '--set', '1700000000']);
-      const { stdout, code } = await runCli(['timestamp', '--set', '1710000000']);
+    it('should overwrite a previously set sync time', async () => {
+      await runCli(['sync-time', '--set', '1700000000']);
+      const { stdout, code } = await runCli(['sync-time', '--set', '1710000000']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('1710000000');
     });
 
-    it('should accept 0 as a valid timestamp', async () => {
-      const { stdout, code } = await runCli(['timestamp', '--set', '0']);
+    it('should accept 0 as a valid unix time', async () => {
+      const { stdout, code } = await runCli(['sync-time', '--set', '0']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('0');
     });
 
     it('should fail with a non-numeric value', async () => {
-      const { stdout, code } = await runCli(['timestamp', '--set', 'not-a-number']);
+      const { stdout, stderr, code } = await runCli(['sync-time', '--set', 'not-a-number']);
 
       expect(code).not.toBe(0);
-      expect(stdout).toContain('Invalid timestamp value');
+      const out = stdout + stderr;
+      expect(out).toContain('Invalid sync time value');
     });
 
     it('should persist the value across separate CLI invocations', async () => {
-      await runCli(['timestamp', '--set', '1700000000']);
-      const { stdout, code } = await runCli(['timestamp']);
+      await runCli(['sync-time', '--set', '1700000000']);
+      const { stdout, code } = await runCli(['sync-time']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('1700000000');
@@ -121,24 +122,25 @@ describe('trust timestamp e2e', () => {
 
   // ── --set-last-seen ────────────────────────────────────────────────────────
 
-  describe('trust timestamp --set-last-seen', () => {
-    it('should set the last seen timestamp to a specific value', async () => {
-      const { stdout, code } = await runCli(['timestamp', '--set-last-seen', '1700000005']);
+  describe('trust sync-time --set-last-seen', () => {
+    it('should set the last seen sync time to a specific value', async () => {
+      const { stdout, code } = await runCli(['sync-time', '--set-last-seen', '1700000005']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('1700000005');
     });
 
     it('should fail with a non-numeric value', async () => {
-      const { stdout, code } = await runCli(['timestamp', '--set-last-seen', 'bad']);
+      const { stdout, stderr, code } = await runCli(['sync-time', '--set-last-seen', 'bad']);
 
       expect(code).not.toBe(0);
-      expect(stdout).toContain('Invalid timestamp value');
+      const out = stdout + stderr;
+      expect(out).toContain('Invalid sync time value');
     });
 
     it('should persist across invocations', async () => {
-      await runCli(['timestamp', '--set-last-seen', '1700000005']);
-      const { stdout } = await runCli(['timestamp']);
+      await runCli(['sync-time', '--set-last-seen', '1700000005']);
+      const { stdout } = await runCli(['sync-time']);
 
       expect(stdout).toContain('1700000005');
     });
@@ -146,26 +148,26 @@ describe('trust timestamp e2e', () => {
 
   // ── --rollforward ──────────────────────────────────────────────────────────
 
-  describe('trust timestamp --rollforward', () => {
+  describe('trust sync-time --rollforward', () => {
     it('should default to 0 when no last_seen has been recorded', async () => {
-      const { stdout, code } = await runCli(['timestamp', '--rollforward']);
+      const { stdout, code } = await runCli(['sync-time', '--rollforward']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('0');
     });
 
     it('should set latest to last_seen + 1', async () => {
-      await runCli(['timestamp', '--set-last-seen', '1700000010']);
-      const { stdout, code } = await runCli(['timestamp', '--rollforward']);
+      await runCli(['sync-time', '--set-last-seen', '1700000010']);
+      const { stdout, code } = await runCli(['sync-time', '--rollforward']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('1700000011');
     });
 
     it('should persist the rolled-forward value as latest', async () => {
-      await runCli(['timestamp', '--set-last-seen', '1700000010']);
-      await runCli(['timestamp', '--rollforward']);
-      const { stdout } = await runCli(['timestamp', '--get']);
+      await runCli(['sync-time', '--set-last-seen', '1700000010']);
+      await runCli(['sync-time', '--rollforward']);
+      const { stdout } = await runCli(['sync-time', '--get']);
 
       expect(stdout.trim()).toBe('1700000011');
     });
@@ -173,17 +175,17 @@ describe('trust timestamp e2e', () => {
 
   // ── --get ──────────────────────────────────────────────────────────────────
 
-  describe('trust timestamp --get', () => {
-    it('should print "not set" when no latest timestamp stored', async () => {
-      const { stdout, code } = await runCli(['timestamp', '--get']);
+  describe('trust sync-time --get', () => {
+    it('should print "not set" when no latest sync time stored', async () => {
+      const { stdout, code } = await runCli(['sync-time', '--get']);
 
       expect(code).toBe(0);
       expect(stdout.trim()).toBe('not set');
     });
 
     it('should print the raw numeric value after --set', async () => {
-      await runCli(['timestamp', '--set', '1700000000']);
-      const { stdout, code } = await runCli(['timestamp', '--get']);
+      await runCli(['sync-time', '--set', '1700000000']);
+      const { stdout, code } = await runCli(['sync-time', '--get']);
 
       expect(code).toBe(0);
       expect(stdout.trim()).toBe('1700000000');
@@ -192,9 +194,9 @@ describe('trust timestamp e2e', () => {
 
   // ── --json ─────────────────────────────────────────────────────────────────
 
-  describe('trust timestamp --json', () => {
+  describe('trust sync-time --json', () => {
     it('should output valid JSON with null values when nothing stored', async () => {
-      const { stdout, code } = await runCli(['timestamp', '--json']);
+      const { stdout, code } = await runCli(['sync-time', '--json']);
 
       expect(code).toBe(0);
       const parsed = JSON.parse(stdout);
@@ -203,8 +205,8 @@ describe('trust timestamp e2e', () => {
     });
 
     it('should include latest after --set', async () => {
-      await runCli(['timestamp', '--set', '1700000000']);
-      const { stdout, code } = await runCli(['timestamp', '--json']);
+      await runCli(['sync-time', '--set', '1700000000']);
+      const { stdout, code } = await runCli(['sync-time', '--json']);
 
       expect(code).toBe(0);
       const parsed = JSON.parse(stdout);
@@ -213,9 +215,9 @@ describe('trust timestamp e2e', () => {
     });
 
     it('should include both values when both are set', async () => {
-      await runCli(['timestamp', '--set', '1700000000']);
-      await runCli(['timestamp', '--set-last-seen', '1699999999']);
-      const { stdout, code } = await runCli(['timestamp', '--json']);
+      await runCli(['sync-time', '--set', '1700000000']);
+      await runCli(['sync-time', '--set-last-seen', '1699999999']);
+      const { stdout, code } = await runCli(['sync-time', '--json']);
 
       expect(code).toBe(0);
       const parsed = JSON.parse(stdout);

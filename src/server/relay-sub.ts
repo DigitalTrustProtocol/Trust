@@ -1,7 +1,7 @@
 import { type VerifiedEvent, type Filter, verifyEvent } from 'nostr-tools';
 import { getPool } from '../lib/nostr/pool.js';
 import { KIND_TRUST, asTrustEvent } from '../lib/nostr/nip32010.js';
-import { TIMESTAMP_NS_SYNC, trackLatestTimestamp, updateLastSeenTimestamp } from '../lib/timestamp.js';
+import { SYNC_TIME_NS_SYNC, trackLatestSyncTime, updateLastSeenSyncTime } from '../lib/syncTime.js';
 import { getGraph, insertEvent } from '../lib/trust/graphManager.js';
 import { chunksOf } from '../lib/utils.js';
 import { NostrRelayMsg, NPool, NStore } from '@nostrify/nostrify';
@@ -35,7 +35,7 @@ export type subscriptionOptions = {
  * Start a continuous subscription to relays for kind 32010 events.
  * @param relays - Relay URLs to subscribe to
  * @param since - Optional unix timestamp; only events with created_at >= since are received
- * @param onEvent - Callback for each event (caller should insert to DB and trackLatestTimestamp)
+ * @param onEvent - Callback for each event (caller should insert to DB and trackLatestSyncTime)
  * @returns Function to request shutdown of the loop
  */
 export async function startRelaySubscription(
@@ -231,7 +231,7 @@ export async function iterativeTrustEventSubscription(
         if (inserted) {
           visitedEvent.add(event.id);
           queue.push(event.pubkey);
-          await trackLatestTimestamp(TIMESTAMP_NS_SYNC, [event]);
+          await trackLatestSyncTime(SYNC_TIME_NS_SYNC, [event]);
         }
       });
     }
@@ -298,7 +298,7 @@ export async function queryAuthorGraph(
   }
 
   if (timestamp > 0) {
-    await updateLastSeenTimestamp(TIMESTAMP_NS_SYNC, timestamp);
+    await updateLastSeenSyncTime(SYNC_TIME_NS_SYNC, timestamp);
   }
 }
 */

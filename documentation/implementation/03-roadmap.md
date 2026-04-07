@@ -77,7 +77,7 @@ This document tracks the implementation status of each component and outlines re
 | Graph-based BFS sync | `src/server/graph-sync.ts` | Done |
 | Subscribe-all sync | `src/server/all-sync.ts` | Done |
 | Generic relay subscription | `src/server/relay-sub.ts` | Done |
-| Timestamp management (KV cursors) | `src/lib/timestamp.ts` | Done |
+| Sync time management (KV cursors) | `src/lib/syncTime.ts` | Done |
 | Automatic rollforward on startup | `src/commands/server.ts` | Done |
 
 ### 1.8 Server — Complete
@@ -104,7 +104,7 @@ This document tracks the implementation status of each component and outlines re
 | `trust show` | `src/commands/show.ts` | Done |
 | `trust server` | `src/commands/server.ts` | Done |
 | `trust ping` | `src/commands/ping.ts` | Done |
-| `trust timestamp` | `src/commands/timestamp.ts` | Done |
+| `trust sync-time` | `src/commands/syncTime.ts` | Done |
 | `trust config` (show, authors, contexts) | `src/commands/config.ts` | Done |
 | `trust identity` (list, import, generate, primary, remove) | `src/commands/identity.ts` | Done |
 
@@ -122,7 +122,7 @@ This document tracks the implementation status of each component and outlines re
 
 | Component | Files | Status |
 |-----------|-------|--------|
-| Unit tests (keys, signer, timestamp) | `test/unit/` | Done |
+| Unit tests (keys, signer, syncTime) | `test/unit/` | Done |
 | Unit tests (trust: db, resolver, events, subject, reputation) | `test/unit/trust/` | Done |
 | E2E tests (CLI flows) | `test/e2e/` | Done |
 | Test fixtures | `test/fixtures/` | Done |

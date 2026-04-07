@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { initCommand } from './commands/init.js';
 import { whoamiCommand } from './commands/whoami.js';
-import { timestampCommand } from './commands/timestamp.js';
+import { syncTimeCommand } from './commands/syncTime.js';
 import { addCommand } from './commands/add.js';
 import { syncTrustCommand } from './commands/sync.js';
 import { showTrustCommand } from './commands/show.js';
@@ -57,18 +57,18 @@ program
     }
   });
 
-// timestamp - View or update the stored timestamps (infrastructure for incremental fetching)
+// sync-time - View or update stored sync-time cursors (incremental fetch)
 program
-  .command('timestamp')
-  .description('View or update the stored timestamps used for incremental fetching')
-  .option('--get', 'Print the raw latest timestamp value')
-  .option('--set <value>', 'Set the latest timestamp to a specific unix value')
-  .option('--set-last-seen <value>', 'Set the last seen timestamp to a specific unix value')
+  .command('sync-time')
+  .description('View or update stored sync times (latest / last seen) used for incremental fetching')
+  .option('--get', 'Print the raw latest sync time value')
+  .option('--set <value>', 'Set the latest sync time to a specific unix value')
+  .option('--set-last-seen <value>', 'Set the last seen sync time to a specific unix value')
   .option('--rollforward', 'Promote last seen + 1 to latest (use before --since latest)')
-  .option('--json', 'Output both timestamps as a JSON object')
+  .option('--json', 'Output both sync times as a JSON object')
   .action(async (options) => {
     try {
-      await timestampCommand({
+      await syncTimeCommand({
         get: options.get,
         set: options.set,
         setLastSeen: options.setLastSeen,

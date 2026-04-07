@@ -49,20 +49,20 @@ vi.mock('../../src/lib/logger.js', () => ({
 
 // Import after mocking
 import {
-  resolveTimestampParam,
-  trackLatestTimestamp,
-} from '../../src/lib/timestamp.js';
+  resolveSyncTimeParam,
+  trackLatestSyncTime,
+} from '../../src/lib/syncTime.js';
 import { initTrustDb, closeTrustDb } from '../../src/lib/db/dbManager.js';
 import {
-  setLatestTimestamp,
-  getLatestTimestamp,
-  getLastSeenTimestamp,
-  setLastSeenTimestamp,
-} from '../../src/lib/timestamp.js';
+  setLatestSyncTime,
+  getLatestSyncTime,
+  getLastSeenSyncTime,
+  setLastSeenSyncTime,
+} from '../../src/lib/syncTime.js';
 import { PATHS, resetRuntimeConfig } from '../../src/config.js';
 import { logger } from '../../src/lib/logger.js';
 
-describe('timestamp lib', () => {
+describe('syncTime lib', () => {
   beforeEach(async () => {
     await closeTrustDb();
     if (existsSync(PATHS.configDir)) {
@@ -79,26 +79,26 @@ describe('timestamp lib', () => {
     }
   });
 
-  describe('resolveTimestampParam', () => {
+  describe('resolveSyncTimeParam', () => {
     it('should return undefined when value is undefined', async () => {
       const ns = randomUUID();
-      expect(await resolveTimestampParam(undefined, ns)).toBeUndefined();
+      expect(await resolveSyncTimeParam(undefined, ns)).toBeUndefined();
     });
 
     it('should parse a numeric string into a number', async () => {
       const ns = randomUUID();
-      expect(await resolveTimestampParam('1700000000', ns)).toBe(1700000000);
+      expect(await resolveSyncTimeParam('1700000000', ns)).toBe(1700000000);
     });
 
     it('should parse zero', async () => {
       const ns = randomUUID();
-      expect(await resolveTimestampParam('0', ns)).toBe(0);
+      expect(await resolveSyncTimeParam('0', ns)).toBe(0);
     });
 
-    it('should resolve "latest" to the stored latest_timestamp', async () => {
+    it('should resolve "latest" to the stored latest sync time', async () => {
       const ns = randomUUID();
-      await setLatestTimestamp(ns, 1700000000);
-      expect(await resolveTimestampParam('latest', ns)).toBe(1700000000);
+      await setLatestSyncTime(ns, 1700000000);
+      expect(await resolveSyncTimeParam('latest', ns)).toBe(1700000000);
     });
 
     it('should exit with error when "latest" has no stored value', async () => {
@@ -106,8 +106,8 @@ describe('timestamp lib', () => {
       const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('process.exit'); });
       vi.mocked(logger.error).mockClear();
 
-      await expect(resolveTimestampParam('latest', ns)).rejects.toThrow('process.exit');
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('No "latest" timestamp stored'));
+      await expect(resolveSyncTimeParam('latest', ns)).rejects.toThrow('process.exit');
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('No "latest" sync time stored'));
 
       exitSpy.mockRestore();
     });
@@ -117,63 +117,60 @@ describe('timestamp lib', () => {
       const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('process.exit'); });
       vi.mocked(logger.error).mockClear();
 
-      await expect(resolveTimestampParam('not-a-number', ns)).rejects.toThrow('process.exit');
+      await expect(resolveSyncTimeParam('not-a-number', ns)).rejects.toThrow('process.exit');
       expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Invalid timestamp value'));
 
       exitSpy.mockRestore();
     });
   });
 
-  describe('trackLatestTimestamp', () => {
+  describe('trackLatestSyncTime', () => {
     it('should do nothing when events array is empty', async () => {
       const ns = randomUUID();
-      await trackLatestTimestamp(ns, []);
-      expect(await getLastSeenTimestamp(ns)).toBeUndefined();
+      await trackLatestSyncTime(ns, []);
+      expect(await getLastSeenSyncTime(ns)).toBeUndefined();
     });
 
-    it('should set last_seen_timestamp to max created_at + 1 for a single event', async () => {
+    it('should set last seen sync time to max created_at + 1 for a single event', async () => {
       const ns = randomUUID();
-      await trackLatestTimestamp(ns, [{ created_at: 1700000000 } as any]);
-      expect(await getLastSeenTimestamp(ns)).toBe(1700000001);
+      await trackLatestSyncTime(ns, [{ created_at: 1700000000 } as any]);
+      expect(await getLastSeenSyncTime(ns)).toBe(1700000001);
     });
 
     it('should pick the maximum created_at + 1 across multiple events', async () => {
       const ns = randomUUID();
-      await trackLatestTimestamp(ns, [
+      await trackLatestSyncTime(ns, [
         { created_at: 1700000005 } as any,
         { created_at: 1700000001 } as any,
         { created_at: 1700000009 } as any,
         { created_at: 1700000003 } as any,
       ]);
-      expect(await getLastSeenTimestamp(ns)).toBe(1700000010);
+      expect(await getLastSeenSyncTime(ns)).toBe(1700000010);
     });
 
-    it('should NOT update last_seen_timestamp when the new batch is older', async () => {
+    it('should NOT update last seen sync time when the new batch is older', async () => {
       const ns = randomUUID();
-      // Previous batch had newer events — last_seen should not go backwards
-      await trackLatestTimestamp(ns, [{ created_at: 1700000020 } as any]);
-      expect(await getLastSeenTimestamp(ns)).toBe(1700000021);
+      await trackLatestSyncTime(ns, [{ created_at: 1700000020 } as any]);
+      expect(await getLastSeenSyncTime(ns)).toBe(1700000021);
 
-      await trackLatestTimestamp(ns, [{ created_at: 1700000005 } as any]);
-      // Older batch: last_seen stays at the higher value
-      expect(await getLastSeenTimestamp(ns)).toBe(1700000021);
+      await trackLatestSyncTime(ns, [{ created_at: 1700000005 } as any]);
+      expect(await getLastSeenSyncTime(ns)).toBe(1700000021);
     });
 
-    it('should advance last_seen_timestamp when the new batch is newer', async () => {
+    it('should advance last seen sync time when the new batch is newer', async () => {
       const ns = randomUUID();
-      await trackLatestTimestamp(ns, [{ created_at: 1700000000 } as any]);
-      expect(await getLastSeenTimestamp(ns)).toBe(1700000001);
+      await trackLatestSyncTime(ns, [{ created_at: 1700000000 } as any]);
+      expect(await getLastSeenSyncTime(ns)).toBe(1700000001);
 
-      await trackLatestTimestamp(ns, [{ created_at: 1700000010 } as any]);
-      expect(await getLastSeenTimestamp(ns)).toBe(1700000011);
+      await trackLatestSyncTime(ns, [{ created_at: 1700000010 } as any]);
+      expect(await getLastSeenSyncTime(ns)).toBe(1700000011);
     });
 
-    it('should not affect latest_timestamp', async () => {
+    it('should not affect latest sync time', async () => {
       const ns = randomUUID();
-      await setLatestTimestamp(ns, 9999999999);
-      await trackLatestTimestamp(ns, [{ created_at: 1700000000 } as any]);
-      // latest is untouched — trackLatestTimestamp only updates last_seen_timestamp
-      expect(await getLatestTimestamp(ns)).toBe(9999999999);
+      await setLatestSyncTime(ns, 9999999999);
+      await trackLatestSyncTime(ns, [{ created_at: 1700000000 } as any]);
+      expect(await getLatestSyncTime(ns)).toBe(9999999999);
     });
   });
 });

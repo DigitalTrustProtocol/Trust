@@ -75,7 +75,7 @@ src/
 │   ├── show.ts                 # trust show — lookup trust event by d-tag
 │   ├── server.ts               # trust server — start Fastify process
 │   ├── ping.ts                 # trust ping — health check
-│   ├── timestamp.ts            # trust timestamp — sync cursor management
+│   ├── syncTime.ts             # trust sync-time — sync cursor management
 │   ├── config.ts               # trust config — edit config.json
 │   └── identity.ts             # trust identity — multi-key management
 │
@@ -98,7 +98,7 @@ src/
 │   ├── identityStore.ts        # Identity registry (identity.json + key files)
 │   ├── signer.ts               # Event signing with stored secret key
 │   ├── logger.ts               # Pino logger (CLI pretty / server JSON)
-│   ├── timestamp.ts            # KV-backed sync cursors (latest / last_seen)
+│   ├── syncTime.ts             # KV-backed sync cursors (latest / last_seen)
 │   ├── utils.ts                # statusLine, chunksOf
 │   ├── BitArray.ts             # Fixed-size bitset utility
 │   │
@@ -150,7 +150,7 @@ web/                            # React SPA (Vite)
 
 test/
 ├── setup.ts                    # Temp dir helpers, test fixtures
-├── unit/                       # Unit tests (keys, signer, timestamp, trust/*)
+├── unit/                       # Unit tests (keys, signer, syncTime, trust/*)
 ├── e2e/                        # End-to-end CLI tests
 └── fixtures/                   # Test data (trust-graph.json, etc.)
 

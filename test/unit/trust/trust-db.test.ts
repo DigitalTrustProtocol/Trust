@@ -40,12 +40,12 @@ vi.mock('../../../src/config.js', async (importOriginal) => {
 import { initTrustDb, closeTrustDb } from '../../../src/lib/db/dbManager.js';
 import { kvGet, kvSet, kvDelete } from '../../../src/lib/db/kv.js';
 import {
-  getLatestTimestamp,
-  setLatestTimestamp,
-  getLastSeenTimestamp,
-  setLastSeenTimestamp,
-  updateLastSeenTimestamp,
-} from '../../../src/lib/timestamp.js';
+  getLatestSyncTime,
+  setLatestSyncTime,
+  getLastSeenSyncTime,
+  setLastSeenSyncTime,
+  updateLastSeenSyncTime,
+} from '../../../src/lib/syncTime.js';
 import { PATHS, resetRuntimeConfig } from '../../../src/config.js';
 
 describe('trust-db module (SQLite)', () => {
@@ -92,26 +92,26 @@ describe('trust-db module (SQLite)', () => {
 
     it('should get and set latest timestamp', async () => {
       const ns = randomUUID();
-      expect(await getLatestTimestamp(ns)).toBeUndefined();
-      await setLatestTimestamp(ns, 1700000000);
-      expect(await getLatestTimestamp(ns)).toBe(1700000000);
+      expect(await getLatestSyncTime(ns)).toBeUndefined();
+      await setLatestSyncTime(ns, 1700000000);
+      expect(await getLatestSyncTime(ns)).toBe(1700000000);
     });
 
     it('should get and set last seen timestamp', async () => {
       const ns = randomUUID();
-      expect(await getLastSeenTimestamp(ns)).toBeUndefined();
-      await setLastSeenTimestamp(ns, 1700000001);
-      expect(await getLastSeenTimestamp(ns)).toBe(1700000001);
+      expect(await getLastSeenSyncTime(ns)).toBeUndefined();
+      await setLastSeenSyncTime(ns, 1700000001);
+      expect(await getLastSeenSyncTime(ns)).toBe(1700000001);
     });
 
     it('should update last seen only when greater', async () => {
       const ns = randomUUID();
-      await updateLastSeenTimestamp(ns, 1700000000);
-      expect(await getLastSeenTimestamp(ns)).toBe(1700000001);
-      await updateLastSeenTimestamp(ns, 1700000005);
-      expect(await getLastSeenTimestamp(ns)).toBe(1700000006);
-      await updateLastSeenTimestamp(ns, 1700000000);
-      expect(await getLastSeenTimestamp(ns)).toBe(1700000006);
+      await updateLastSeenSyncTime(ns, 1700000000);
+      expect(await getLastSeenSyncTime(ns)).toBe(1700000001);
+      await updateLastSeenSyncTime(ns, 1700000005);
+      expect(await getLastSeenSyncTime(ns)).toBe(1700000006);
+      await updateLastSeenSyncTime(ns, 1700000000);
+      expect(await getLastSeenSyncTime(ns)).toBe(1700000006);
     });
   });
 });
