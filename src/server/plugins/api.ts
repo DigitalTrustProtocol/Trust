@@ -28,7 +28,9 @@ import { ok, fail, sendError, ErrorCode } from '../errors.js';
 import { PATHS, type UserConfig } from '../../config.js';
 import { kvGet, kvSet, kvKeyLastSeenTimestamp } from '../../lib/db/kv.js';
 import type { Graph } from '../../lib/trust/graph/Graph.js';
+import { logger as rootLogger } from '../../lib/logger.js';
 
+const log = rootLogger.child({ plugin: 'api' });
 const packr = new Packr({ structuredClone: false });
 
 type TrustBody = {
@@ -81,10 +83,10 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
   const isSplitApi = runtimeContext.service === 'api';
 
   app.addHook('onReady', async () => {
+    log.info('Loading trust graph…');
     await loadGraph(runtimeContext);
+    log.info({ nodes: runtimeContext.graph?.nodes.size ?? 0, edges: runtimeContext.graph?.edges.size ?? 0 }, 'Trust graph loaded');
 
-    // In service=all mode, insertEvent() already applies changes to the graph
-    // in-process — no cross-process sync needed.
     if (!isSplitApi) return;
 
     const store = runtimeContext.store ?? await initTrustDb();
@@ -92,38 +94,45 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     if (!graph) return;
 
     // ── Postgres: direct LISTEN/NOTIFY from DB triggers ──────────
-    // The trigger sends a JSON payload with { op, event_id, kind, c, raw_event? }.
-    // No intermediate table — Postgres calls back the API directly.
     if (store instanceof NPostgres && store.pgPool) {
+      log.info('Subscribing to Postgres LISTEN/NOTIFY for graph changes');
       await store.listenForGraphChanges((payload) => {
         void (async () => {
-          if (payload.kind < KIND_TRUST || payload.kind > KIND_TRUST_MAX) return; // not a trust event
-          if (payload.c && runtimeContext.contextSet && !runtimeContext.contextSet.has(payload.c!)) return; // not a context we are interested in
+          if (payload.kind < KIND_TRUST || payload.kind > KIND_TRUST_MAX) return;
+          if (payload.c && runtimeContext.contextSet && !runtimeContext.contextSet.has(payload.c!)) return;
 
           try {
             if (payload.op === 'INSERT') {
               const ev = await store.getEvent(payload.event_id);
-              if (ev) applyTrustEventToGraph(ev as VerifiedEvent, graph);
+              if (ev) {
+                applyTrustEventToGraph(ev as VerifiedEvent, graph);
+                log.debug({ op: 'INSERT', eventId: payload.event_id }, 'Graph updated via NOTIFY');
+              }
             } else if (payload.op === 'DELETE' && payload.raw_event) {
               const raw = Buffer.from(payload.raw_event, 'base64');
               removeTrustEventFromGraphPacked(new Uint8Array(raw), graph);
+              log.debug({ op: 'DELETE', eventId: payload.event_id }, 'Graph edge removed via NOTIFY');
             }
-          } catch { /* log and continue on individual event failure */ }
+          } catch (err) {
+            log.error({ err, eventId: payload.event_id, op: payload.op }, 'Failed to apply NOTIFY payload to graph');
+          }
         })();
       });
 
-      app.addHook('onClose', async () => { await store.stopListening(); });
+      app.addHook('onClose', async () => {
+        log.info('Stopping Postgres LISTEN/NOTIFY');
+        await store.stopListening();
+      });
       return;
     }
 
     // ── SQLite: poll nostr_events by created_at ──────────────────
-    // SQLite is intended for single-instance local use. In the rare
-    // split-process case, poll for new events by created_at timestamp.
     if (store instanceof NSQLite) {
       const savedTs = await kvGet(KV_GRAPH_LAST_CREATED_AT);
       let lastCreatedAt = savedTs ? Number(savedTs) : 0;
 
       const pollMs = Math.max(1000, Number(process.env.TRUST_GRAPH_NOTIFY_POLL_MS ?? 5000));
+      log.info({ pollMs }, 'Starting SQLite graph poll');
       const timer = setInterval(() => {
         void (async () => {
           try {
@@ -135,13 +144,19 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
               }
             }
             if (events.length > 0) {
+              log.debug({ count: events.length }, 'SQLite poll applied new events to graph');
               await kvSet(KV_GRAPH_LAST_CREATED_AT, String(lastCreatedAt));
             }
-          } catch { /* poll failure — retry next cycle */ }
+          } catch (err) {
+            log.error({ err }, 'SQLite graph poll failed');
+          }
         })();
       }, pollMs);
 
-      app.addHook('onClose', async () => { clearInterval(timer); });
+      app.addHook('onClose', async () => {
+        log.info('Stopping SQLite graph poll');
+        clearInterval(timer);
+      });
     }
   });
 
@@ -175,7 +190,9 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
 
     let config: UserConfig | null = null;
     if (existsSync(PATHS.config)) {
-      try { config = JSON.parse(readFileSync(PATHS.config, 'utf-8')); } catch { /* ignore */ }
+      try { config = JSON.parse(readFileSync(PATHS.config, 'utf-8')); } catch (err) {
+        log.warn({ err }, 'Failed to parse config.json for /identity');
+      }
     }
 
     return ok({
@@ -213,6 +230,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       const relaySelection = await getAvailableRelays(body.relay);
       const relays = relaySelection.selected;
 
+      log.debug({ eventId: event.id, relays: relays.length, subjects: subjects.length }, 'Publishing trust event');
       await publishEvent(event, relays);
       await insertEvent(event, runtimeContext);
 
@@ -220,6 +238,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
         await fanOutEvent(event, app.relayClients);
       }
 
+      log.info({ eventId: event.id, relays: relays.length }, 'Trust event published');
       return ok({ event, relays });
     },
   );

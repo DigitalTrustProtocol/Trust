@@ -34,6 +34,19 @@ export async function serverCommand(options: {
   initLogger('server');
 
   const cfg = getRuntimeConfig(options);
+
+  logger.info({
+    service: cfg.service,
+    database: cfg.database,
+    host: cfg.host,
+    port: cfg.port,
+    logLevel: process.env.TRUST_LOG_LEVEL ?? 'info',
+    relays: cfg.relays.length,
+    authors: cfg.authors?.length ?? 'all',
+    contexts: cfg.contexts?.length ?? 'all',
+    maxDepth: cfg.maxDepth,
+  }, 'Starting Trust server');
+
   const runtimeContext = await initRuntimeContext(cfg);
 
   setDbDriverOverride(cfg.database as DbDriver);

@@ -1,6 +1,17 @@
 import pino from 'pino';
 
+export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
 type LogMode = 'server' | 'cli';
+
+export interface Logger {
+  trace: (...args: unknown[]) => void;
+  debug: (...args: unknown[]) => void;
+  info:  (...args: unknown[]) => void;
+  warn:  (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+  fatal: (...args: unknown[]) => void;
+  child: (bindings: Record<string, unknown>) => Logger;
+}
 
 let _logger: pino.Logger = buildCliLogger('info');
 
@@ -20,8 +31,6 @@ function buildCliLogger(level: string): pino.Logger {
 }
 
 function buildServerLogger(logFile: string | undefined, level: string): pino.Logger {
-  // Default: structured JSON on stdout (Docker/Coolify captures it automatically)
-  // TRUST_LOG_FILE=<path>  → JSON appended to that file (bare-metal VPS with logrotate)
   const target = process.env.TRUST_LOG_FILE ?? logFile;
   if (!target) {
     return pino({ level });
@@ -29,15 +38,34 @@ function buildServerLogger(logFile: string | undefined, level: string): pino.Log
   return pino({ level }, pino.destination(target));
 }
 
+function wrapPino(getInstance: () => pino.Logger): Logger {
+  function makeLogFn(method: string) {
+    return (...args: unknown[]) => (getInstance() as any)[method](...args);
+  }
+  return {
+    trace: makeLogFn('trace'),
+    debug: makeLogFn('debug'),
+    info:  makeLogFn('info'),
+    warn:  makeLogFn('warn'),
+    error: makeLogFn('error'),
+    fatal: makeLogFn('fatal'),
+    child(bindings: Record<string, unknown>): Logger {
+      const childInstance = getInstance().child(bindings);
+      return wrapPino(() => childInstance);
+    },
+  };
+}
+
 /**
  * Switch the logger to the given mode.
  * Call once at startup before any log calls are made.
  *
- *  - 'server'  → structured JSON to stdout (default, works with Docker/Coolify/journald)
+ *  - 'server'  → structured JSON to stdout (works with Docker / Coolify / journald).
  *               Set TRUST_LOG_FILE=/var/log/trust/app.log to write to a file instead.
  *  - 'cli'     → pretty-printed to stdout (default when no call is made)
  *
- * Log level is controlled by TRUST_LOG_LEVEL env var (default: 'info').
+ * Log level: TRUST_LOG_LEVEL env (default: 'info').
+ * Coolify: set TRUST_LOG_LEVEL via the service environment variables UI.
  */
 export function initLogger(mode: LogMode, options?: { logFile?: string; level?: string }): void {
   const level = process.env.TRUST_LOG_LEVEL ?? options?.level ?? 'info';
@@ -46,26 +74,14 @@ export function initLogger(mode: LogMode, options?: { logFile?: string; level?: 
     : buildCliLogger(level);
 }
 
-function makeLogFn(method: string) {
-  return (...args: unknown[]) => (_logger as any)[method](...args);
-}
-
 /**
  * Application logger.
- * Always delegates to the current internal pino instance so that
- * calling initLogger() after import is reflected everywhere.
+ * Delegates to the current internal pino instance so calling initLogger() after
+ * import is reflected everywhere — including in child loggers.
  */
-export const logger = {
-  trace: makeLogFn('trace'),
-  debug: makeLogFn('debug'),
-  info:  makeLogFn('info'),
-  warn:  makeLogFn('warn'),
-  error: makeLogFn('error'),
-  fatal: makeLogFn('fatal'),
-  child: (bindings: Record<string, unknown>) => _logger.child(bindings),
-};
+export const logger: Logger = wrapPino(() => _logger);
 
-/** Raw pino instance — pass to Fastify's `logger` option. */
+/** Raw pino instance — pass to Fastify's `loggerInstance` option. */
 export function getPinoInstance(): pino.Logger {
   return _logger;
 }

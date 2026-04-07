@@ -8,6 +8,9 @@ import type { NostrClientMsg, NostrClientREQ } from '@nostrify/types';
 import type WebSocket from 'ws';
 import type { RawData } from 'ws';
 import { RuntimeContext } from '../../lib/runtimeContext.js';
+import { logger as rootLogger } from '../../lib/logger.js';
+
+const log = rootLogger.child({ plugin: 'relay' });
 
 interface ActiveSubscription {
   id: string;
@@ -49,16 +52,20 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
     return relayInfo;
   });
 
+  log.info('Relay plugin registered');
+
   app.get('/relay', { websocket: true }, (socket, _request) => {
     const client: RelayClient = {
       socket,
       subscriptions: new Map<string, ActiveSubscription>(),
     };
     clients.add(client);
+    log.debug({ clients: clients.size }, 'WebSocket client connected');
 
     socket.on('message', async (raw: RawData) => {
       const result = parseClientMessage(raw);
       if (!result.ok) {
+        log.debug({ error: result.error }, 'Invalid client message');
         sendRelayMessage(socket, ['NOTICE', `invalid: ${result.error}`]);
         return;
       }
@@ -79,10 +86,12 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
             await fanOutEvent(msg[1], clients);
             break;
           default:
+            log.warn({ type }, 'Unknown client message type');
             sendRelayMessage(socket, ['NOTICE', `unsupported: unknown client message ${type}`]);
         }
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
+        log.error({ err: error, msgType: type }, 'Error handling relay message');
         sendRelayMessage(socket, ['NOTICE', `error: ${reason}`]);
       }
     });
@@ -90,9 +99,11 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
     socket.on('close', () => {
       closeAllSubscriptions(client);
       clients.delete(client);
+      log.debug({ clients: clients.size }, 'WebSocket client disconnected');
     });
 
-    socket.on('error', () => {
+    socket.on('error', (err) => {
+      log.error({ err }, 'WebSocket error');
       closeAllSubscriptions(client);
       clients.delete(client);
     });
@@ -192,11 +203,15 @@ async function pollSubscription(client: RelayClient, sub: ActiveSubscription): P
 
 async function handleEvent(event: NostrEvent, socket: WebSocket, runtimeContext: RuntimeContext): Promise<void> {
   if (!verifyEvent(event)) {
+    log.debug({ eventId: event.id }, 'Event rejected: invalid signature');
     sendRelayMessage(socket, ['OK', event.id, false, 'invalid: failed event signature verification']);
     return;
   }
 
   const accepted = await insertEvent(event as VerifiedEvent, runtimeContext);
+  if (accepted) {
+    log.debug({ eventId: event.id, kind: event.kind }, 'Event accepted');
+  }
   sendRelayMessage(socket, ['OK', event.id, accepted, accepted ? '' : 'duplicate: filtered or rejected']);
 }
 
