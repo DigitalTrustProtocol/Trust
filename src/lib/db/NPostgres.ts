@@ -659,12 +659,19 @@ export class NPostgres implements ExtendedNRelay {
 
   /**
    * Subscribe to Postgres LISTEN/NOTIFY for graph changes.
-   * The trigger sends a JSON payload: { op: 'INSERT'|'DELETE', event_id, raw_event? }.
-   * For INSERT, the callback receives the event_id to fetch from nostr_events.
+   * The trigger sends a JSON payload: { op, event_id, kind, c, raw_event? }.
+   * For INSERT, the callback can use `kind` to filter before fetching from nostr_events.
    * For DELETE, the payload includes the base64-encoded raw_event for graph removal.
    */
   async listenForGraphChanges(
-    onNotify: (payload: { op: 'INSERT' | 'DELETE'; event_id: string; raw_event?: string }) => void,
+    onNotify: (payload: {
+      op: 'INSERT' | 'DELETE';
+      event_id: string;
+      kind: number;
+      /** Trust context tag (denormalized `c`); null when absent. */
+      c: string | null;
+      raw_event?: string;
+    }) => void,
   ): Promise<void> {
     if (!this.pgPool) throw new Error('pgPool not set — call setPool() first');
     if (this.listenClient) return;
@@ -804,7 +811,7 @@ export class NPostgres implements ExtendedNRelay {
     await sql.raw(`CREATE OR REPLACE FUNCTION trust_pg_notify_insert_fn() RETURNS trigger AS $$
 BEGIN
   PERFORM pg_notify('trust_graph_change',
-    json_build_object('op', 'INSERT', 'event_id', NEW.id)::text
+    json_build_object('op', 'INSERT', 'event_id', NEW.id, 'kind', NEW.kind, 'c', NEW.c)::text
   );
   RETURN NEW;
 END;
@@ -813,7 +820,7 @@ $$ LANGUAGE plpgsql`).execute(this.db);
     await sql.raw(`CREATE OR REPLACE FUNCTION trust_pg_notify_delete_fn() RETURNS trigger AS $$
 BEGIN
   PERFORM pg_notify('trust_graph_change',
-    json_build_object('op', 'DELETE', 'event_id', OLD.id, 'raw_event', encode(OLD.raw_event, 'base64'))::text
+    json_build_object('op', 'DELETE', 'event_id', OLD.id, 'kind', OLD.kind, 'c', OLD.c, 'raw_event', encode(OLD.raw_event, 'base64'))::text
   );
   RETURN OLD;
 END;

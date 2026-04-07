@@ -28,7 +28,7 @@ export async function runTrustedGraphSync(runtimeContext: RuntimeContext): Promi
   const signal = runtimeContext.abortController?.signal ?? new AbortSignal();
 
   while (!signal.aborted) {
-    const bfsSeeds = bfsSeedsFromAuthor(runtimeContext.authors);
+    const bfsSeeds = bfsSeedsFromAuthor(runtimeContext.authors ?? []);
     const chunk = getUnseenTrustedAuthors(
       visitedAuthors,
       runtimeContext.graph as Graph,

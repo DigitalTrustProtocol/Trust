@@ -2,7 +2,6 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { loadKeyPair } from './lib/keys.js';
-import { getPrimaryPublicKeyHex, listIdentityKeys } from './lib/identityStore.js';
 import { nip19 } from 'nostr-tools';
 
 const ALL_TOKEN = 'all';
@@ -108,12 +107,16 @@ export const DEFAULT_CONFIG: UserConfig = {
  */
 export type ResolvedRuntimeConfig = Omit<UserConfig, 'authors' | 'contexts'> & {
   primaryPubkey: string;
-  /** Retain events from these hex pubkeys; empty = all authors 
-  /** Trust `c` tag values to retain; empty = all contexts. */
-  authors: string[];
-  contexts: string[];
-  syncAuthor: string;
-  syncSubscribeAll: boolean;
+  /**
+   * Hex pubkeys to retain in graph/sync filters, or `undefined` = no author filter (all authors).
+   * Resolved: CLI `--authors` → `TRUST_AUTHORS` → `config.json`; empty / `*` / `all` → undefined.
+   */
+  authors: string[] | undefined;
+  /**
+   * Trust `c` tag values to retain, or `undefined` = no context filter (all contexts).
+   * Resolved: CLI `--contexts` → `TRUST_CONTEXTS` → `config.json`; empty / `*` / `all` → undefined.
+   */
+  contexts: string[] | undefined;
   /** Effective HTTP bind (CLI > `TRUST_SERVER_*` env > config > defaults). */
   host: string;
   port: number;
@@ -193,7 +196,10 @@ export function getNpub(): string {
 
 
 export function isAllToken(s: string): boolean {
-  return s.trim().toLowerCase() === ALL_TOKEN;
+  let t = s.trim().toLowerCase();
+  if (t.length === 0) return true;
+  if (t === '*' || t === ALL_TOKEN) return true;
+  return false;
 }
 
 
@@ -223,25 +229,25 @@ export function normalizePubkeyHex(hex: string): string {
 export function parseAuthorsString(raw?: string): string[] | undefined {
   const t = raw?.trim();
   if (!t) return undefined;
-  if (t === '' || t === '*' || isAllToken(t)) return [];
+  if (isAllToken(t)) return undefined; // empty string is an empty array, no filter
   const parts = t
     .split(',')
     .map((x) => x.trim())
     .filter(Boolean);
-  if (parts.length === 0) return [];
+  if (parts.length === 0) return undefined;
   return parts.map((p) => normalizePubkeyHex(p));
 }
 
 
-export function parseContextsString(raw: string): string[] | undefined {
+export function parseContextsString(raw?: string): string[] | undefined {
   const t = raw?.trim();
   if (!t) return undefined;
-  if (t === '' || t === '*' || isAllToken(t)) return [];
+  if (isAllToken(t)) return undefined; // empty string is an empty array, no filter
   const parts = t
     .split(',')
     .map((x) => x.trim())
     .filter(Boolean);
-  if (parts.length === 0) return [];
+  if (parts.length === 0) return undefined;
   return parts;
 }
 
@@ -262,15 +268,6 @@ export function normalizeContextsList(list: string[] | undefined): string[] | un
 export function mergeUserConfig(): UserConfig {
   const file = loadUserConfig();
   return { ...DEFAULT_CONFIG, ...file };
-}
-
-function listIdentityPubkeysForSync(): string[] {
-  const keys = listIdentityKeys();
-  if (keys.length) {
-    return [...new Set(keys.map((k) => k.publicKey.toLowerCase()))];
-  }
-  const pk = getPrimaryPublicKeyHex();
-  return pk ? [pk] : [];
 }
 
 function cliHas(cli: Record<string, unknown>, key: string): boolean {
@@ -441,6 +438,35 @@ function mergeEffectiveRelays(cli: Record<string, unknown>, base: UserConfig): s
   return base.relays;
 }
 
+/**
+ * Authors filter: CLI `--authors` → `TRUST_AUTHORS` → `config.json` `authors`.
+ * If a layer is not provided (e.g. CLI flag absent, env unset), fall through to the next.
+ * Explicit empty, `*`, or `all` → `undefined` (no author filter).
+ */
+function resolveAuthorsFilter(cli: Record<string, unknown>, base: UserConfig): string[] | undefined {
+  if (cliHas(cli, 'authors')) {
+    return parseAuthorsString(getCliString(cli, 'authors'));
+  }
+  if (process.env.TRUST_AUTHORS !== undefined) {
+    return parseAuthorsString(process.env.TRUST_AUTHORS);
+  }
+  return normalizeAuthorsList(base.authors);
+}
+
+/**
+ * Contexts filter: CLI `--contexts` → `TRUST_CONTEXTS` → `config.json` `contexts`.
+ * Same precedence and empty / `*` / `all` → `undefined` (no context filter).
+ */
+function resolveContextsFilter(cli: Record<string, unknown>, base: UserConfig): string[] | undefined {
+  if (cliHas(cli, 'contexts')) {
+    return parseContextsString(getCliString(cli, 'contexts'));
+  }
+  if (process.env.TRUST_CONTEXTS !== undefined) {
+    return parseContextsString(process.env.TRUST_CONTEXTS);
+  }
+  return normalizeContextsList(base.contexts);
+}
+
 
 function mergeEffectiveHostPort(cli: Record<string, unknown>, base: UserConfig): { host: string; port: number } {
   const port = cliHas(cli, 'port') ? (getCliNumber(cli, 'port') ?? getServerPort(base)) : getServerPort(base);
@@ -455,46 +481,24 @@ function mergeEffectiveHostPort(cli: Record<string, unknown>, base: UserConfig):
  * Pass a plain object (e.g. Commander `options`); only **present** keys override lower layers.
  *
  * **Precedence** (each field uses the first available): CLI → `process.env` (`TRUST_*`, `PG*`, etc.)
- * → `config.json` → identity-derived defaults (e.g. sync authors when config omits them) → built-in
- * defaults.
+ * → `config.json` → built-in defaults.
  *
  * Database: `--database` / `postgresUrl` / `sqlitePath` on CLI; `TRUST_DB_DRIVER`, `TRUST_POSTGRES_URL`,
  * `TRUST_SQLITE_PATH`, `DATABASE_URL`, `PGHOST`/`PGUSER`/…, then `config.db.*`.
- * Sync focus: `TRUST_AUTHORS`, `TRUST_CONTEXTS` when the matching CLI flag is omitted.
+ *
+ * **Authors / contexts**: CLI → `TRUST_AUTHORS` / `TRUST_CONTEXTS` → `config.json`. Omitted layer falls
+ * through. Explicit empty, `*`, or `all` → `undefined` (no filter).
  */
 export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntimeConfig {
   const base = mergeUserConfig();
   const kp = loadKeyPair();
   const primaryPubkey = kp?.publicKey.toLowerCase() ?? '0'.repeat(64);
 
-  let authorString: string | undefined = (cli['authors'] ? cli['authors'] as string : process.env.TRUST_AUTHORS)?.trim();
-  let authors: string[] = [];
+  const authorsRaw = resolveAuthorsFilter(cli, base);
+  const authors = authorsRaw?.length ? [...new Set(authorsRaw)] : undefined;
 
-  if (authorString) {
-    authors = parseAuthorsString(authorString) ?? [];
-  } else {
-    if (base.authors?.length) {
-      authors = base.authors;
-    } else {
-      let identityPubkeys = listIdentityPubkeysForSync();
-      if (identityPubkeys.length) {
-        authors = identityPubkeys;
-      }
-    }
-  }
-  authors = [...new Set(authors)];
-
-
-  let contextString: string | undefined = (cli['contexts'] ? cli['contexts'] as string : process.env.TRUST_CONTEXTS)?.trim();
-  let contexts: string[] = [];
-  if (contextString) {
-    contexts = parseContextsString(contextString) ?? [];
-  } else {
-    if (base.contexts?.length) {
-      contexts = base.contexts;
-    }
-  }
-  contexts = [...new Set(contexts)];
+  const contextsRaw = resolveContextsFilter(cli, base);
+  const contexts = contextsRaw?.length ? [...new Set(contextsRaw)] : undefined;
 
   const { host, port } = mergeEffectiveHostPort(cli, base);
 

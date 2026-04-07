@@ -117,11 +117,11 @@ program
   .option('--since <unix-ts>', 'Start sync from this unix timestamp (overwrites stored value)')
   .option(
     '--authors <value>',
-    'Omitted: use config authors, else identity pubkeys. * or All = all authors; primary = primary key only; or comma-separated hex pubkeys',
+    'CLI → TRUST_AUTHORS → config: comma-separated hex/npub pubkeys. Omitted flag falls through. * or All = no author filter (subscribe-all sync).',
   )
   .option(
     '--contexts <value>',
-    'Trust `c` tag filter: All, or comma-separated contexts (overrides config; matches empty tag with an empty segment in the list)',
+    'CLI → TRUST_CONTEXTS → config: comma-separated `c` tag values. Omitted falls through. * or All = no context filter.',
   )
   .option('--max-depth <n>', 'Max trust graph depth to sync (default: 3)', (val: string) => parseInt(val, 10), 3)
   .option('--sync-interval <seconds>', 'Seconds between sync runs (0 = run once)', (val: string) => parseInt(val, 10), 0)

@@ -3,7 +3,7 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 import { existsSync, readFileSync } from 'node:fs';
 import { Packr } from 'msgpackr';
 import { parseSubjects } from '../../lib/trust/subject.js';
-import { buildTrustEventTemplate } from '../../lib/nostr/nip32010.js';
+import { buildTrustEventTemplate, KIND_TRUST, KIND_TRUST_MAX } from '../../lib/nostr/nip32010.js';
 import { signEvent } from '../../lib/signer.js';
 import { getAvailableRelays, publishEvent } from '../../lib/nostr/pool.js';
 import { resolveTargetForQuery } from '../../lib/trust/subject.js';
@@ -23,7 +23,6 @@ import { initTrustDb, Store } from '../../lib/db/dbManager.js';
 import { NPostgres } from '../../lib/db/NPostgres.js';
 import { NSQLite } from '../../lib/db/NSQLite.js';
 import { fanOutEvent } from './relay.js';
-import { KIND_TRUST } from '../../lib/nostr/nip32010.js';
 import { RuntimeContext } from '../../lib/runtimeContext.js';
 import { ok, fail, sendError, ErrorCode } from '../errors.js';
 import { PATHS, type UserConfig } from '../../config.js';
@@ -89,21 +88,22 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     if (!isSplitApi) return;
 
     const store = runtimeContext.store ?? await initTrustDb();
-    const graph = getLoadedGraph();
+    const graph = runtimeContext.graph; 
     if (!graph) return;
 
     // ── Postgres: direct LISTEN/NOTIFY from DB triggers ──────────
-    // The trigger sends a JSON payload with { op, event_id, raw_event? }.
+    // The trigger sends a JSON payload with { op, event_id, kind, c, raw_event? }.
     // No intermediate table — Postgres calls back the API directly.
     if (store instanceof NPostgres && store.pgPool) {
       await store.listenForGraphChanges((payload) => {
         void (async () => {
+          if (payload.kind < KIND_TRUST || payload.kind > KIND_TRUST_MAX) return; // not a trust event
+          if (payload.c && runtimeContext.contextSet && !runtimeContext.contextSet.has(payload.c!)) return; // not a context we are interested in
+
           try {
             if (payload.op === 'INSERT') {
               const ev = await store.getEvent(payload.event_id);
-              if (ev?.kind === KIND_TRUST) {
-                applyTrustEventToGraph(ev as VerifiedEvent, graph);
-              }
+              if (ev) applyTrustEventToGraph(ev as VerifiedEvent, graph);
             } else if (payload.op === 'DELETE' && payload.raw_event) {
               const raw = Buffer.from(payload.raw_event, 'base64');
               removeTrustEventFromGraphPacked(new Uint8Array(raw), graph);

@@ -75,7 +75,7 @@ export async function runSync(runtimeContext: RuntimeContext): Promise<GraphSync
 
     logger.info('Syncing trust (relay → database)…');
     do {
-      if (runtimeContext.authors.length === 0) {
+      if (!runtimeContext.authors?.length) {
         lastStatus = await subscribeToAll(runtimeContext);
       } else {
         lastStatus = await runTrustedGraphSync(runtimeContext);

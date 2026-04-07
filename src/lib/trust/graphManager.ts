@@ -112,7 +112,12 @@ async function insertUserMetadataEvent(event: VerifiedEvent, store?: Store, grap
 async function getGraphFromDBAllAuthors(runtimeContext: RuntimeContext): Promise<void> {
   const {graph, store, kinds, authors, contexts, abortController} = runtimeContext;
 
-  for await (const event of store!.allEvents(kinds, authors, contexts, abortController?.signal ?? new AbortSignal())) {
+  for await (const event of store!.allEvents(
+    kinds,
+    authors ?? [],
+    contexts ?? [],
+    abortController?.signal ?? new AbortSignal(),
+  )) {
     if (abortController?.signal?.aborted) break;
     const trustEvent = asTrustEvent(event as VerifiedEvent);
     graph!.applyTrustEvent(trustEvent);
@@ -121,8 +126,8 @@ async function getGraphFromDBAllAuthors(runtimeContext: RuntimeContext): Promise
 async function getGraphFromDB(runtimeContext: RuntimeContext): Promise<void> {
   const visited: Set<string> = new Set<string>();
 
-  const { graph, store, kinds,authors, contexts, since, maxDepth} = runtimeContext;
-  const queue = [...authors];
+  const { graph, store, kinds, authors, contexts, since, maxDepth } = runtimeContext;
+  const queue = [...(authors ?? [])];
   let depth = 0;
   let nodeIndex = 0;
 

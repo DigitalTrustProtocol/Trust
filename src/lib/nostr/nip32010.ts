@@ -10,7 +10,9 @@ import { sha256 } from '@noble/hashes/sha2';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils';
 import type { ParsedSubject } from '../trust/subject.js';
 
-export const KIND_TRUST = 32010;
+export const KIND_TRUST = 32010; // Minimum kind for trust events
+export const KIND_TRUST_MIN = 32010; // Minimum kind for trust events
+export const KIND_TRUST_MAX = 32999; // Maximum kind for trust events
 export const MAX_CONTENT_LENGTH = 1024;
 export const HEX_64 = /^[a-fA-F0-9]{64}$/;
 

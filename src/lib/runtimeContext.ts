@@ -14,6 +14,9 @@ export interface RuntimeContext extends ResolvedRuntimeConfig {
     store: Store | null;
     pool: NPool | null;
 
+    authorSet: Set<string> | undefined;
+    contextSet: Set<string> | undefined;
+
     statusCallback?: (status: string) => void;
     abortController: AbortController;
     loggerInstance?: pino.Logger;
@@ -28,6 +31,8 @@ export async function createRuntimeContext(config: ResolvedRuntimeConfig): Promi
         graph: null,
         store: null,
         pool: null,
+        authorSet: config.authors ? new Set<string>(config.authors) : undefined,
+        contextSet: config.contexts ? new Set<string>(config.contexts) : undefined,
         statusCallback: undefined,
         abortController,
     };
