@@ -24,7 +24,6 @@ export async function resolveTrustCommand(options: {
   subject: string;
   authors?: string;
   contexts?: string;
-  strategy?: string;
   maxDepth?: number;
   format?: ResolveFormat;
   json?: boolean;
@@ -42,7 +41,6 @@ export async function resolveTrustCommand(options: {
       subject: options.subject,
       authors: options.authors,
       contexts: options.contexts,
-      strategy: options.strategy,
       maxDepth: options.maxDepth,
       format,
     });

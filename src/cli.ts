@@ -143,8 +143,7 @@ program
   .command('resolve <subject> [authors]')
   .description('Resolve trust path and reputation for subject (from authors perspective, default: primary key)')
   .option('-c, --contexts <contexts>', 'Filter by context (default: ""). Use -c undefined for all contexts')
-  .option('-s, --strategy <name>', 'Resolve strategy (default: cache)', 'cache')
-  .option('--max-depth <n>', 'Max trust path depth (1-4, default: 4). Limited by strategy max.', '4')
+  .option('--max-depth <n>', 'Max trust path depth (1-4, default: 4).', '4')
   .option('--authors <npub|hex>', 'Author pubkey (alternative to positional)')
   .option('-f, --format <name>', 'Output format: number, default, path', 'default')
   .option('--json', 'Output as JSON')
@@ -154,7 +153,6 @@ program
         subject,
         authors: authors ?? options.authors,
         contexts: options.contexts,
-        strategy: options.strategy,
         maxDepth: parseInt(options.maxDepth, 10),
         format: options.format as 'number' | 'default' | 'path',
         json: options.json,
