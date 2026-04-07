@@ -151,8 +151,8 @@ program
     try {
       await resolveTrustCommand({
         subject,
-        authors: authors ?? options.authors,
-        contexts: options.contexts,
+        author: authors ?? options.authors,
+        context: options.contexts,
         maxDepth: parseInt(options.maxDepth, 10),
         format: options.format as 'number' | 'default' | 'path',
         json: options.json,

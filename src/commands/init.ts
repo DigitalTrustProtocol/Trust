@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { getOrCreateKeyPair, hasSecretKey } from '../lib/keys.js';
-import { initTrustDb } from '../lib/db/dbManager.js';
 import { createSignedEvent } from '../lib/signer.js';
 import { publishEvent, queryEvents } from '../lib/nostr/pool.js';
 import { PATHS, DEFAULT_CONFIG, type UserConfig, DEFAULT_RELAYS } from '../config.js';
 import { logger } from '../lib/logger.js';
+import { initRuntimeContext } from './sync.js';
 
 export async function initCommand(options: {
   name?: string;
@@ -20,7 +20,6 @@ export async function initCommand(options: {
       logger.warn('To reset, remove identity storage and run init again.');
     }
 
-    await initTrustDb();
 
     const { keyPair } = getOrCreateKeyPair();
     if (isJson) {
@@ -68,7 +67,9 @@ export async function initCommand(options: {
   writeFileSync(PATHS.config, JSON.stringify(config, null, 2), { mode: 0o600 });
   if (!isJson) logger.info(`Config saved to ${PATHS.config}`);
 
-  await initTrustDb();
+  const runtimeContext = await initRuntimeContext(options as Record<string, unknown>);
+  let store = runtimeContext.store;
+  if (!store) throw new Error('Store not loaded');
   if (!isJson) logger.info(`Trust database initialized at ${PATHS.trustDb}`);
 
   if ((name || about) && !options.skipProfile) {

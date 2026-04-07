@@ -1,7 +1,7 @@
 import { getLatestSyncTime, rollForwardSyncTime, SYNC_TIME_NS_SYNC } from '../lib/syncTime.js';
 import { getPinoInstance, initLogger, logger } from '../lib/logger.js';
 import { createApp, type ServerService } from '../server/app.js';
-import { setDbDriverOverride, type DbDriver } from '../lib/db/dbManager.js';
+import { getStore, setDbDriverOverride, type DbDriver } from '../lib/db/dbManager.js';
 import { getRuntimeConfig, resolveConfig, setRuntimeConfig, type ResolvedRuntimeConfig } from '../config.js';
 import { getRuntimeContext, RuntimeContext, setupRelayPool, setupStore } from '../lib/runtimeContext.js';
 
@@ -57,7 +57,8 @@ export async function serverCommand(options: {
 
 async function initRuntimeContext(resolved: ResolvedRuntimeConfig): Promise<RuntimeContext> {
   const runtimeContext = await getRuntimeContext(resolved);
-  await setupStore(runtimeContext);
+  runtimeContext.store = await getStore(resolved);
+
   runtimeContext.loggerInstance = getPinoInstance();
 
   if(runtimeContext.service === 'all' || runtimeContext.service === 'relay') {

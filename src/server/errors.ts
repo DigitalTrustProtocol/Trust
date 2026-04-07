@@ -1,6 +1,7 @@
 import type { FastifyReply } from 'fastify';
 
 export const ErrorCode = {
+  STORE_NOT_FOUND: 'STORE_NOT_FOUND',
   INVALID_SUBJECT: 'INVALID_SUBJECT',
   MISSING_AUTHOR: 'MISSING_AUTHOR',
   MISSING_SUBJECT: 'MISSING_SUBJECT',
@@ -10,6 +11,8 @@ export const ErrorCode = {
   NOT_FOUND: 'NOT_FOUND',
   GRAPH_NOT_LOADED: 'GRAPH_NOT_LOADED',
   NO_IDENTITY: 'NO_IDENTITY',
+  INTERNAL_SERVER_ERROR: 'INTERNAL_SERVER_ERROR',
+  GRAPH_NOT_FOUND: 'GRAPH_NOT_FOUND',
 } as const;
 
 export type ErrorCodeType = (typeof ErrorCode)[keyof typeof ErrorCode];

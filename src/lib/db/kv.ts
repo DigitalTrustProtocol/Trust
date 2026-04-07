@@ -13,13 +13,13 @@ export const KV_KEYS = {
 } as const;
 
 /** KV key for the "latest" cursor used with `--since latest` (per namespace). */
-export function kvKeyLatestTimestamp(namespace: string): string {
-  return `latest_timestamp:${namespace}`;
+export function kvKeyLatestSyncTime(namespace: string): string {
+  return `latest_syncTime:${namespace}`;
 }
 
 /** KV key for the auto-tracked last-seen cursor (per namespace). */
-export function kvKeyLastSeenTimestamp(namespace: string): string {
-  return `last_seen_timestamp:${namespace}`;
+export function kvKeyLastSeenSyncTime(namespace: string): string {
+  return `last_seen_syncTime:${namespace}`;
 }
 
 export async function migrateSQLiteKV(db: Kysely<any>): Promise<void> {

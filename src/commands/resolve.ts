@@ -1,15 +1,14 @@
-import { getStore, initTrustDb } from '../lib/db/dbManager.js';
 import { resolveTargetForQuery } from '../lib/trust/subject.js';
 import { loadSecretKey } from '../lib/keys.js';
 import { getPublicKey } from 'nostr-tools/pure';
-import { isServerAvailable, proxyResolve } from '../lib/client.js';
+import { proxyResolve } from '../lib/client.js';
 import type { ResolveFormat } from '../lib/trust/resolvers/IResolveStrategy.js';
 import { Score } from '../lib/trust/resolvers/Score.js';
 import standardResolver from '../lib/trust/resolvers/trustResolver.js';
 import { loadGraph } from '../lib/trust/graphManager.js';
-import { getPinoInstance, logger } from '../lib/logger.js';
-import { getRuntimeContext, RuntimeContext, setupStore } from '../lib/runtimeContext.js';
-import { getRuntimeConfig, ResolvedRuntimeConfig } from '../config.js';
+import { logger } from '../lib/logger.js';
+import { getRuntimeConfig } from '../config.js';
+import { getRuntimeContext, setupStore } from '../lib/runtimeContext.js';
 
 export type { ResolveFormat };
 
@@ -22,25 +21,23 @@ function normalizeContext(context: string | undefined): string | undefined {
 
 export async function resolveTrustCommand(options: {
   subject: string;
-  authors?: string;
-  contexts?: string;
+  author?: string;
+  context?: string;
   maxDepth?: number;
   format?: ResolveFormat;
   json?: boolean;
 }): Promise<void> {
   const format = options.format ?? 'default';
-  const serverUp =
-    process.env.TRUST_E2E_OFFLINE === '1' ? false : await isServerAvailable();
 
   const cfg = getRuntimeConfig(options);
-  const runtimeContext = await initRuntimeContext(cfg);
+  const runtimeContext = await getRuntimeContext(cfg);
+  await setupStore(runtimeContext);
 
-
-  if (serverUp) {
+  if (runtimeContext.serverUp) {
     const result = await proxyResolve(undefined, {
       subject: options.subject,
-      authors: options.authors,
-      contexts: options.contexts,
+      author: options.author,
+      context: options.context,
       maxDepth: options.maxDepth,
       format,
     });
@@ -48,12 +45,9 @@ export async function resolveTrustCommand(options: {
     return;
   }
 
-  let store = await initTrustDb();
-  const context = normalizeContext(options.contexts);
-
   let author: string | null = null;
-  if (options.authors) {
-    const parsed = resolveTargetForQuery(options.authors);
+  if (options.author) {
+    const parsed = resolveTargetForQuery(options.author);
     if (parsed.tag !== 'p') {
       throw new Error('Author must be a pubkey (npub or hex)');
     }
@@ -71,7 +65,7 @@ export async function resolveTrustCommand(options: {
     const graph = await loadGraph(runtimeContext);
     score = standardResolver.resolve(author, subjectId, {
       graph,
-      context,
+      context: options.context,
       maxDepth: options.maxDepth,
       format,
     });
@@ -83,12 +77,6 @@ export async function resolveTrustCommand(options: {
   throw new Error('Author is required');
 }
 
-async function initRuntimeContext(cfg: ResolvedRuntimeConfig): Promise<RuntimeContext> {
-  const runtimeContext = await getRuntimeContext(cfg);
-  await setupStore(runtimeContext);
-  runtimeContext.loggerInstance = getPinoInstance();
-  return runtimeContext;
-}
 
 function outputResolveResult(
   score: Score,

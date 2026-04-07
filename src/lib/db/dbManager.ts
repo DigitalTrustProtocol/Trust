@@ -119,7 +119,11 @@ export async function createNSQLiteStore(db: NSQLiteDbInput, opts?: NSQLiteOpts)
 const DB_INIT_CLI: Record<string, unknown> = { authors: '*' };
 
 export async function getStore(cfg: ResolvedRuntimeConfig | undefined = undefined): Promise<Store> {
+  if(storeInstance) return storeInstance;
+ 
+
   const resolved = cfg ?? getRuntimeConfig(DB_INIT_CLI);
+  /*
   const key = resolvedStoreCacheKey(resolved);
   if (storeInstance && cachedStoreKey === key) {
     return storeInstance;
@@ -130,6 +134,7 @@ export async function getStore(cfg: ResolvedRuntimeConfig | undefined = undefine
     cachedStoreKey = null;
   }
   cachedStoreKey = key;
+  */
   storeInstance = await createStore(resolved);
   return storeInstance;
 }

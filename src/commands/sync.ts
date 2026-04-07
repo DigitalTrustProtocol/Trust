@@ -1,6 +1,5 @@
-import { closeTrustDb, getStore, initTrustDb, Store } from '../lib/db/dbManager.js';
-import { closePool, getPool } from '../lib/nostr/pool.js';
-import { getAvailableRelays } from '../lib/nostr/pool.js';
+import { closeTrustDb, Store } from '../lib/db/dbManager.js';
+import { closePool } from '../lib/nostr/pool.js';
 import { statusLine } from '../lib/utils.js';
 import { getRuntimeConfig } from '../config.js';
 import { getSinceFromTimestamp } from './server.js';
@@ -23,7 +22,7 @@ export async function syncTrustCommand(options: {
   const isJson = options.json ?? false;
 
   if (process.env.TRUST_E2E_OFFLINE === '1') {
-    await initTrustDb();
+    const runtimeContext = await initRuntimeContext(options as Record<string, unknown>);
     statusLine('');
     if (isJson) {
       console.log(JSON.stringify({ eventsReceived: 0, eventsInserted: 0, processedAuthors: 0 }));

@@ -1,4 +1,4 @@
-import { kvKeyLatestTimestamp, kvKeyLastSeenTimestamp } from './db/kv.js';
+import { kvKeyLatestSyncTime, kvKeyLastSeenSyncTime } from './db/kv.js';
 import { kvGet, kvSet } from './db/kv.js';
 import type { VerifiedEvent } from 'nostr-tools';
 import { logger } from './logger.js';
@@ -7,21 +7,21 @@ import { logger } from './logger.js';
 export const SYNC_TIME_NS_SYNC = 'sync' as const;
 
 export async function getLatestSyncTime(namespace: string): Promise<number | undefined> {
-  const val = await kvGet(kvKeyLatestTimestamp(namespace));
+  const val = await kvGet(kvKeyLatestSyncTime(namespace));
   return val !== undefined ? parseInt(val, 10) : undefined;
 }
 
 export async function setLatestSyncTime(namespace: string, ts: number): Promise<void> {
-  await kvSet(kvKeyLatestTimestamp(namespace), String(ts));
+  await kvSet(kvKeyLatestSyncTime(namespace), String(ts));
 }
 
 export async function getLastSeenSyncTime(namespace: string): Promise<number | undefined> {
-  const val = await kvGet(kvKeyLastSeenTimestamp(namespace));
+  const val = await kvGet(kvKeyLastSeenSyncTime(namespace));
   return val !== undefined ? parseInt(val, 10) : undefined;
 }
 
 export async function setLastSeenSyncTime(namespace: string, ts: number): Promise<void> {
-  await kvSet(kvKeyLastSeenTimestamp(namespace), String(ts));
+  await kvSet(kvKeyLastSeenSyncTime(namespace), String(ts));
 }
 
 export async function updateLastSeenSyncTime(namespace: string, createdAt: number): Promise<void> {

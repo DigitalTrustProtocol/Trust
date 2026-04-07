@@ -1,8 +1,8 @@
 import { queryEvents } from '../lib/nostr/pool.js';
 import { getAvailableRelays } from '../lib/nostr/pool.js';
-import { initTrustDb, getStore } from '../lib/db/dbManager.js';
 import { KIND_TRUST } from '../lib/nostr/nip32010.js';
 import { logger } from '../lib/logger.js';
+import { initRuntimeContext } from './sync.js';
 
 function prettyPrintEvent(event: {
   id: string;
@@ -41,8 +41,9 @@ export async function showTrustCommand(options: {
   let found = false;
 
   if (source === '' || source === 'database' || source === 'server') {
-    await initTrustDb();
-    const store = await getStore();
+    const runtimeContext = await initRuntimeContext(options as Record<string, unknown>);
+    const store = runtimeContext.store;
+    if (!store) throw new Error('Store not loaded');
     const localResults = await store.query([{ kinds: [KIND_TRUST], '#d': [dTag], limit: 1 }]);
     const local = localResults[0] ?? null;
     if (local) {

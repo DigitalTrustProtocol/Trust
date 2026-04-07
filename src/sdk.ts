@@ -20,7 +20,6 @@ import { getAvailableRelays, publishEvent } from './lib/nostr/pool.js';
 import { Score } from './lib/trust/resolvers/Score.js';
 import standardResolver from './lib/trust/resolvers/trustResolver.js';
 import { loadGraph, insertEvent as graphInsertEvent } from './lib/trust/graphManager.js';
-import { initTrustDb } from './lib/db/dbManager.js';
 import { getRuntimeContext, setupStore, type RuntimeContext } from './lib/runtimeContext.js';
 import { createApp, type ServerService } from './server/app.js';
 import type { ResolveFormat } from './lib/trust/resolvers/IResolveStrategy.js';
@@ -101,26 +100,6 @@ function normalizeContext(context: string | undefined): string | undefined {
 }
 
 // ── Public API ───────────────────────────────────────────────────────
-
-/**
- * Initialize a new Trust identity. Returns the identity if one already exists.
- */
-export async function init(options?: { name?: string; about?: string }): Promise<Identity> {
-  const { keyPair } = getOrCreateKeyPair();
-  await initTrustDb();
-
-  let config: UserConfig | null = null;
-  if (existsSync(PATHS.config)) {
-    try { config = JSON.parse(readFileSync(PATHS.config, 'utf-8')); } catch { /* ignore */ }
-  }
-
-  return {
-    publicKey: keyPair.publicKey,
-    npub: keyPair.npub,
-    profile: config?.profile ?? null,
-    relays: config?.relays ?? DEFAULT_CONFIG.relays,
-  };
-}
 
 /**
  * Get current identity. Returns null if not initialized.

@@ -53,8 +53,8 @@ export interface TrustParams {
 
 export interface ResolveParams {
   subject: string;
-  authors?: string;
-  contexts?: string;
+  author?: string;
+  context?: string;
   strategy?: string;
   maxDepth?: number;
   format?: 'number' | 'default' | 'path';

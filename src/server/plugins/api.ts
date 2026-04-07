@@ -1,11 +1,6 @@
 import fp from 'fastify-plugin';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { existsSync, readFileSync } from 'node:fs';
-import { Packr } from 'msgpackr';
-import { parseSubjects } from '../../lib/trust/subject.js';
-import { buildTrustEventTemplate, KIND_TRUST, KIND_TRUST_MAX } from '../../lib/nostr/nip32010.js';
-import { signEvent } from '../../lib/signer.js';
-import { getAvailableRelays, publishEvent } from '../../lib/nostr/pool.js';
 import { resolveTargetForQuery } from '../../lib/trust/subject.js';
 import { loadSecretKey, loadKeyPair } from '../../lib/keys.js';
 import { getPublicKey } from 'nostr-tools/pure';
@@ -14,24 +9,21 @@ import { Score } from '../../lib/trust/resolvers/Score.js';
 import {
   applyTrustEventToGraph,
   getLoadedGraph,
-  insertEvent,
   loadGraph,
   removeTrustEventFromGraphPacked,
 } from '../../lib/trust/graphManager.js';
 import standardResolver from '../../lib/trust/resolvers/trustResolver.js';
-import { initTrustDb, Store } from '../../lib/db/dbManager.js';
 import { NPostgres } from '../../lib/db/NPostgres.js';
 import { NSQLite } from '../../lib/db/NSQLite.js';
-import { fanOutEvent } from './relay.js';
 import { RuntimeContext } from '../../lib/runtimeContext.js';
-import { ok, fail, sendError, ErrorCode } from '../errors.js';
+import { ok, sendError, ErrorCode } from '../errors.js';
 import { PATHS, type UserConfig } from '../../config.js';
-import { kvGet, kvSet, kvKeyLastSeenTimestamp } from '../../lib/db/kv.js';
-import type { Graph } from '../../lib/trust/graph/Graph.js';
+import { kvGet, kvSet, kvKeyLastSeenSyncTime } from '../../lib/db/kv.js';
 import { logger as rootLogger } from '../../lib/logger.js';
+import { KIND_TRUST, KIND_TRUST_MAX, KIND_TRUST_MIN } from '../../lib/nostr/nip32010.js';
+import { getLatestSyncTime, SYNC_TIME_NS_SYNC } from '../../lib/syncTime.js';
 
 const log = rootLogger.child({ plugin: 'api' });
-const packr = new Packr({ structuredClone: false });
 
 type TrustBody = {
   subjects: string[];
@@ -43,9 +35,8 @@ type TrustBody = {
 
 type ResolveBody = {
   subject: string;
-  authors?: string;
-  contexts?: string;
-  strategy?: string;
+  author?: string;
+  context?: string;
   maxDepth?: number;
   format?: 'number' | 'default' | 'path';
 };
@@ -64,9 +55,9 @@ function normalizeContext(context: string | undefined): string | undefined {
   return context;
 }
 
-function resolveAuthor(authors?: string): { author: string | null; error?: string } {
-  if (authors) {
-    const parsed = resolveTargetForQuery(authors);
+function resolveAuthor(author?: string): { author: string | null; error?: string } {
+  if (author) {
+    const parsed = resolveTargetForQuery(author);
     if (parsed.tag !== 'p') {
       return { author: null, error: 'Author must be a pubkey (npub or hex)' };
     }
@@ -89,16 +80,17 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
 
     if (!isSplitApi) return;
 
-    const store = runtimeContext.store ?? await initTrustDb();
+    const store = runtimeContext.store;
+    if (!store) throw new Error('Store not loaded');
     const graph = runtimeContext.graph; 
-    if (!graph) return;
+    if (!graph) throw new Error('Graph not loaded');
 
     // ── Postgres: direct LISTEN/NOTIFY from DB triggers ──────────
     if (store instanceof NPostgres && store.pgPool) {
       log.info('Subscribing to Postgres LISTEN/NOTIFY for graph changes');
       await store.listenForGraphChanges((payload) => {
         void (async () => {
-          if (payload.kind < KIND_TRUST || payload.kind > KIND_TRUST_MAX) return;
+          if (payload.kind < KIND_TRUST_MIN || payload.kind > KIND_TRUST_MAX) return;
           if (payload.c && runtimeContext.contextSet && !runtimeContext.contextSet.has(payload.c!)) return;
 
           try {
@@ -162,9 +154,12 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
 
   // ── Health & Ping ──────────────────────────────────────────────────
 
-  app.get('/health', async () => {
-    const graph = getLoadedGraph();
-    const lastSeenRaw = await kvGet(kvKeyLastSeenTimestamp('sync'));
+  app.get('/health', async (_request: FastifyRequest, reply: FastifyReply) => {
+    const graph = runtimeContext.graph;
+    if (!graph) {
+      return sendError(reply, 500, ErrorCode.GRAPH_NOT_FOUND, 'Graph not loaded');
+    }
+    const lastSeenRaw = await getLatestSyncTime(SYNC_TIME_NS_SYNC);
     return ok({
       status: 'ok',
       graph: {
@@ -205,6 +200,9 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
 
   // ── Trust (add) ────────────────────────────────────────────────────
 
+  
+/*
+½   // There should not be a trust endpoint in the API, it should be the client who publishes the trust event
   app.post<{ Body: TrustBody }>(
     '/trust',
     async (request: FastifyRequest<{ Body: TrustBody }>, reply: FastifyReply) => {
@@ -242,15 +240,15 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       return ok({ event, relays });
     },
   );
-
+*/
   // ── Resolve (single) ──────────────────────────────────────────────
 
   app.post<{ Body: ResolveBody }>(
     '/resolve',
     async (request: FastifyRequest<{ Body: ResolveBody }>, reply: FastifyReply) => {
       const body = request.body;
-      const context = normalizeContext(body.contexts);
-      const { author, error: authorError } = resolveAuthor(body.authors);
+      const context = normalizeContext(body.context);
+      const { author, error: authorError } = resolveAuthor(body.author);
 
       if (authorError) {
         return sendError(reply, 400, ErrorCode.INVALID_SUBJECT, authorError);
@@ -266,7 +264,11 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
         return sendError(reply, 400, ErrorCode.INVALID_SUBJECT, `Invalid subject: ${body.subject}`);
       }
 
-      const graph = await loadGraph(runtimeContext);
+      const graph = runtimeContext.graph;
+      if (!graph) {
+        return sendError(reply, 500, ErrorCode.GRAPH_NOT_FOUND, 'Graph not loaded');
+      }
+
       const score: Score = standardResolver.resolve(author, subjectId, {
         graph,
         context,
@@ -300,7 +302,10 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
         return sendError(reply, 400, ErrorCode.MISSING_AUTHOR, 'Author is required');
       }
 
-      const graph = await loadGraph(runtimeContext);
+      const graph = runtimeContext.graph;
+      if (!graph) {
+        return sendError(reply, 500, ErrorCode.GRAPH_NOT_FOUND, 'Graph not loaded');
+      }
       const format = body.format ?? 'default';
 
       const results = subjects.map((subject) => {
@@ -330,7 +335,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
 
   app.get('/graph/stats', async () => {
     const graph = getLoadedGraph();
-    const lastSeenRaw = await kvGet(kvKeyLastSeenTimestamp('sync'));
+    const lastSeenRaw = await getLatestSyncTime(SYNC_TIME_NS_SYNC);
     return ok({
       nodes: graph?.nodes.size ?? 0,
       edges: graph?.edges.size ?? 0,
@@ -362,7 +367,10 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     if (q.until) filter.until = Number(q.until);
     if (q.context) filter['#c'] = [q.context];
 
-    const store = runtimeContext.store ?? await initTrustDb();
+    const store = runtimeContext.store;
+    if (!store) {
+      return sendError(reply, 500, ErrorCode.STORE_NOT_FOUND, 'Store not loaded');
+    }
     const events = await store.query([filter as any]);
 
     const offset = Number(q.offset) || 0;
@@ -385,7 +393,11 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       return sendError(reply, 400, ErrorCode.MISSING_AUTHOR, 'Author is required');
     }
 
-    const graph = await loadGraph(runtimeContext);
+    
+    const graph = runtimeContext.graph;
+    if (!graph) {
+      return sendError(reply, 500, ErrorCode.GRAPH_NOT_FOUND, 'Graph not loaded');
+    }
     const subjects = graph.trustedSubjects(author, q.context);
     return ok(subjects);
   });

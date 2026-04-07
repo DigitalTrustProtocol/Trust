@@ -1,4 +1,3 @@
-import { initTrustDb } from '../lib/db/dbManager.js';
 import {
   getLatestSyncTime,
   setLatestSyncTime,
@@ -7,6 +6,10 @@ import {
   SYNC_TIME_NS_SYNC,
 } from '../lib/syncTime.js';
 import { logger } from '../lib/logger.js';
+import { initRuntimeContext } from './sync.js';
+
+import { getRuntimeConfig } from '../config.js';
+import { getRuntimeContext, setupStore } from '../lib/runtimeContext.js';
 
 /**
  * View or update stored sync-time cursors (latest / last seen) for incremental fetching.
@@ -26,7 +29,12 @@ export async function syncTimeCommand(options: {
   rollforward?: boolean;
   json?: boolean;
 }): Promise<void> {
-  await initTrustDb();
+  //const runtimeContext = await initRuntimeContext(options as Record<string, unknown>);
+  const cfg = getRuntimeConfig(options as Record<string, unknown>);
+  const runtimeContext = await getRuntimeContext(cfg);
+  await setupStore(runtimeContext);
+  const store = runtimeContext.store;
+  if (!store) throw new Error('Store not loaded');
 
   // --set <value>
   if (options.set !== undefined) {

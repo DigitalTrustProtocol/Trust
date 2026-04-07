@@ -76,6 +76,6 @@ npm run bench:load-graph-1m
 TRUST_CONFIG_DIR=trust trust resolve <subject-npub> -c dev
 
 # Resolve from another issuer (positional or flag)
-TRUST_CONFIG_DIR=trust trust resolve <subject-npub> <issuer-npub> -c dev
-TRUST_CONFIG_DIR=trust trust resolve <subject-npub> --issuer <issuer-npub> -c dev
+TRUST_CONFIG_DIR=trust trust resolve <subject-npub> <author-npub> -c dev
+TRUST_CONFIG_DIR=trust trust resolve <subject-npub> --authors <author-npub> -c dev
 ```

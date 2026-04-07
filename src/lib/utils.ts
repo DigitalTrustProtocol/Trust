@@ -1,5 +1,5 @@
 export function statusLine(text: string): void {
-    process.stdout.write(`\r${text}                                                    \r`);
+    process.stderr.write(`\r${text}                                                    \r`);
 }
 
 export function* chunksOf<T>(arr: T[], size: number): Generator<T[], void, unknown> {

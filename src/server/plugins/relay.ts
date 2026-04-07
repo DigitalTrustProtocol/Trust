@@ -3,7 +3,6 @@ import websocket from '@fastify/websocket';
 import { matchFilters, verifyEvent } from 'nostr-tools';
 import type { NostrEvent, Filter, VerifiedEvent } from 'nostr-tools';
 import { insertEvent } from '../../lib/trust/graphManager.js';
-import { initTrustDb } from '../../lib/db/dbManager.js';
 import type { NostrClientMsg, NostrClientREQ } from '@nostrify/types';
 import type WebSocket from 'ws';
 import type { RawData } from 'ws';
@@ -76,7 +75,7 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
       try {
         switch (type) {
           case 'REQ':
-            await handleReq(client, msg);
+            await handleReq(client, msg, runtimeContext);
             break;
           case 'CLOSE':
             handleClose(client, msg[1]);
@@ -137,7 +136,7 @@ function handleClose(client: RelayClient, subscriptionId: string): void {
   client.subscriptions.delete(subscriptionId);
 }
 
-async function handleReq(client: RelayClient, req: NostrClientREQ): Promise<void> {
+async function handleReq(client: RelayClient, req: NostrClientREQ, runtimeContext: RuntimeContext): Promise<void> {
   const [, subscriptionId, ...filters] = req;
   if (!subscriptionId) {
     sendRelayMessage(client.socket, ['NOTICE', 'invalid: missing subscription id']);
@@ -159,7 +158,8 @@ async function handleReq(client: RelayClient, req: NostrClientREQ): Promise<void
   };
   client.subscriptions.set(subscriptionId, sub);
 
-  const store = await initTrustDb();
+  const store = runtimeContext.store;
+  if (!store) throw new Error('Store not loaded');
   const initialEvents = await store.query(sub.filters, {});
 
   for (const event of initialEvents) {
@@ -170,16 +170,17 @@ async function handleReq(client: RelayClient, req: NostrClientREQ): Promise<void
 
   sendRelayMessage(client.socket, ['EOSE', subscriptionId]);
   sub.timer = setInterval(() => {
-    void pollSubscription(client, sub);
+    void pollSubscription(client, sub, runtimeContext);
   }, 1000);
 }
 
-async function pollSubscription(client: RelayClient, sub: ActiveSubscription): Promise<void> {
+async function pollSubscription(client: RelayClient, sub: ActiveSubscription, runtimeContext: RuntimeContext): Promise<void> {
   if (sub.polling) return;
   if (client.socket.readyState !== client.socket.OPEN) return;
   sub.polling = true;
   try {
-    const store = await initTrustDb();
+    const store = runtimeContext.store;
+    if (!store) throw new Error('Store not loaded');
     const pollFilters = sub.filters.map((filter) => ({
       ...filter,
       since: Math.max(filter.since ?? 0, sub.latestCreatedAt),
