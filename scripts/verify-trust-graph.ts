@@ -59,6 +59,12 @@ interface ResolveResult {
   distrust: number;
 }
 
+interface ApiEnvelope<T = unknown> {
+  ok: boolean;
+  data?: T;
+  error?: { code?: string; message?: string };
+}
+
 interface KeyFixture {
   label?: string;
   privkey: string;
@@ -486,7 +492,31 @@ async function resolveFromServer(params: {
     const text = await response.text();
     throw new Error(`Resolve request failed (${response.status}): ${text}`);
   }
-  return (await response.json()) as Partial<ResolveResult>;
+
+  const payload = (await response.json()) as unknown;
+  return extractResolveResult(payload);
+}
+
+function extractResolveResult(payload: unknown): Partial<ResolveResult> {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Resolve response is not a JSON object');
+  }
+
+  const envelope = payload as ApiEnvelope<Partial<ResolveResult>>;
+  if (typeof envelope.ok === 'boolean') {
+    if (!envelope.ok) {
+      const code = envelope.error?.code ? `${envelope.error.code}: ` : '';
+      const message = envelope.error?.message ?? 'Unknown API error';
+      throw new Error(`Resolve API error: ${code}${message}`);
+    }
+    if (!envelope.data || typeof envelope.data !== 'object') {
+      throw new Error('Resolve API response missing data object');
+    }
+    return envelope.data;
+  }
+
+  // Backward compatibility for older servers that returned raw score JSON.
+  return payload as Partial<ResolveResult>;
 }
 
 main().catch((err) => {

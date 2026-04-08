@@ -30,13 +30,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "seed": "tsx scripts/seed-trust-network.ts",
-    "verify-trust-graph": "tsx scripts/verify-trust-graph.ts",
-    "bench1m": "tsx scripts/bench-resolve-1m.ts",
-    "bench:load-graph-1m": "cross-env TRUST_CONFIG_DIR=trust tsx scripts/bench-load-graph-1m.ts",
-    "bench:load-full-graph": "cross-env TRUST_CONFIG_DIR=trust tsx scripts/bench-load-full-graph.ts",
-    "bench:load-from-file": "cross-env TRUST_CONFIG_DIR=trust tsx scripts/bench-load-from-file.ts",
-    "bench:sqlite-vs-leveldb": "tsx scripts/bench-sqlite-vs-leveldb.ts",
-    "test:msgpackr": "tsx scripts/test-msgpackr.ts"
+    "verify-trust-graph": "tsx scripts/verify-trust-graph.ts"
   },
   "keywords": [
     "nostr",
