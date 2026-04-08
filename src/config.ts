@@ -17,11 +17,13 @@ export const DEFAULT_RELAYS = [
   'wss://relay.primal.net',
   'wss://relay.damus.io',
   'wss://nos.lol',
+  'ws://localhost:3417/relay'
 ];
 
 // Default server host/port for server mode
 const DEFAULT_SERVER_HOST = 'localhost';
 const DEFAULT_SERVER_PORT = 3417;
+const DEFAULT_REMOTE_API_URL = 'https://trust.dance';
 
 // Configuration paths
 export const PATHS = {
@@ -77,6 +79,8 @@ export interface UserConfig {
   database?: 'sqlite' | 'postgres';
   sqlitePath?: string;
   postgresUrl?: string;
+  /** Remote API base URL used when no local server is available (default: https://trust.dance). */
+  remoteApiUrl?: string;
 }
 
 const DEFAULT_SYNC_KINDS = [32010];
@@ -96,6 +100,7 @@ export const DEFAULT_CONFIG: UserConfig = {
   database: 'sqlite',
   sqlitePath: join(CONFIG_DIR, 'trust.db'),
   postgresUrl: undefined,
+  remoteApiUrl: DEFAULT_REMOTE_API_URL,
   authors: undefined,
   contexts: undefined,
 };
@@ -137,6 +142,8 @@ export type ResolvedRuntimeConfig = Omit<UserConfig, 'authors' | 'contexts'> & {
   sqlitePath: string;
   /** Resolved Postgres URL when using postgres (undefined if none configured). */
   postgresUrl?: string;
+  /** Remote API fallback URL (default: https://trust.dance). */
+  remoteApiUrl: string;
 };
 
 
@@ -557,6 +564,7 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
   const postgresUrl = resolvePostgresUrl(cli, base);
   const sqlitePath = resolveSqlitePath(cli, base);
   const database = resolveDatabaseDriver(cli, base, postgresUrl);
+  const remoteApiUrl = (process.env.TRUST_REMOTE_API_URL?.trim() || base.remoteApiUrl || DEFAULT_REMOTE_API_URL);
 
   return {
     ...base,
@@ -576,6 +584,7 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
     database,
     sqlitePath,
     postgresUrl,
+    remoteApiUrl,
   } as ResolvedRuntimeConfig;
 }
 

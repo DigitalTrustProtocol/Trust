@@ -66,26 +66,16 @@ program
   .option('-v, --value <value>', 'Trust value: 1 (trust), 0 (neutral), -1 (distrust)', '1')
   .option('--content <content>', 'Optional note explaining the trust assertion')
   .option('-r, --relay <url...>', 'Relay URL(s) to publish to')
-  .option(
-    '--no-server',
-    'Bypass Trust server and publish directly to relays (even if the server is running).',
-  )
   .option('--json', 'Output event as JSON')
   .action(async (subject, subjects, options) => {
-    try {
-      await addCommand({
-        subjects: [subject, ...(subjects || [])],
-        contexts: options.contexts,
-        value: parseInt(options.value, 10),
-        content: options.content,
-        relay: options.relay,
-        json: options.json,
-        // Commander sets .server default true, and to false when --no-server is passed.
-        server: options.server,
-      });
-    } finally {
-
-    }
+    await addCommand({
+      subjects: [subject, ...(subjects || [])],
+      contexts: options.contexts,
+      value: parseInt(options.value, 10),
+      content: options.content,
+      relay: options.relay,
+      json: options.json,
+    });
   });
 
 
@@ -153,19 +143,18 @@ program
   .option('--max-depth <n>', 'Max trust path depth (1-4, default: 4).', '4')
   .option('--authors <npub|hex>', 'Author pubkey (alternative to positional)')
   .option('-f, --format <name>', 'Output format: number, default, path', 'default')
+  .option('--api-url <url>', 'Use a specific API endpoint instead of auto-detecting')
   .option('--json', 'Output as JSON')
   .action(async (subject, authors, options) => {
-    try {
-      await resolveTrustCommand({
-        subject,
-        author: authors ?? options.authors,
-        context: options.contexts,
-        maxDepth: parseInt(options.maxDepth, 10),
-        format: options.format as 'number' | 'default' | 'path',
-        json: options.json,
-      });
-    } finally {
-    }
+    await resolveTrustCommand({
+      subject,
+      author: authors ?? options.authors,
+      context: options.contexts,
+      maxDepth: parseInt(options.maxDepth, 10),
+      format: options.format as 'number' | 'default' | 'path',
+      apiUrl: options.apiUrl,
+      json: options.json,
+    });
   });
 
 // show - Show trust event by d tag

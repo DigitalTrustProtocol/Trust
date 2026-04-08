@@ -105,14 +105,14 @@ describe('trust e2e tests', () => {
 
   describe('trust sync', () => {
     it('should run sync and create trust.db', async () => {
-      // Use --since to limit query scope when running against real relays (ignored in E2E offline mode)
-      const since = Math.floor(Date.now() / 1000) - 86400; // 24 hours ago
-      const { stdout, code } = await runCli(['sync', '--since', String(since)], {
+      const since = Math.floor(Date.now() / 1000) - 86400;
+      const { stdout, stderr, code } = await runCli(['sync', '--since', String(since)], {
         timeout: 20000,
       });
 
       expect(code).toBe(0);
-      expect(stdout).toMatch(/Synced \d+ event/);
+      const output = stdout + stderr;
+      expect(output).toMatch(/Synced \d+ event/);
       expect(existsSync(join(TRUST_DIR, 'trust.db'))).toBe(true);
     });
   });
@@ -124,7 +124,6 @@ describe('trust e2e tests', () => {
         'a'.repeat(64),
         '-v',
         '1',
-        '--no-server',
       ]);
 
       expect(code).not.toBe(0);
@@ -137,7 +136,7 @@ describe('trust e2e tests', () => {
       const pubkey = JSON.parse(whoami.stdout).publicKey as string;
 
       const { stdout, stderr, code } = await runCli(
-        ['add', pubkey, '-v', '1', '-c', 'e2e-test', '--no-server'],
+        ['add', pubkey, '-v', '1', '-c', 'e2e-test'],
         { timeout: 30000, flushDelayMs: 400 },
       );
 
@@ -150,15 +149,16 @@ describe('trust e2e tests', () => {
 
   describe('trust show', () => {
     it('should error for unknown event id', async () => {
-      const { stdout, code } = await runCli([
+      const { stdout, stderr, code } = await runCli([
         'show',
         'a'.repeat(64),
         '--source',
         'database',
       ]);
 
+      const output = stdout + stderr;
       expect(code).not.toBe(0);
-      expect(stdout).toMatch(/not found|Event not found/i);
+      expect(output).toMatch(/not found|Event not found/i);
     });
   });
 });

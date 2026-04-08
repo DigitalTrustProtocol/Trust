@@ -30,9 +30,9 @@ describe('client wrapper', () => {
 
     const available = await isServerAvailable();
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:3417/ping', {
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:3417/ping', expect.objectContaining({
       method: 'GET',
-    });
+    }));
     expect(available).toBe(true);
   });
 

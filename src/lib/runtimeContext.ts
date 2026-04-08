@@ -5,7 +5,6 @@ import {  getRuntimeConfig, ResolvedRuntimeConfig } from "../config.js";
 import { getAvailableRelays, getPool } from "./nostr/pool.js";
 import pino from "pino";
 import { getLoadedGraph } from "./trust/graphManager.js";
-import { isServerAvailable } from "./client.js";
 import { getPinoInstance } from "./logger.js";
 
 let runtimeContext: RuntimeContext | null = null;
@@ -19,8 +18,6 @@ export interface RuntimeContext extends ResolvedRuntimeConfig {
     authorSet: Set<string> | undefined;
     contextSet: Set<string> | undefined;
 
-    serverUp: boolean;
-
     statusCallback?: (status: string) => void;
     abortController: AbortController;
     loggerInstance?: pino.Logger;
@@ -29,7 +26,6 @@ export interface RuntimeContext extends ResolvedRuntimeConfig {
 
 export async function createRuntimeContext(config: ResolvedRuntimeConfig): Promise<RuntimeContext> {
     const abortController = new AbortController();
-    const serverUp = process.env.TRUST_E2E_OFFLINE === '1' ? false : await isServerAvailable();
 
     return {
         ...config,
@@ -38,7 +34,6 @@ export async function createRuntimeContext(config: ResolvedRuntimeConfig): Promi
         pool: null,
         authorSet: config.authors ? new Set<string>(config.authors) : undefined,
         contextSet: config.contexts ? new Set<string>(config.contexts) : undefined,
-        serverUp,
         statusCallback: undefined,
         abortController,
     };

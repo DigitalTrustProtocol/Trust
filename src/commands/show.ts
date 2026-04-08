@@ -2,7 +2,8 @@ import { queryEvents } from '../lib/nostr/pool.js';
 import { getAvailableRelays } from '../lib/nostr/pool.js';
 import { KIND_TRUST } from '../lib/nostr/nip32010.js';
 import { logger } from '../lib/logger.js';
-import { initRuntimeContext } from './sync.js';
+import { getRuntimeConfig } from '../config.js';
+import { closeTrustDb, getStore } from '../lib/db/dbManager.js';
 
 function prettyPrintEvent(event: {
   id: string;
@@ -41,19 +42,23 @@ export async function showTrustCommand(options: {
   let found = false;
 
   if (source === '' || source === 'database' || source === 'server') {
-    const runtimeContext = await initRuntimeContext(options as Record<string, unknown>);
-    const store = runtimeContext.store;
+    const cfg = getRuntimeConfig(options as Record<string, unknown>);
+    const store = await getStore(cfg);
     if (!store) throw new Error('Store not loaded');
-    const localResults = await store.query([{ kinds: [KIND_TRUST], '#d': [dTag], limit: 1 }]);
-    const local = localResults[0] ?? null;
-    if (local) {
-      if (!isJson) logger.info('Event was found in local database.');
-      found = true;
-      if (isJson) {
-        console.log(JSON.stringify(local));
-      } else {
-        prettyPrintEvent(local);
+    try {
+      const localResults = await store.query([{ kinds: [KIND_TRUST], '#d': [dTag], limit: 1 }]);
+      const local = localResults[0] ?? null;
+      if (local) {
+        if (!isJson) logger.info('Event was found in local database.');
+        found = true;
+        if (isJson) {
+          console.log(JSON.stringify(local));
+        } else {
+          prettyPrintEvent(local);
+        }
       }
+    } finally {
+      await closeTrustDb(store);
     }
   }
 
@@ -82,10 +87,9 @@ export async function showTrustCommand(options: {
   if (!found) {
     if (isJson) {
       console.log(JSON.stringify({ error: 'not_found', dTag }));
-      process.exitCode = 1;
     } else {
       logger.error(`Event not found: ${dTag}`);
-      process.exit(1);
     }
+    process.exitCode = 1;
   }
 }

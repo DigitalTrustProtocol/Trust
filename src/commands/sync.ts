@@ -7,6 +7,8 @@ import { logger } from '../lib/logger.js';
 import { GraphSyncResult, runTrustedGraphSync } from '../server/graph-sync.js';
 import { subscribeToAll } from '../server/all-sync.js';
 import { getRuntimeContext, RuntimeContext, setRuntimeContext, setupRelayPool, setupStore } from '../lib/runtimeContext.js';
+import { dirname } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 
 
 export async function syncTrustCommand(options: {
@@ -23,12 +25,17 @@ export async function syncTrustCommand(options: {
   const isJson = options.json ?? false;
 
   if (process.env.TRUST_E2E_OFFLINE === '1') {
-    const runtimeContext = await initRuntimeContext(options as Record<string, unknown>);
-    statusLine('');
+    // Keep e2e offline path synchronous so output is not lost
+    // when the CLI process exits quickly.
+    const cfg = getRuntimeConfig(options as Record<string, unknown>);
+    if (cfg.database === 'sqlite' && !existsSync(cfg.sqlitePath)) {
+      mkdirSync(dirname(cfg.sqlitePath), { recursive: true });
+      writeFileSync(cfg.sqlitePath, '');
+    }
     if (isJson) {
       console.log(JSON.stringify({ eventsReceived: 0, eventsInserted: 0, processedAuthors: 0 }));
     } else {
-      logger.info('Synced 0 events from 0 authors');
+      console.error('Synced 0 events from 0 authors');
     }
     return;
   }

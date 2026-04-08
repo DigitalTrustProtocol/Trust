@@ -17,12 +17,13 @@ export function normalizeBaseUrl(baseUrl?: string): string {
   return base;
 }
 
-export async function isServerAvailable(baseUrl?: string): Promise<boolean> {
+export async function isServerAvailable(baseUrl?: string, timeoutMs = 2000): Promise<boolean> {
   const base = normalizeBaseUrl(baseUrl);
 
   try {
     const res = await fetch(`${base}/ping`, {
       method: 'GET',
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return res.ok;
   } catch {
