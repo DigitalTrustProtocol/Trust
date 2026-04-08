@@ -12,6 +12,7 @@ import { getRuntimeContext, RuntimeContext, setRuntimeContext, setupRelayPool, s
 export async function syncTrustCommand(options: {
   relay?: string[];
   since?: string;
+  all?: boolean;
   authors?: string;
   contexts?: string;
   kinds?: number[];
@@ -52,7 +53,8 @@ export async function initRuntimeContext(
   const cfg = getRuntimeConfig(cli);
   const runtimeContext = await getRuntimeContext(cfg);
   
-  runtimeContext.syncSince = await getSinceFromTimestamp(undefined);
+  // --all skips the stored cursor and syncs from the very beginning
+  runtimeContext.syncSince = cli.all ? 0 : await getSinceFromTimestamp(undefined);
 
   runtimeContext.statusCallback = (status: string) => statusLine(status);
 

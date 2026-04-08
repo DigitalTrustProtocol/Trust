@@ -57,27 +57,6 @@ program
     }
   });
 
-// sync-time - View or update stored sync-time cursors (incremental fetch)
-program
-  .command('sync-time')
-  .description('View or update stored sync times (latest / last seen) used for incremental fetching')
-  .option('--get', 'Print the raw latest sync time value')
-  .option('--set <value>', 'Set the latest sync time to a specific unix value')
-  .option('--set-last-seen <value>', 'Set the last seen sync time to a specific unix value')
-  .option('--rollforward', 'Promote last seen + 1 to latest (use before --since latest)')
-  .option('--json', 'Output both sync times as a JSON object')
-  .action(async (options) => {
-    try {
-      await syncTimeCommand({
-        get: options.get,
-        set: options.set,
-        setLastSeen: options.setLastSeen,
-        rollforward: options.rollforward,
-        json: options.json,
-      });
-    } finally {
-    }
-  });
 
 // add - Add trust to the system (kind 32010, NIP-32010)
 program
@@ -109,12 +88,18 @@ program
     }
   });
 
+
 // sync - Sync trust events from relays
-program
+const syncCmd = program
   .command('sync')
-  .description('Sync trust events from relays into local database')
+  .description('Sync trust events from relays into local database');
+
+syncCmd
+  .command('run', { isDefault: true })
+  .description('Run sync (default when no subcommand is given)')
   .option('-r, --relay <url...>', 'Relay URL(s) to query')
-  .option('--since <unix-ts>', 'Start sync from this unix timestamp (overwrites stored value)')
+  .option('--since <unix-ts>', 'Start sync from this unix timestamp (overwrites stored cursor)')
+  .option('--all', 'Sync from the very beginning, ignoring the stored cursor')
   .option(
     '--authors <value>',
     'CLI → TRUST_AUTHORS → config: comma-separated hex/npub pubkeys. Omitted flag falls through. * or All = no author filter (subscribe-all sync).',
@@ -127,15 +112,37 @@ program
   .option('--sync-interval <seconds>', 'Seconds between sync runs (0 = run once)', (val: string) => parseInt(val, 10), 0)
   .option('--json', 'Output sync stats as JSON')
   .action(async (options) => {
-      await syncTrustCommand({
-        relay: options.relay,
-        since: options.since,
-        authors: options.authors,
-        contexts: options.contexts,
-        maxDepth: options.maxDepth,
-        syncInterval: options.syncInterval,
-        json: options.json,
-      });
+    await syncTrustCommand({
+      relay: options.relay,
+      since: options.since,
+      all: options.all,
+      authors: options.authors,
+      contexts: options.contexts,
+      maxDepth: options.maxDepth,
+      syncInterval: options.syncInterval,
+      json: options.json,
+    });
+  });
+
+// sync cursor - View or manage the incremental-fetch cursor (replaces sync-time)
+syncCmd
+  .command('cursor')
+  .description('View or manage the sync cursor (latest / last-seen timestamps used for incremental fetching)')
+  .option('--get', 'Print the raw latest sync time value')
+  .option('--set <value>', 'Set the latest sync time to a specific unix timestamp')
+  .option('--set-last-seen <value>', 'Set the last-seen sync time to a specific unix timestamp')
+  .option('--rollforward', 'Promote last-seen + 1 to latest')
+  .option('--reset', 'Clear both cursors so the next sync starts from the beginning')
+  .option('--json', 'Output both cursor values as JSON')
+  .action(async (options) => {
+    await syncTimeCommand({
+      get: options.get,
+      set: options.set,
+      setLastSeen: options.setLastSeen,
+      rollforward: options.rollforward,
+      reset: options.reset,
+      json: options.json,
+    });
   });
 
 // resolve - Resolve trust path and reputation
@@ -199,7 +206,6 @@ program
     'Trust `c` tag filter: All or comma-separated contexts (overrides config)',
   )
   .option('--max-depth <n>', 'Max trust graph depth to sync (default: 3)', (val: string) => parseInt(val, 10), 3)
-  .option('--sync-interval <seconds>', 'Seconds between graph sync runs (0 = run once)', (val: string) => parseInt(val, 10), 0)
   .option(
     '--service <name>',
     'Component to run: all (default), relay, api, or web',
@@ -220,7 +226,6 @@ program
         authors: options.authors,
         contexts: options.contexts,
         maxDepth: options.maxDepth,
-        syncInterval: options.syncInterval,
         service: options.service,
         database: options.database,
         json: options.json,

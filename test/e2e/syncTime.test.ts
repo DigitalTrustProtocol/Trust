@@ -40,7 +40,7 @@ function runCli(
   });
 }
 
-describe('trust sync-time e2e', () => {
+describe('trust sync cursor e2e', () => {
   beforeEach(() => {
     if (existsSync(TEST_HOME)) rmSync(TEST_HOME, { recursive: true });
     mkdirSync(TEST_HOME, { recursive: true });
@@ -52,9 +52,9 @@ describe('trust sync-time e2e', () => {
 
   // ── No options: human-readable status ──────────────────────────────────────
 
-  describe('trust sync-time (no options)', () => {
+  describe('trust sync cursor (no options)', () => {
     it('should show "not set" for both sync times when nothing stored', async () => {
-      const { stdout, code } = await runCli(['sync-time']);
+      const { stdout, code } = await runCli(['sync', 'cursor']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('Sync time status');
@@ -62,16 +62,16 @@ describe('trust sync-time e2e', () => {
     });
 
     it('should display latest sync time after --set', async () => {
-      await runCli(['sync-time', '--set', '1700000000']);
-      const { stdout, code } = await runCli(['sync-time']);
+      await runCli(['sync', 'cursor', '--set', '1700000000']);
+      const { stdout, code } = await runCli(['sync', 'cursor']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('1700000000');
     });
 
     it('should display last seen sync time after --set-last-seen', async () => {
-      await runCli(['sync-time', '--set-last-seen', '1700000001']);
-      const { stdout, code } = await runCli(['sync-time']);
+      await runCli(['sync', 'cursor', '--set-last-seen', '1700000001']);
+      const { stdout, code } = await runCli(['sync', 'cursor']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('1700000001');
@@ -80,31 +80,31 @@ describe('trust sync-time e2e', () => {
 
   // ── --set ──────────────────────────────────────────────────────────────────
 
-  describe('trust sync-time --set', () => {
+  describe('trust sync cursor --set', () => {
     it('should set the latest sync time to a specific value', async () => {
-      const { stdout, code } = await runCli(['sync-time', '--set', '1700000000']);
+      const { stdout, code } = await runCli(['sync', 'cursor', '--set', '1700000000']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('1700000000');
     });
 
     it('should overwrite a previously set sync time', async () => {
-      await runCli(['sync-time', '--set', '1700000000']);
-      const { stdout, code } = await runCli(['sync-time', '--set', '1710000000']);
+      await runCli(['sync', 'cursor', '--set', '1700000000']);
+      const { stdout, code } = await runCli(['sync', 'cursor', '--set', '1710000000']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('1710000000');
     });
 
     it('should accept 0 as a valid unix time', async () => {
-      const { stdout, code } = await runCli(['sync-time', '--set', '0']);
+      const { stdout, code } = await runCli(['sync', 'cursor', '--set', '0']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('0');
     });
 
     it('should fail with a non-numeric value', async () => {
-      const { stdout, stderr, code } = await runCli(['sync-time', '--set', 'not-a-number']);
+      const { stdout, stderr, code } = await runCli(['sync', 'cursor', '--set', 'not-a-number']);
 
       expect(code).not.toBe(0);
       const out = stdout + stderr;
@@ -112,8 +112,8 @@ describe('trust sync-time e2e', () => {
     });
 
     it('should persist the value across separate CLI invocations', async () => {
-      await runCli(['sync-time', '--set', '1700000000']);
-      const { stdout, code } = await runCli(['sync-time']);
+      await runCli(['sync', 'cursor', '--set', '1700000000']);
+      const { stdout, code } = await runCli(['sync', 'cursor']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('1700000000');
@@ -122,16 +122,16 @@ describe('trust sync-time e2e', () => {
 
   // ── --set-last-seen ────────────────────────────────────────────────────────
 
-  describe('trust sync-time --set-last-seen', () => {
+  describe('trust sync cursor --set-last-seen', () => {
     it('should set the last seen sync time to a specific value', async () => {
-      const { stdout, code } = await runCli(['sync-time', '--set-last-seen', '1700000005']);
+      const { stdout, code } = await runCli(['sync', 'cursor', '--set-last-seen', '1700000005']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('1700000005');
     });
 
     it('should fail with a non-numeric value', async () => {
-      const { stdout, stderr, code } = await runCli(['sync-time', '--set-last-seen', 'bad']);
+      const { stdout, stderr, code } = await runCli(['sync', 'cursor', '--set-last-seen', 'bad']);
 
       expect(code).not.toBe(0);
       const out = stdout + stderr;
@@ -139,8 +139,8 @@ describe('trust sync-time e2e', () => {
     });
 
     it('should persist across invocations', async () => {
-      await runCli(['sync-time', '--set-last-seen', '1700000005']);
-      const { stdout } = await runCli(['sync-time']);
+      await runCli(['sync', 'cursor', '--set-last-seen', '1700000005']);
+      const { stdout } = await runCli(['sync', 'cursor']);
 
       expect(stdout).toContain('1700000005');
     });
@@ -148,26 +148,26 @@ describe('trust sync-time e2e', () => {
 
   // ── --rollforward ──────────────────────────────────────────────────────────
 
-  describe('trust sync-time --rollforward', () => {
+  describe('trust sync cursor --rollforward', () => {
     it('should default to 0 when no last_seen has been recorded', async () => {
-      const { stdout, code } = await runCli(['sync-time', '--rollforward']);
+      const { stdout, code } = await runCli(['sync', 'cursor', '--rollforward']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('0');
     });
 
     it('should set latest to last_seen + 1', async () => {
-      await runCli(['sync-time', '--set-last-seen', '1700000010']);
-      const { stdout, code } = await runCli(['sync-time', '--rollforward']);
+      await runCli(['sync', 'cursor', '--set-last-seen', '1700000010']);
+      const { stdout, code } = await runCli(['sync', 'cursor', '--rollforward']);
 
       expect(code).toBe(0);
       expect(stdout).toContain('1700000011');
     });
 
     it('should persist the rolled-forward value as latest', async () => {
-      await runCli(['sync-time', '--set-last-seen', '1700000010']);
-      await runCli(['sync-time', '--rollforward']);
-      const { stdout } = await runCli(['sync-time', '--get']);
+      await runCli(['sync', 'cursor', '--set-last-seen', '1700000010']);
+      await runCli(['sync', 'cursor', '--rollforward']);
+      const { stdout } = await runCli(['sync', 'cursor', '--get']);
 
       expect(stdout.trim()).toBe('1700000011');
     });
@@ -175,17 +175,17 @@ describe('trust sync-time e2e', () => {
 
   // ── --get ──────────────────────────────────────────────────────────────────
 
-  describe('trust sync-time --get', () => {
+  describe('trust sync cursor --get', () => {
     it('should print "not set" when no latest sync time stored', async () => {
-      const { stdout, code } = await runCli(['sync-time', '--get']);
+      const { stdout, code } = await runCli(['sync', 'cursor', '--get']);
 
       expect(code).toBe(0);
       expect(stdout.trim()).toBe('not set');
     });
 
     it('should print the raw numeric value after --set', async () => {
-      await runCli(['sync-time', '--set', '1700000000']);
-      const { stdout, code } = await runCli(['sync-time', '--get']);
+      await runCli(['sync', 'cursor', '--set', '1700000000']);
+      const { stdout, code } = await runCli(['sync', 'cursor', '--get']);
 
       expect(code).toBe(0);
       expect(stdout.trim()).toBe('1700000000');
@@ -194,9 +194,9 @@ describe('trust sync-time e2e', () => {
 
   // ── --json ─────────────────────────────────────────────────────────────────
 
-  describe('trust sync-time --json', () => {
+  describe('trust sync cursor --json', () => {
     it('should output valid JSON with null values when nothing stored', async () => {
-      const { stdout, code } = await runCli(['sync-time', '--json']);
+      const { stdout, code } = await runCli(['sync', 'cursor', '--json']);
 
       expect(code).toBe(0);
       const parsed = JSON.parse(stdout);
@@ -205,8 +205,8 @@ describe('trust sync-time e2e', () => {
     });
 
     it('should include latest after --set', async () => {
-      await runCli(['sync-time', '--set', '1700000000']);
-      const { stdout, code } = await runCli(['sync-time', '--json']);
+      await runCli(['sync', 'cursor', '--set', '1700000000']);
+      const { stdout, code } = await runCli(['sync', 'cursor', '--json']);
 
       expect(code).toBe(0);
       const parsed = JSON.parse(stdout);
@@ -215,9 +215,9 @@ describe('trust sync-time e2e', () => {
     });
 
     it('should include both values when both are set', async () => {
-      await runCli(['sync-time', '--set', '1700000000']);
-      await runCli(['sync-time', '--set-last-seen', '1699999999']);
-      const { stdout, code } = await runCli(['sync-time', '--json']);
+      await runCli(['sync', 'cursor', '--set', '1700000000']);
+      await runCli(['sync', 'cursor', '--set-last-seen', '1699999999']);
+      const { stdout, code } = await runCli(['sync', 'cursor', '--json']);
 
       expect(code).toBe(0);
       const parsed = JSON.parse(stdout);
