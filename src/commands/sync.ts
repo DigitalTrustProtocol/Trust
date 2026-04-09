@@ -63,8 +63,6 @@ export async function initRuntimeContext(
   // --all skips the stored cursor and syncs from the very beginning
   runtimeContext.syncSince = cli.all ? 0 : await getSinceFromTimestamp(undefined);
 
-  runtimeContext.statusCallback = (status: string) => statusLine(status);
-
   await setupRelayPool(runtimeContext);
   await setupStore(runtimeContext);
 

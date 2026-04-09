@@ -3,7 +3,7 @@ import { getPinoInstance, initLogger, logger } from '../lib/logger.js';
 import { createApp, type ServerService } from '../server/app.js';
 import { getStore, setDbDriverOverride, type DbDriver } from '../lib/db/dbManager.js';
 import { getRuntimeConfig, resolveConfig, setRuntimeConfig, type ResolvedRuntimeConfig } from '../config.js';
-import { getRuntimeContext, RuntimeContext, setupRelayPool, setupStore } from '../lib/runtimeContext.js';
+import { getRuntimeContext, RuntimeContext, setupApi, setupRelayPool, setupStore } from '../lib/runtimeContext.js';
 
 const VALID_SERVICES = new Set<string>(['all', 'relay', 'api', 'web']);
 
@@ -63,8 +63,9 @@ async function initRuntimeContext(resolved: ResolvedRuntimeConfig): Promise<Runt
   if(runtimeContext.service === 'all' || runtimeContext.service === 'relay') {
     await setupRelayPool(runtimeContext);
   }
-  if(runtimeContext.service === 'api') {
-    //await setupApi(runtimeContext);
+  if(runtimeContext.service === 'all' || runtimeContext.service === 'api') {
+
+    await setupApi(runtimeContext);
   }
   if(runtimeContext.service === 'all' || runtimeContext.service === 'web') {
   }
@@ -81,7 +82,7 @@ async function runWebServer(runtimeContext: RuntimeContext): Promise<void> {
   const service = runtimeContext.service;
 
   const app = await createApp(service, runtimeContext);
-  await app.listen({ host, port });
+  app.listen({ host, port });
 
   if (json) {
     console.log(

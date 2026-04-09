@@ -81,7 +81,7 @@ export async function runTrustedGraphSync(runtimeContext: RuntimeContext): Promi
       //params.signal?.removeEventListener('abort', onParentAbort);
     }
 
-    runtimeContext.statusCallback?.(`Processed ${visitedAuthors.size} authors. Received ${eventsReceived} events. Inserted ${eventsInserted} events.` as string);
+    runtimeContext.loggerInstance?.info(`Processed ${visitedAuthors.size} authors. Received ${eventsReceived} events. Inserted ${eventsInserted} events.` as string);
   }
 
   return {

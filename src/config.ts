@@ -11,14 +11,22 @@ const CONFIG_DIR = process.env.TRUST_CONFIG_DIR
   ? join(process.cwd(), process.env.TRUST_CONFIG_DIR)
   : join(homedir(), '.trust');
 
-// Default relays for the Trust network
+// Default relays for the Trust network used for local server
 export const DEFAULT_RELAYS = [
+  'ws://localhost:3417/relay'
+];
+
+
+// Default relays for the Trust network
+// Current public relays but not used for now.
+export const DEFAULT_REMOTE_RELAYS = [
   'wss://relay.ditto.pub',
   'wss://relay.primal.net',
   'wss://relay.damus.io',
   'wss://nos.lol',
   'ws://localhost:3417/relay'
 ];
+
 
 // Default server host/port for server mode
 const DEFAULT_SERVER_HOST = 'localhost';

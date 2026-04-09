@@ -14,7 +14,7 @@ import { Filter } from "nostr-tools";
 
 export async function subscribeToAll(runtimeContext: RuntimeContext): Promise<GraphSyncResult> {
     let visitedEvent = new Set<string>();
-    const { relays, since, pool, graph, store, contexts, json, statusCallback } = runtimeContext;
+    const { relays, since, pool, graph, store, contexts, json } = runtimeContext;
     const signal = runtimeContext.abortController?.signal ?? new AbortSignal();
     let latestTimestamp = 0;
     let eventsReceived = 0;
@@ -37,7 +37,7 @@ export async function subscribeToAll(runtimeContext: RuntimeContext): Promise<Gr
           eventsInserted++;
           latestTimestamp = Math.max(latestTimestamp, await trackLatestSyncTime(SYNC_TIME_NS_SYNC, [event]));
         }
-        statusCallback?.(`Received ${eventsReceived} events. Inserted ${eventsInserted} events.` as string);
+        runtimeContext.loggerInstance?.info(`Received ${eventsReceived} events. Inserted ${eventsInserted} events.` as string);
       },
       onClosed: (subscriptionID, reason) => {
         return true; // stop the subscription

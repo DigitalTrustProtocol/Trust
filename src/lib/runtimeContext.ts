@@ -4,7 +4,7 @@ import { Graph } from "./trust/graph/Graph.js";
 import {  getRuntimeConfig, ResolvedRuntimeConfig } from "../config.js";
 import { getAvailableRelays, getPool } from "./nostr/pool.js";
 import pino from "pino";
-import { getLoadedGraph } from "./trust/graphManager.js";
+import { loadGraph } from "./trust/graphManager.js";
 import { getPinoInstance } from "./logger.js";
 
 let runtimeContext: RuntimeContext | null = null;
@@ -18,7 +18,6 @@ export interface RuntimeContext extends ResolvedRuntimeConfig {
     authorSet: Set<string> | undefined;
     contextSet: Set<string> | undefined;
 
-    statusCallback?: (status: string) => void;
     abortController: AbortController;
     loggerInstance?: pino.Logger;
 }
@@ -34,7 +33,6 @@ export async function createRuntimeContext(config: ResolvedRuntimeConfig): Promi
         pool: null,
         authorSet: config.authors ? new Set<string>(config.authors) : undefined,
         contextSet: config.contexts ? new Set<string>(config.contexts) : undefined,
-        statusCallback: undefined,
         abortController,
     };
 }
@@ -65,19 +63,26 @@ export async function setupRelayPool(runtimeContext: RuntimeContext): Promise<vo
     const relays = relaySelection.selected;
   
     if (relaySelection.offline.length > 0) {
-      runtimeContext.statusCallback?.(`Skipping offline relays: ${relaySelection.offline.map((status) => status.url).join(', ')}`);
+      runtimeContext.loggerInstance?.warn(`Skipping offline relays: ${relaySelection.offline.map((status) => status.url).join(', ')}`);
     }
   
     runtimeContext.relays = relays;
     runtimeContext.pool = getPool(0, relays);
+    runtimeContext.loggerInstance?.flush();
 }
 
 export async function setupStore(runtimeContext: RuntimeContext): Promise<void> {
-    runtimeContext.statusCallback?.('Initializing trust database...');
+    runtimeContext.loggerInstance?.info('Initializing trust database...');
+    try {
     runtimeContext.store = await getStore(runtimeContext);
+    } catch (error) {
+        runtimeContext.loggerInstance?.error('Error initializing trust database: ' + error);
+    }
+    runtimeContext.loggerInstance?.flush();
 }
 
 export async function setupApi(runtimeContext: RuntimeContext): Promise<void> {
-    runtimeContext.statusCallback?.('Initializing API...');
-    //runtimeContext.graph = await getLoadedGraph(runtimeContext.store, { author: '*', maxDepth: 4, focus: runtimeContext.focus });
+    runtimeContext.loggerInstance?.info('Initializing API...');
+    runtimeContext.graph = await loadGraph(runtimeContext);
+    runtimeContext.loggerInstance?.flush();
 }
