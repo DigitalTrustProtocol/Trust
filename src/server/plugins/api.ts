@@ -22,8 +22,27 @@ import { kvGet, kvSet, kvKeyLastSeenSyncTime } from '../../lib/db/kv.js';
 import { logger as rootLogger } from '../../lib/logger.js';
 import { KIND_TRUST, KIND_TRUST_MAX, KIND_TRUST_MIN } from '../../lib/nostr/nip32010.js';
 import { getLatestSyncTime, SYNC_TIME_NS_SYNC } from '../../lib/syncTime.js';
+import { exportGraphForViz } from '../../lib/trust/graphExport.js';
 
 const log = rootLogger.child({ plugin: 'api' });
+
+/** JSON-safe Score (Set and class instance do not serialize reliably). */
+function serializeScore(score: Score): Record<string, unknown> {
+  return {
+    count: score.count,
+    trustValue: score.trustValue,
+    degree: score.degree,
+    trust: score.trust,
+    distrust: score.distrust,
+    connected: score.connected,
+    visited: score.visited,
+    from: [...score.from],
+    subject: score.subject,
+    context: score.context,
+    kind: score.kind,
+    path: score.path,
+  };
+}
 
 type TrustBody = {
   subjects: string[];
@@ -311,7 +330,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
         format: body.format ?? 'default',
       });
 
-      return ok(score);
+      return ok(serializeScore(score));
     },
   );
 
@@ -352,7 +371,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
             maxDepth: body.maxDepth,
             format,
           });
-          return { subject, ok: true as const, score };
+          return { subject, ok: true as const, score: serializeScore(score) };
         } catch (err) {
           return {
             subject,
@@ -377,6 +396,20 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       lastSync: lastSeenRaw ? Number(lastSeenRaw) : null,
       uptime: Math.floor((Date.now() - startTime) / 1000),
     });
+  });
+
+  // ── Graph export (visualization) ───────────────────────────────────
+
+  app.get<{
+    Querystring: { maxEdges?: string };
+  }>('/graph/export', async (request, reply) => {
+    const graph = runtimeContext.graph;
+    if (!graph) {
+      return sendError(reply, 500, ErrorCode.GRAPH_NOT_FOUND, 'Graph not loaded');
+    }
+    const maxEdges = Math.min(Math.max(100, Number(request.query.maxEdges) || 10_000), 50_000);
+    const snapshot = exportGraphForViz(graph, { maxEdges });
+    return ok(snapshot);
   });
 
   // ── Events Query ───────────────────────────────────────────────────

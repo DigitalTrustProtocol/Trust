@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import cors from '@fastify/cors';
 import fastifySwagger from '@fastify/swagger';
 import fastifySwaggerUi from '@fastify/swagger-ui';
 import { getPinoInstance } from '../lib/logger.js';
@@ -17,6 +18,19 @@ export async function createApp(service: ServerService = 'all', runtimeContext: 
   }) as unknown as FastifyInstance;
 
   if (service === 'all' || service === 'api') {
+    await app.register(cors, {
+      origin: [
+        'https://trust.dance',
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+        'http://localhost:4173',
+        'http://127.0.0.1:4173',
+        'http://localhost:3417',
+        'http://127.0.0.1:3417',
+      ],
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    });
+
     await app.register(fastifySwagger, {
       openapi: {
         openapi: '3.0.3',
