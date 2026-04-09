@@ -65,7 +65,7 @@ async function initRuntimeContext(resolved: ResolvedRuntimeConfig): Promise<Runt
   }
   if(runtimeContext.service === 'all' || runtimeContext.service === 'api') {
 
-    await setupApi(runtimeContext);
+    //await setupApi(runtimeContext);
   }
   if(runtimeContext.service === 'all' || runtimeContext.service === 'web') {
   }
@@ -82,7 +82,12 @@ async function runWebServer(runtimeContext: RuntimeContext): Promise<void> {
   const service = runtimeContext.service;
 
   const app = await createApp(service, runtimeContext);
-  app.listen({ host, port });
+  try {
+    await app.listen({ host, port });
+  } catch (error) {
+    logger.error({ err: error, host, port, service }, 'Failed to start Trust server');
+    throw error;
+  }
 
   if (json) {
     console.log(

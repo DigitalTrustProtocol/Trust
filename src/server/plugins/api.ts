@@ -74,9 +74,44 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
   const isSplitApi = runtimeContext.service === 'api';
 
   app.addHook('onReady', async () => {
-    log.info('Loading trust graph…');
+    const mb = (bytes: number): number => Math.round((bytes / (1024 * 1024)) * 100) / 100;
+    const beforeMem = process.memoryUsage();
+    log.info({
+      memory: {
+        rssMb: mb(beforeMem.rss),
+        heapUsedMb: mb(beforeMem.heapUsed),
+        heapTotalMb: mb(beforeMem.heapTotal),
+        externalMb: mb(beforeMem.external),
+      },
+    }, 'Memory usage before graph load');
+
+    log.info('Loading trust graph');
     await loadGraph(runtimeContext);
-    log.info({ nodes: runtimeContext.graph?.nodes.size ?? 0, edges: runtimeContext.graph?.edges.size ?? 0 }, 'Trust graph loaded');
+    const afterMem = process.memoryUsage();
+    log.info({
+      nodes: runtimeContext.graph?.nodes.size ?? 0,
+      edges: runtimeContext.graph?.edges.size ?? 0,
+      memory: {
+        before: {
+          rssMb: mb(beforeMem.rss),
+          heapUsedMb: mb(beforeMem.heapUsed),
+          heapTotalMb: mb(beforeMem.heapTotal),
+          externalMb: mb(beforeMem.external),
+        },
+        after: {
+          rssMb: mb(afterMem.rss),
+          heapUsedMb: mb(afterMem.heapUsed),
+          heapTotalMb: mb(afterMem.heapTotal),
+          externalMb: mb(afterMem.external),
+        },
+        delta: {
+          rssMb: mb(afterMem.rss - beforeMem.rss),
+          heapUsedMb: mb(afterMem.heapUsed - beforeMem.heapUsed),
+          heapTotalMb: mb(afterMem.heapTotal - beforeMem.heapTotal),
+          externalMb: mb(afterMem.external - beforeMem.external),
+        },
+      },
+    }, 'Trust graph loaded');
 
     if (!isSplitApi) return;
 
