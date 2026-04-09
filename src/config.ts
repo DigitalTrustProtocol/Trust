@@ -83,10 +83,6 @@ export interface UserConfig {
   serverService?: 'all' | 'relay' | 'api' | 'web';
   quietTimeoutMs?: number;
   json?: boolean;
-  service?: 'all' | 'relay' | 'api' | 'web';
-  database?: 'sqlite' | 'postgres';
-  sqlitePath?: string;
-  postgresUrl?: string;
   /** Remote API base URL used when no local server is available (default: https://trust.dance). */
   remoteApiUrl?: string;
 }
@@ -104,10 +100,6 @@ export const DEFAULT_CONFIG: UserConfig = {
   quietTimeoutMs: 1000,
   kinds: DEFAULT_SYNC_KINDS,
   json: false,
-  service: 'all',
-  database: 'sqlite',
-  sqlitePath: join(CONFIG_DIR, 'trust.db'),
-  postgresUrl: undefined,
   remoteApiUrl: DEFAULT_REMOTE_API_URL,
   authors: undefined,
   contexts: undefined,
@@ -144,12 +136,14 @@ export type ResolvedRuntimeConfig = Omit<UserConfig, 'authors' | 'contexts'> & {
   kinds: number[];
   json: boolean;
   service: 'all' | 'relay' | 'api' | 'web';
-  /** Effective DB driver (CLI → env → config → infer from URL). */
+  /** Database type: sqlite or postgres. */
   database: 'sqlite' | 'postgres';
-  /** Resolved SQLite file path when using sqlite. */
-  sqlitePath: string;
-  /** Resolved Postgres URL when using postgres (undefined if none configured). */
-  postgresUrl?: string;
+  /**
+   * Unified connection string for the active database.
+   * For sqlite: file path (e.g. ~/.trust/trust.db).
+   * For postgres: connection URL (e.g. postgres://user:pass@host:5432/db).
+   */
+  connectionString: string;
   /** Remote API fallback URL (default: https://trust.dance). */
   remoteApiUrl: string;
 };
@@ -377,62 +371,114 @@ export function buildPostgresUrlFromPgEnv(): string | undefined {
   return url;
 }
 
+// ——— Unified database resolution ———
+
+export interface DbConfig {
+  database: 'sqlite' | 'postgres';
+  connectionString: string;
+}
+
 /**
- * Resolved Postgres URL. Priority: CLI `postgresUrl` → `TRUST_POSTGRES_URL` → `DATABASE_URL` →
- * `PGHOST`/`PGUSER`/… → `config.db.postgresUrl`.
+ * Resolve database type and connection string.
+ *
+ * **Priority** (first match wins at each level):
+ *
+ * | Level       | Database type             | Connection string                                        |
+ * |-------------|---------------------------|----------------------------------------------------------|
+ * | CLI         | `--database`              | `--connection-string`                                    |
+ * | Environment | `TRUST_DATABASE`          | `TRUST_CONNECTION_STRING`, `DATABASE_URL` (pg only),     |
+ * |             |                           | `TRUST_POSTGRES_URL` (pg), `PGHOST/…` (pg),             |
+ * |             |                           | `TRUST_SQLITE_PATH` (sqlite only)                        |
+ * | Config file | `db.driver`               | `db.postgresUrl` (pg), `db.sqlitePath` (sqlite)          |
+ * | Default     | `sqlite`                  | `~/.trust/trust.db`                                      |
+ *
+ * When the database type is omitted, it is inferred from the connection string
+ * (`postgres://` or `postgresql://` → postgres, anything else → sqlite).
+ *
+ * Type-specific env vars (e.g. `DATABASE_URL`) are skipped when an explicit
+ * type doesn't match, so `TRUST_DB_DRIVER=sqlite` + `DATABASE_URL` won't
+ * accidentally use the postgres URL as a file path.
  */
-export function resolvePostgresUrl(cli: Record<string, unknown>, base: UserConfig): string | undefined {
-  const fromCli = getCliString(cli, 'postgresUrl')?.trim();
-  if (fromCli) return fromCli;
-  const fromTrustEnv = process.env.TRUST_POSTGRES_URL?.trim();
-  if (fromTrustEnv) return fromTrustEnv;
-  const fromDatabaseUrl = process.env.DATABASE_URL?.trim();
-  if (fromDatabaseUrl) return fromDatabaseUrl;
-  const fromPgEnv = buildPostgresUrlFromPgEnv();
-  if (fromPgEnv) return fromPgEnv;
-  const fromConfig = base.db?.postgresUrl?.trim();
-  if (fromConfig) return fromConfig;
+export function resolveDatabase(cli: Record<string, unknown>, base: UserConfig): DbConfig {
+  const explicitType = resolveExplicitDatabaseType(cli, base);
+  const connectionString = resolveConnectionString(cli, base, explicitType);
+  const database = explicitType
+    ?? (connectionString && looksLikePostgresUrl(connectionString) ? 'postgres' : 'sqlite');
+
+  if (database === 'postgres' && !connectionString) {
+    throw new Error(
+      'Postgres selected but no connection string provided. ' +
+      'Use --connection-string, TRUST_CONNECTION_STRING, or DATABASE_URL.',
+    );
+  }
+
+  return {
+    database,
+    connectionString: connectionString ?? PATHS.trustDb,
+  };
+}
+
+/**
+ * Explicit database type from CLI / env / config (without inference).
+ * Returns `undefined` when no layer specifies a type.
+ */
+function resolveExplicitDatabaseType(
+  cli: Record<string, unknown>,
+  base: UserConfig,
+): 'sqlite' | 'postgres' | undefined {
+  const fromCli = getCliString(cli, 'database')?.trim().toLowerCase();
+  if (fromCli === 'sqlite' || fromCli === 'postgres') return fromCli;
+  if (fromCli !== undefined && fromCli !== '') {
+    throw new Error('Invalid --database value. Use sqlite or postgres.');
+  }
+
+  const fromEnv = (process.env.TRUST_DATABASE ?? process.env.TRUST_DB_DRIVER)?.trim().toLowerCase();
+  if (fromEnv === 'sqlite' || fromEnv === 'postgres') return fromEnv;
+
+  const fromConfig = base.db?.driver;
+  if (fromConfig === 'sqlite' || fromConfig === 'postgres') return fromConfig;
+
   return undefined;
 }
 
 /**
- * SQLite DB file path. Priority: CLI `sqlitePath` → `TRUST_SQLITE_PATH` → `config.db.sqlitePath` →
- * default `PATHS.trustDb`.
+ * Connection string resolution. Universal sources (`--connection-string`,
+ * `TRUST_CONNECTION_STRING`) are always checked. Type-specific sources
+ * (`DATABASE_URL`, `TRUST_SQLITE_PATH`, etc.) are skipped when they
+ * don't match the explicit database type.
  */
-export function resolveSqlitePath(cli: Record<string, unknown>, base: UserConfig): string {
-  const fromCli = getCliString(cli, 'sqlitePath')?.trim();
-  if (fromCli) return fromCli;
-  const fromEnv = process.env.TRUST_SQLITE_PATH?.trim();
-  if (fromEnv) return fromEnv;
-  const fromConfig = base.db?.sqlitePath?.trim();
-  if (fromConfig) return fromConfig;
-  return PATHS.trustDb;
-}
-
-function parseDatabaseCli(cli: Record<string, unknown>): 'sqlite' | 'postgres' | undefined {
-  if (!cliHas(cli, 'database')) return undefined;
-  const raw = getCliString(cli, 'database');
-  if (raw === undefined || raw.trim() === '') return undefined;
-  const d = raw.trim().toLowerCase();
-  if (d === 'sqlite' || d === 'postgres') return d;
-  throw new Error('Invalid --database value. Use sqlite or postgres.');
-}
-
-/**
- * DB driver. Priority: CLI `--database` → `TRUST_DB_DRIVER` → `config.db.driver` → infer from URL
- * (postgres if a URL is available, else sqlite).
- */
-export function resolveDatabaseDriver(
+function resolveConnectionString(
   cli: Record<string, unknown>,
   base: UserConfig,
-  postgresUrl: string | undefined,
-): 'sqlite' | 'postgres' {
-  const fromCli = parseDatabaseCli(cli);
-  if (fromCli !== undefined) return fromCli;
-  const envDriver = process.env.TRUST_DB_DRIVER?.trim().toLowerCase();
-  if (envDriver === 'postgres' || envDriver === 'sqlite') return envDriver;
-  if (base.db?.driver === 'postgres' || base.db?.driver === 'sqlite') return base.db.driver;
-  return postgresUrl ? 'postgres' : 'sqlite';
+  explicitType: 'sqlite' | 'postgres' | undefined,
+): string | undefined {
+  const fromCli = getCliString(cli, 'connectionString')?.trim();
+  if (fromCli) return fromCli;
+
+  const fromUniversalEnv = process.env.TRUST_CONNECTION_STRING?.trim();
+  if (fromUniversalEnv) return fromUniversalEnv;
+
+  if (explicitType !== 'sqlite') {
+    const pg =
+      process.env.DATABASE_URL?.trim() ||
+      process.env.TRUST_POSTGRES_URL?.trim() ||
+      buildPostgresUrlFromPgEnv() ||
+      base.db?.postgresUrl?.trim();
+    if (pg) return pg;
+  }
+
+  if (explicitType !== 'postgres') {
+    const sqlite =
+      process.env.TRUST_SQLITE_PATH?.trim() ||
+      base.db?.sqlitePath?.trim();
+    if (sqlite) return sqlite;
+  }
+
+  return undefined;
+}
+
+function looksLikePostgresUrl(s: string): boolean {
+  return s.startsWith('postgres://') || s.startsWith('postgresql://');
 }
 
 function parseKindsEnv(raw: string | undefined): number[] | undefined {
@@ -495,11 +541,10 @@ function mergeEffectiveHostPort(cli: Record<string, unknown>, base: UserConfig):
  * Merge `config.json`, defaults, CLI, env, and identity into one runtime object.
  * Pass a plain object (e.g. Commander `options`); only **present** keys override lower layers.
  *
- * **Precedence** (each field uses the first available): CLI → `process.env` (`TRUST_*`, `PG*`, etc.)
- * → `config.json` → built-in defaults.
+ * **Precedence** (each field uses the first available):
+ *   CLI → `process.env` (`TRUST_*`, `PG*`, etc.) → `config.json` → built-in defaults.
  *
- * Database: `--database` / `postgresUrl` / `sqlitePath` on CLI; `TRUST_DB_DRIVER`, `TRUST_POSTGRES_URL`,
- * `TRUST_SQLITE_PATH`, `DATABASE_URL`, `PGHOST`/`PGUSER`/…, then `config.db.*`.
+ * **Database**: see {@link resolveDatabase} for the full priority chain.
  *
  * **Authors / contexts**: CLI → `TRUST_AUTHORS` / `TRUST_CONTEXTS` → `config.json`. Omitted layer falls
  * through. Explicit empty, `*`, or `all` → `undefined` (no filter).
@@ -516,14 +561,14 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
   const contexts = contextsRaw?.length ? [...new Set(contextsRaw)] : undefined;
 
   const { host, port } = mergeEffectiveHostPort(cli, base);
-
   const relays = mergeEffectiveRelays(cli, base);
+  const { database, connectionString } = resolveDatabase(cli, base);
 
-  let sinceString: string | undefined = cli['since'] ? cli['since'] as string : process.env.TRUST_SINCE?.trim();
-  let since: number | undefined = parseOptionalUnixTimestamp(sinceString ?? base.since);
+  const sinceString: string | undefined = cli['since'] ? cli['since'] as string : process.env.TRUST_SINCE?.trim();
+  const since: number | undefined = parseOptionalUnixTimestamp(sinceString ?? base.since);
 
-  let syncSinceString: string | undefined = cli['syncSince'] ? cli['syncSince'] as string : process.env.TRUST_SYNC_SINCE?.trim();
-  let syncSince: number | undefined = parseOptionalUnixTimestamp(syncSinceString ?? base.since);
+  const syncSinceString: string | undefined = cli['syncSince'] ? cli['syncSince'] as string : process.env.TRUST_SYNC_SINCE?.trim();
+  const syncSince: number | undefined = parseOptionalUnixTimestamp(syncSinceString ?? base.since);
 
   const maxDepthEnv = process.env.TRUST_MAX_DEPTH?.trim();
   let maxDepthFromEnv: number | undefined;
@@ -569,9 +614,6 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
     }
   }
 
-  const postgresUrl = resolvePostgresUrl(cli, base);
-  const sqlitePath = resolveSqlitePath(cli, base);
-  const database = resolveDatabaseDriver(cli, base, postgresUrl);
   const remoteApiUrl = (process.env.TRUST_REMOTE_API_URL?.trim() || base.remoteApiUrl || DEFAULT_REMOTE_API_URL);
 
   return {
@@ -590,8 +632,7 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
     json,
     service,
     database,
-    sqlitePath,
-    postgresUrl,
+    connectionString,
     remoteApiUrl,
   } as ResolvedRuntimeConfig;
 }

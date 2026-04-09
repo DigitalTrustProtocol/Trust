@@ -20,20 +20,6 @@ vi.mock('../../../src/config.js', async (importOriginal) => {
     PATHS,
     loadUserConfig,
     mergeUserConfig: () => ({ ...actual.DEFAULT_CONFIG, ...loadUserConfig() }),
-    resolveSqlitePath: (cli: Record<string, unknown>, base: actual.UserConfig) => {
-      if (Object.prototype.hasOwnProperty.call(cli, 'sqlitePath')) {
-        const v = cli['sqlitePath'];
-        if (v !== undefined && v !== null) {
-          const s = String(v).trim();
-          if (s) return s;
-        }
-      }
-      const fromEnv = process.env.TRUST_SQLITE_PATH?.trim();
-      if (fromEnv) return fromEnv;
-      const fromConfig = base.db?.sqlitePath?.trim();
-      if (fromConfig) return fromConfig;
-      return PATHS.trustDb;
-    },
   };
 });
 

@@ -32,37 +32,16 @@ function prettyPrintEvent(event: {
 export async function showTrustCommand(options: {
   dTag: string;
   relay?: string[];
-  json?: boolean;
   source?: 'database' | 'server' | 'relay';
+  json?: boolean;
 }): Promise<void> {
   const dTag = options.dTag.trim();
   const isJson = options.json ?? false;
+  const source = options.source ?? 'relay';
 
-  const source = options.source || '';
   let found = false;
 
-  if (source === '' || source === 'database' || source === 'server') {
-    const cfg = getRuntimeConfig(options as Record<string, unknown>);
-    const store = await getStore(cfg);
-    if (!store) throw new Error('Store not loaded');
-    try {
-      const localResults = await store.query([{ kinds: [KIND_TRUST], '#d': [dTag], limit: 1 }]);
-      const local = localResults[0] ?? null;
-      if (local) {
-        if (!isJson) logger.info('Event was found in local database.');
-        found = true;
-        if (isJson) {
-          console.log(JSON.stringify(local));
-        } else {
-          prettyPrintEvent(local);
-        }
-      }
-    } finally {
-      await closeTrustDb(store);
-    }
-  }
-
-  if (!found && (source === 'relay' || source === '')) {
+  if (source === 'relay') {
     const relaySelection = await getAvailableRelays(options.relay);
     const relays = relaySelection.selected;
     if (!isJson && relaySelection.offline.length > 0) {

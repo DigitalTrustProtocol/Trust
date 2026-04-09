@@ -22,7 +22,7 @@ export type { ResolveFormat };
 async function pickApiHost(cfg: ResolvedRuntimeConfig): Promise<string | null> {
   if (process.env.TRUST_E2E_OFFLINE === '1') return null;
 
-  if (cfg.database === 'sqlite' && existsSync(cfg.sqlitePath)) {
+  if (cfg.database === 'sqlite' && existsSync(cfg.connectionString)) {
     const localUrl = `http://${cfg.host}:${cfg.port}`;
     if (await isServerAvailable(localUrl)) {
       return localUrl;

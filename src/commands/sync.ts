@@ -20,6 +20,8 @@ export async function syncTrustCommand(options: {
   kinds?: number[];
   maxDepth?: number;
   syncInterval?: number;
+  database?: string;
+  connectionString?: string;
   json?: boolean;
 }): Promise<void> {
   const isJson = options.json ?? false;
@@ -28,9 +30,9 @@ export async function syncTrustCommand(options: {
     // Keep e2e offline path synchronous so output is not lost
     // when the CLI process exits quickly.
     const cfg = getRuntimeConfig(options as Record<string, unknown>);
-    if (cfg.database === 'sqlite' && !existsSync(cfg.sqlitePath)) {
-      mkdirSync(dirname(cfg.sqlitePath), { recursive: true });
-      writeFileSync(cfg.sqlitePath, '');
+    if (cfg.database === 'sqlite' && !existsSync(cfg.connectionString)) {
+      mkdirSync(dirname(cfg.connectionString), { recursive: true });
+      writeFileSync(cfg.connectionString, '');
     }
     if (isJson) {
       console.log(JSON.stringify({ eventsReceived: 0, eventsInserted: 0, processedAuthors: 0 }));

@@ -100,6 +100,8 @@ syncCmd
   )
   .option('--max-depth <n>', 'Max trust graph depth to sync (default: 3)', (val: string) => parseInt(val, 10), 3)
   .option('--sync-interval <seconds>', 'Seconds between sync runs (0 = run once)', (val: string) => parseInt(val, 10), 0)
+  .option('--database <driver>', 'Database type: sqlite or postgres (default: sqlite)')
+  .option('--connection-string <value>', 'Database connection: file path for sqlite, URL for postgres')
   .option('--json', 'Output sync stats as JSON')
   .action(async (options) => {
     await syncTrustCommand({
@@ -110,6 +112,8 @@ syncCmd
       contexts: options.contexts,
       maxDepth: options.maxDepth,
       syncInterval: options.syncInterval,
+      database: options.database,
+      connectionString: options.connectionString,
       json: options.json,
     });
   });
@@ -169,8 +173,8 @@ program
       await showTrustCommand({
         dTag,
         relay: options.relay,
-        json: options.json,
         source: options.source,
+        json: options.json
       });
     } finally {
     }
@@ -200,10 +204,8 @@ program
     'Component to run: all (default), relay, api, or web',
     (val: string) => parseServerService(val),
   )
-  .option(
-    '--database <driver>',
-    'Trust store: sqlite or postgres (default: postgres if DATABASE_URL / PG* / config URL is set, else sqlite)',
-  )
+  .option('--database <driver>', 'Database type: sqlite or postgres (default: sqlite)')
+  .option('--connection-string <value>', 'Database connection: file path for sqlite, URL for postgres')
   .option('--json', 'Output startup info as JSON')
   .action(async (options) => {
     try {
@@ -217,6 +219,7 @@ program
         maxDepth: options.maxDepth,
         service: options.service,
         database: options.database,
+        connectionString: options.connectionString,
         json: options.json,
       });
     } finally {

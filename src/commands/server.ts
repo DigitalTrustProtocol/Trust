@@ -1,9 +1,9 @@
 import { getLatestSyncTime, rollForwardSyncTime, SYNC_TIME_NS_SYNC } from '../lib/syncTime.js';
 import { getPinoInstance, initLogger, logger } from '../lib/logger.js';
 import { createApp, type ServerService } from '../server/app.js';
-import { getStore, setDbDriverOverride, type DbDriver } from '../lib/db/dbManager.js';
-import { getRuntimeConfig, resolveConfig, setRuntimeConfig, type ResolvedRuntimeConfig } from '../config.js';
-import { getRuntimeContext, RuntimeContext, setupApi, setupRelayPool, setupStore } from '../lib/runtimeContext.js';
+import { getStore } from '../lib/db/dbManager.js';
+import { getRuntimeConfig,type ResolvedRuntimeConfig } from '../config.js';
+import { getRuntimeContext, RuntimeContext, setupApi, setupRelayPool } from '../lib/runtimeContext.js';
 
 const VALID_SERVICES = new Set<string>(['all', 'relay', 'api', 'web']);
 
@@ -29,6 +29,7 @@ export async function serverCommand(options: {
   /** Omitted or `all`: run relay, API, and web in one process. */
   service?: ServerService;
   database?: string;
+  connectionString?: string;
 }): Promise<void> {
   initLogger('server');
 
@@ -37,6 +38,7 @@ export async function serverCommand(options: {
   logger.info({
     service: cfg.service,
     database: cfg.database,
+    connectionString: cfg.database === 'postgres' ? '***' : cfg.connectionString,
     host: cfg.host,
     port: cfg.port,
     logLevel: process.env.TRUST_LOG_LEVEL ?? 'info',
@@ -47,8 +49,6 @@ export async function serverCommand(options: {
   }, 'Starting Trust server');
 
   const runtimeContext = await initRuntimeContext(cfg);
-
-  setDbDriverOverride(cfg.database as DbDriver);
 
   await runWebServer(runtimeContext);
 }

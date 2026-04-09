@@ -1,10 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { getOrCreateKeyPair, hasSecretKey } from '../lib/keys.js';
-import { createSignedEvent } from '../lib/signer.js';
-import { publishEvent, queryEvents } from '../lib/nostr/pool.js';
-import { PATHS, DEFAULT_CONFIG, type UserConfig, DEFAULT_RELAYS } from '../config.js';
+import { PATHS, DEFAULT_CONFIG, type UserConfig } from '../config.js';
 import { logger } from '../lib/logger.js';
-import { initRuntimeContext } from './sync.js';
 
 export async function initCommand(options: {
   name?: string;
@@ -67,11 +64,16 @@ export async function initCommand(options: {
   writeFileSync(PATHS.config, JSON.stringify(config, null, 2), { mode: 0o600 });
   if (!isJson) logger.info(`Config saved to ${PATHS.config}`);
 
+  /*
+  // This should be handled by the init.
   const runtimeContext = await initRuntimeContext(options as Record<string, unknown>);
   let store = runtimeContext.store;
   if (!store) throw new Error('Store not loaded');
   if (!isJson) logger.info(`Trust database initialized at ${PATHS.trustDb}`);
+  */
 
+  /*
+  // This should not be handled by the init.
   if ((name || about) && !options.skipProfile) {
     if (!isJson) logger.info('Checking for existing profile on Nostr relays...');
 
@@ -107,6 +109,7 @@ export async function initCommand(options: {
       if (!isJson) logger.error(`Failed to check/publish profile: ${error instanceof Error ? error.message : error}`);
     }
   }
+  */
 
   if (isJson) {
     console.log(JSON.stringify({

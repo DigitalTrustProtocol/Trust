@@ -97,13 +97,6 @@ describe('identity e2e tests', () => {
       expect(config.relays).toBeInstanceOf(Array);
     });
 
-    it('should create trust.db on init', async () => {
-      const { code } = await runCli(['init', '--skip-profile']);
-
-      expect(code).toBe(0);
-      expect(existsSync(join(TRUST_DIR, 'trust.db'))).toBe(true);
-    });
-
     it('should warn when already initialized', async () => {
       await runCli(['init', '--skip-profile']);
       const { stdout } = await runCli(['init', '--skip-profile']);

@@ -20,75 +20,28 @@ export interface ExtendedNRelay extends NRelay {
   allEvents(kinds: number[], authors: string[], contexts: string[], signal?: AbortSignal): AsyncIterable<NostrEvent>;
 }
 
-
-/*
-interface RuntimeDbConfig {
-  driver: DbDriver;
-  sqlitePath: string;
-  postgresUrl?: string;
-}
-*/
-
 let storeInstance: Store | null = null;
-let cachedStoreKey: string | null = null;
-
-function resolvedStoreCacheKey(cfg: ResolvedRuntimeConfig): string {
-  if (cfg.database === 'postgres') {
-    return `pg:${cfg.postgresUrl ?? ''}`;
-  }
-  return `sqlite:${cfg.sqlitePath}`;
-}
-
-/** Set by `server` CLI before init when `--database` is passed. */
-let dbDriverCliOverride: DbDriver | undefined;
-
-export function setDbDriverOverride(driver: DbDriver | undefined): void {
-  dbDriverCliOverride = driver;
-}
 
 export type NSQLiteDbInput = string | Database.Database;
-/*
-function resolveDbConfig(): RuntimeDbConfig {
-  const base = mergeUserConfig();
-  const postgresUrl = resolvePostgresUrl({}, base);
-  const sqlitePath = resolveSqlitePath({}, base);
 
-  let driver: DbDriver;
-  if (dbDriverCliOverride === 'postgres' || dbDriverCliOverride === 'sqlite') {
-    driver = dbDriverCliOverride;
-  } else {
-    driver = resolveDatabaseDriver({}, base, postgresUrl);
-  }
-
-  return { driver, sqlitePath, postgresUrl };
-}
-*/
 export async function createStore(cfg: ResolvedRuntimeConfig): Promise<Store> {
-
-   if (cfg.database === 'postgres') {
-    if (!cfg.postgresUrl) {
-      throw new Error(
-        'Postgres selected but no connection URL found. Set DATABASE_URL, or PGHOST/PGUSER/PGDATABASE (and optional PGPASSWORD, PGPORT), or TRUST_POSTGRES_URL / config.db.postgresUrl.',
-      );
-    }
-
-    const store = await createNPostgresStore(cfg.postgresUrl!);
+  if (cfg.database === 'postgres') {
+    const store = await createNPostgresStore(cfg.connectionString);
     await migratePostgresKV(store.db);
     return store;
   }
 
   if (cfg.database === 'sqlite') {
-    const dbDir = dirname(cfg.sqlitePath);
+    const dbDir = dirname(cfg.connectionString);
     if (!existsSync(dbDir)) {
       mkdirSync(dbDir, { recursive: true });
     }
-
-    const store = await createNSQLiteStore(cfg.sqlitePath);
+    const store = await createNSQLiteStore(cfg.connectionString);
     await migrateSQLiteKV(store.db);
     return store;
   }
 
-  throw new Error('Invalid database driver');
+  throw new Error(`Unsupported database type: ${cfg.database}`);
 }
 
 
@@ -119,22 +72,9 @@ export async function createNSQLiteStore(db: NSQLiteDbInput, opts?: NSQLiteOpts)
 const DB_INIT_CLI: Record<string, unknown> = { authors: '*' };
 
 export async function getStore(cfg: ResolvedRuntimeConfig | undefined = undefined): Promise<Store> {
-  if(storeInstance) return storeInstance;
- 
+  if (storeInstance) return storeInstance;
 
   const resolved = cfg ?? getRuntimeConfig(DB_INIT_CLI);
-  /*
-  const key = resolvedStoreCacheKey(resolved);
-  if (storeInstance && cachedStoreKey === key) {
-    return storeInstance;
-  }
-  if (storeInstance) {
-    await storeInstance.close();
-    storeInstance = null;
-    cachedStoreKey = null;
-  }
-  cachedStoreKey = key;
-  */
   storeInstance = await createStore(resolved);
   return storeInstance;
 }
@@ -145,7 +85,6 @@ export async function closeStore(store: Store | null = storeInstance): Promise<v
   }
   if (!store || store === storeInstance) {
     storeInstance = null;
-    cachedStoreKey = null;
   }
 }
 
