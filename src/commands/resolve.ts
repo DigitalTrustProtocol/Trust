@@ -120,7 +120,6 @@ function outputResolveResult(
   const value = score.trustValue;
 
   if (format === 'number') {
-    if (!score) {
       if (json) {
         console.log({
           value,
@@ -129,14 +128,8 @@ function outputResolveResult(
         console.log(value);
       }
       return;
-    } else {
-      if (json) {
-        console.log(JSON.stringify([]));
-      } else {
-        console.log("No connection found");
-      }
     }
-  }
+  
 
   if (format === 'path') {
       console.log(JSON.stringify(scores, null, 2));
