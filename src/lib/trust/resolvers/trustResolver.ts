@@ -3,7 +3,8 @@ import { KIND_TRUST } from "../../nostr/nip32010.js";
 import { IResolveStrategy, IResolveStrategyOptions } from "./IResolveStrategy.js";
 import { Score, ScoreMap } from "./Score.js";
 import { type EdgeSubject } from "../graph/EdgeMap.js";
-import pathStrategy from "./pathStrategy.js";
+import { IEdge } from "../graph/Edge.js";
+import pathStrategyJson from "./pathStrategyJson.js";
 
 const MAX_DEPTH = 4;
 
@@ -26,31 +27,36 @@ function getIncomingFromGraph(
   context: string | undefined,
   time: number
   //subjectType: SubjectType
-): Map<string, { value: number }> | undefined {
+): Map<string, IEdge> | undefined {
   const node = graph.nodes.get(subjectId);
   if (!node) return undefined;
 
+  // Do not make sense. context is always defined.
+  /*
   if (context === undefined || context === null) {
-    const result = new Map<string, { value: number }>();
-    const contexts = node.incoming.getContexts({ kind: KIND_TRUST, subjectType: node.type }); 
+    const contexts = node.incoming.getContexts({ kind: KIND_TRUST, subjectType: node.type });
     if (!contexts) return undefined;
     for (const [, subjectMap] of contexts.entries()) {
       for (const [authorId, edge] of subjectMap.entries()) {
         if (!edge.isValidAt(time)) continue;
-        result.set(authorId, { value: edge.value });
+        result.set(authorId, edge);
       }
     }
     return result.size > 0 ? result : undefined;
   }
+*/
 
-  const subjectMap = node.incoming.getSubjects({ kind: KIND_TRUST, context, subjectType: node.type });
-  if (!subjectMap) return undefined;
-  const result = new Map<string, { value: number }>();
-  for (const [authorId, edge] of subjectMap.entries()) {
-    if (!edge.isValidAt(time)) continue;
-    result.set(authorId, { value: edge.value });
+  const result = node.incoming.getSubjects({ kind: KIND_TRUST, context, subjectType: node.type }) ?? new Map<string, IEdge>();
+  if (context && context.length > 0) {
+    const contextMap = node.incoming.getSubjects({ kind: KIND_TRUST, context, subjectType: node.type });
+    if (contextMap && contextMap.size > 0) {
+      for (const [authorId, edge] of contextMap.entries()) {
+        if (!edge.isValidAt(time)) continue;
+        result.set(authorId, edge);
+      }
+    }
   }
-  return result.size > 0 ? result : undefined;
+  return result?.size > 0 ? result : undefined;
 }
 
 class StandardResolver implements IResolveStrategy {
@@ -60,7 +66,7 @@ class StandardResolver implements IResolveStrategy {
     authorId: string,
     subjectId: string,
     options: IResolveStrategyOptions = {}
-  ): Score {
+  ): Array<Score> {
     const graph = options.graph;
     if (!graph) {
       throw new Error('Graph is required for trust resolution. Call loadGraph() before resolve.');
@@ -83,13 +89,13 @@ class StandardResolver implements IResolveStrategy {
 
     if (author === subject) {
       authorScore.connected = true;
-      return authorScore;
+      return [authorScore];
     }
 
     const subjectScore = scores.getSubject(subject, 0);
     const subjectIncoming = getIncomingFromGraph(graph, subject, context, time);
     if (!subjectIncoming) {
-      return subjectScore;
+      return [subjectScore];
     }
 
     const queue: string[] = [author];
@@ -101,13 +107,14 @@ class StandardResolver implements IResolveStrategy {
       degree++;
 
       for (let i = nodeIndex; i < degreeLength; i++) {
-        const nodeId = queue[i];
-        const trustItem = subjectIncoming.get(nodeId);
-        if (trustItem) {
-          const nodeScore = scores.get(nodeId);
-          if (!nodeScore) continue;
-          if (nodeScore.trustValue < followTrustThreshold) continue;
-          subjectScore.addTrust(nodeId, trustItem.value, degree);
+        const authorId = queue[i];
+        const edge = subjectIncoming.get(authorId);
+        if (edge) {
+          const authorScore = scores.get(authorId);
+          if (!authorScore) continue;
+          if (authorScore.trustValue < followTrustThreshold) continue;
+
+          subjectScore.addTrust(edge, degree);
         }
       }
 
@@ -129,12 +136,12 @@ class StandardResolver implements IResolveStrategy {
       }
     }
 
-    if (options.format === 'path') {  
-      subjectScore.path = pathStrategy.resolve(subject, context, scores, graph);
+    if (options.format === 'path') {
+      return pathStrategyJson.resolve(author, subject, scores);
     }
-    
+
     subjectScore.connected = subjectScore.count > 0;
-    return subjectScore;
+    return [subjectScore];
   }
 
   private processTrusts(
@@ -150,7 +157,7 @@ class StandardResolver implements IResolveStrategy {
     for (const [nodeId, edge] of outgoing.entries()) {
       if (!edge.isValidAt(time)) continue;
       const nodeScore = scores.getSubject(nodeId, degree);
-      nodeScore.addTrust(authorId, edge.value, degree);
+      nodeScore.addTrust(edge, degree);
 
       if (!nodeScore.visited && subjectScore.count === 0) {
         queue.push(nodeId);

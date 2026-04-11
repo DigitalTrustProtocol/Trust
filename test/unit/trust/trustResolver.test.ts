@@ -65,11 +65,12 @@ function expectConnectedDegree2(
   subjectId: string,
   opts?: { context?: string }
 ) {
-  const score = trustResolver.resolve(author, subjectId, {
+  const scores = trustResolver.resolve(author, subjectId, {
     graph,
     context: opts?.context ?? '',
     followTrustThreshold: 1,
   });
+  const score = scores[0]!;
   expect(score.connected, `expected connection to subject ${subjectId.slice(0, 12)}…`).toBe(
     true
   );

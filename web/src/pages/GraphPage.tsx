@@ -28,31 +28,37 @@ function formatNodeSummary(n: VizNode): string {
   return lines.join('\n');
 }
 
-type PathEl = {
-  node: string;
-  identity?: Record<string, string>;
-  from: Array<[string, string, number, number, number]>;
+/** Wire format from `/resolve` (JSON): scores with `subject` and trust `edges` (author → subject). */
+type ScoreWire = {
+  subject?: string;
+  edges?: Array<{ author: string; value: number; context?: string }>;
 };
 
-function pathToGraph(path: PathEl[] | undefined): { nodes: VizNode[]; links: VizLink[] } | null {
-  if (!path || path.length === 0) return null;
+function scoresToPathGraph(scores: ScoreWire[]): { nodes: VizNode[]; links: VizLink[] } | null {
+  if (!scores.length) return null;
   const nodeMap = new Map<string, VizNode>();
   const links: VizLink[] = [];
   const seen = new Set<string>();
 
-  for (const el of path) {
-    nodeMap.set(el.node, { id: el.node, identity: el.identity });
-    for (const item of el.from) {
-      const author = item[1];
-      const value = item[4] as number;
+  for (const s of scores) {
+    if (!s.subject) continue;
+    if (!nodeMap.has(s.subject)) nodeMap.set(s.subject, { id: s.subject });
+    for (const e of s.edges ?? []) {
+      const author = e.author;
       if (!nodeMap.has(author)) nodeMap.set(author, { id: author });
-      const key = `${author}->${el.node}:${value}`;
+      const key = `${author}->${s.subject}:${e.value}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      links.push({ source: author, target: el.node, value });
+      links.push({
+        source: author,
+        target: s.subject,
+        value: Number(e.value),
+        context: e.context ?? '',
+      });
     }
   }
 
+  if (nodeMap.size === 0) return null;
   return { nodes: [...nodeMap.values()], links };
 }
 
@@ -109,17 +115,15 @@ export function GraphPage() {
       return;
     }
     try {
-      const score = await postResolve(apiBase, {
+      const scores = await postResolve(apiBase, {
         author: authorIn.trim(),
         subject: subjectIn.trim(),
         context: contextIn.trim() || undefined,
         format: 'path',
         maxDepth: 4,
       });
-      setResolveScore(score);
-      const path = score.path as PathEl[] | undefined;
-      const pg = pathToGraph(path);
-      setPathGraph(pg);
+      setResolveScore((scores[0] as Record<string, unknown>) ?? null);
+      setPathGraph(scoresToPathGraph(scores as ScoreWire[]));
     } catch (e) {
       setResolveError(e instanceof Error ? e.message : String(e));
     }

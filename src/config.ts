@@ -306,9 +306,6 @@ function getCliBoolean(cli: Record<string, unknown>, key: string): boolean | und
   return cli[key] === true;
 }
 
-function getCliStringArray(cli: Record<string, unknown>, key: string): string[] | undefined {
-  return getStringArray(cli[key] as string | undefined);
-}
 
 function getStringArray(v: string | undefined): string[] | undefined {
   if (v === undefined) return undefined; // undefined is undefined

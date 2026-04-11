@@ -26,32 +26,6 @@ import { exportGraphForViz } from '../../lib/trust/graphExport.js';
 
 const log = rootLogger.child({ plugin: 'api' });
 
-/** JSON-safe Score (Set and class instance do not serialize reliably). */
-function serializeScore(score: Score): Record<string, unknown> {
-  return {
-    count: score.count,
-    trustValue: score.trustValue,
-    degree: score.degree,
-    trust: score.trust,
-    distrust: score.distrust,
-    connected: score.connected,
-    visited: score.visited,
-    from: [...score.from],
-    subject: score.subject,
-    context: score.context,
-    kind: score.kind,
-    path: score.path,
-  };
-}
-
-type TrustBody = {
-  subjects: string[];
-  contexts?: string;
-  value?: number;
-  content?: string;
-  relay?: string[];
-};
-
 type ResolveBody = {
   subject: string;
   author?: string;
@@ -323,14 +297,14 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
         return sendError(reply, 500, ErrorCode.GRAPH_NOT_FOUND, 'Graph not loaded');
       }
 
-      const score: Score = standardResolver.resolve(author, subjectId, {
+      const scoreArray: Array<Score> = standardResolver.resolve(author, subjectId, {
         graph,
         context,
         maxDepth: body.maxDepth,
         format: body.format ?? 'default',
       });
 
-      return ok(serializeScore(score));
+      return ok(scoreArray);
     },
   );
 
@@ -365,13 +339,13 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       const results = subjects.map((subject) => {
         try {
           const { value: subjectId } = resolveTargetForQuery(subject);
-          const score = standardResolver.resolve(author, subjectId, {
+          const scores = standardResolver.resolve(author, subjectId, {
             graph,
             context,
             maxDepth: body.maxDepth,
             format,
           });
-          return { subject, ok: true as const, score: serializeScore(score) };
+          return { subject, ok: true as const, score: scores };
         } catch (err) {
           return {
             subject,

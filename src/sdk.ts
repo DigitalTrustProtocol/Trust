@@ -149,7 +149,7 @@ export async function add(subjects: string[], options?: AddOptions): Promise<Ver
 /**
  * Resolve trust from author's perspective toward a subject.
  */
-export async function resolve(subject: string, options?: ResolveOptions): Promise<Score> {
+export async function resolve(subject: string, options?: ResolveOptions): Promise<Score | null> {
   const author = getAuthorPubkey(options?.authors);
   const { value: subjectId } = resolveTargetForQuery(subject);
   const context = normalizeContext(options?.contexts);
@@ -158,12 +158,14 @@ export async function resolve(subject: string, options?: ResolveOptions): Promis
   const ctx = await ensureRuntimeContext();
   const graph = await loadGraph(ctx);
 
-  return standardResolver.resolve(author, subjectId, {
+  const scoreArray: Array<Score> = standardResolver.resolve(author, subjectId, {
     graph,
     context,
     maxDepth: options?.maxDepth,
     format,
   });
+  if (scoreArray.length === 0) return null;
+  return scoreArray[0];
 }
 
 /**
@@ -173,7 +175,7 @@ export async function resolve(subject: string, options?: ResolveOptions): Promis
 export async function resolveBatch(
   subjects: string[],
   options?: ResolveOptions,
-): Promise<Array<{ subject: string; ok: true; score: Score } | { subject: string; ok: false; error: string }>> {
+): Promise<Array<{ subject: string; ok: true; score: Score[] } | { subject: string; ok: false; error: string }>> {
   const author = getAuthorPubkey(options?.authors);
   const context = normalizeContext(options?.contexts);
   const format = options?.format ?? 'default';
@@ -184,13 +186,13 @@ export async function resolveBatch(
   return subjects.map((subject) => {
     try {
       const { value: subjectId } = resolveTargetForQuery(subject);
-      const score = standardResolver.resolve(author, subjectId, {
+      const scores = standardResolver.resolve(author, subjectId, {
         graph,
         context,
         maxDepth: options?.maxDepth,
         format,
       });
-      return { subject, ok: true as const, score };
+      return { subject, ok: true as const, score: scores };
     } catch (err) {
       return { subject, ok: false as const, error: err instanceof Error ? err.message : String(err) };
     }

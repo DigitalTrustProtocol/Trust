@@ -7,9 +7,9 @@ import type { ResolveFormat } from '../lib/trust/resolvers/IResolveStrategy.js';
 import { Score } from '../lib/trust/resolvers/Score.js';
 import standardResolver from '../lib/trust/resolvers/trustResolver.js';
 import { loadGraph } from '../lib/trust/graphManager.js';
-import { logger } from '../lib/logger.js';
 import { getRuntimeConfig, type ResolvedRuntimeConfig } from '../config.js';
 import { getRuntimeContext, setupStore } from '../lib/runtimeContext.js';
+import { getPrimaryPublicKeyHex } from '../lib/identityStore.js';
 
 export type { ResolveFormat };
 
@@ -51,7 +51,7 @@ export async function resolveTrustCommand(options: {
   const apiHost = options.apiUrl ?? await pickApiHost(cfg);
 
   if (apiHost) {
-    if (!options.json) logger.info(`Using API: ${apiHost}`);
+    if (!options.json && options.format !== 'number') console.log(`Using API: ${apiHost}`);
     const result = await proxyResolve(apiHost, {
       subject: options.subject,
       author: options.author,
@@ -59,11 +59,11 @@ export async function resolveTrustCommand(options: {
       maxDepth: options.maxDepth,
       format,
     });
-    outputResolveResult(result, format, options.json ?? false);
+    outputResolveResult(result, options.subject, format, options.json ?? false);
     return;
   }
 
-  if (!options.json) logger.info('No API available, resolving from local database');
+  if (!options.json) console.log('No API available, resolving from local database');
   const runtimeContext = await getRuntimeContext(cfg);
   await setupStore(runtimeContext);
 
@@ -75,8 +75,7 @@ export async function resolveTrustCommand(options: {
     }
     author = parsed.value;
   } else {
-    const sk = loadSecretKey();
-    author = sk ? getPublicKey(sk).toLowerCase() : null;
+    author = getPrimaryPublicKeyHex();
   }
 
   if (!author) {
@@ -86,49 +85,73 @@ export async function resolveTrustCommand(options: {
   const { tag, value: subjectId } = resolveTargetForQuery(options.subject);
 
   const graph = await loadGraph(runtimeContext);
-  const score = standardResolver.resolve(author, subjectId, {
+  const scores = standardResolver.resolve(author, subjectId, {
     graph,
     context: options.context,
     maxDepth: options.maxDepth,
     format,
   });
 
-  outputResolveResult(score, format, options.json ?? false);
+  outputResolveResult(scores, subjectId, format, options.json ?? false);
 }
 
 
 function outputResolveResult(
-  score: Score,
+  scores: Score[],
+  subject: string,
   format: ResolveFormat,
   json: boolean,
 ): void {
 
-  if (format === 'number') {
-    const value =
-      score.trustValue !== undefined
-        ? (score.trustValue as number)
-        : ((score.trustValue as number) ?? 0) - ((score.distrust as number) ?? 0);
+  if (!scores || scores.length === 0) {
     if (json) {
-      console.log(JSON.stringify({ value }));
+      console.log(JSON.stringify([]));
     } else {
-      console.log(String(value));
+      console.log('No connection found');
     }
     return;
   }
 
+  const score = scores.find(s => s.subject === subject);
+  if (!score) {
+    console.log('Should not happen, no score found for subject but an array of scores was returned');
+    return;
+  }
+  const value = score.trustValue;
+
+  if (format === 'number') {
+    if (!score) {
+      if (json) {
+        console.log({
+          value,
+        });
+      } else {
+        console.log(value);
+      }
+      return;
+    } else {
+      if (json) {
+        console.log(JSON.stringify([]));
+      } else {
+        console.log("No connection found");
+      }
+    }
+  }
+
+  if (format === 'path') {
+      console.log(JSON.stringify(scores, null, 2));
+      return;
+  }
   if (json) {
-    console.log(JSON.stringify(score));
+    console.log(JSON.stringify({
+      trust: score.trust,
+      distrust: score.distrust,
+      value,
+      degree: score.degree,
+    }));
     return;
-  }
-
-  if (score !== undefined) {
-    if (score.connected) {
-      logger.info(`Connected (degree ${score.degree})`);
-    } else {
-      logger.info('No connection');
-    }
-  }
-  logger.info(`Trust: ${score.trust}  Distrust: ${score.distrust}`);
-  logger.info(`Trust Value: ${score.trustValue}`);
-  logger.info(`Degree: ${score.degree}`);
+  } 
+  console.log(`Trust: ${score.trust}  Distrust: ${score.distrust}`);
+  console.log(`Trust Value: ${value}`);
+  console.log(`Degree: ${score.degree}`);
 }

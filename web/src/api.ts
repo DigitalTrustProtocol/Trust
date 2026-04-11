@@ -52,5 +52,5 @@ export async function postResolve(
     const err = await res.json().catch(() => null) as ApiEnvelope<unknown> | null;
     throw new Error(err?.error?.message ?? `Resolve failed: ${res.status}`);
   }
-  return unwrap<Record<string, unknown>>(res);
+  return unwrap<Array<Record<string, unknown>>>(res);
 }

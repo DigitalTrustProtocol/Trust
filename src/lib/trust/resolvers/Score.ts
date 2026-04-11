@@ -1,4 +1,5 @@
-import { TrustPathArray } from "./pathStrategy.js";
+import { IEdge } from "../graph/Edge.js";
+import { EdgeArray } from "./pathStrategyJson.js";
 
 export type ScoreTrustPathProfile = {
   subject: string;
@@ -9,6 +10,7 @@ export type ScoreTrustPathProfile = {
 export type ScorePath = Array<{ subject: string; from: Array<string> }>;
 
 export interface IScore {
+  subject?: string; // The npub of the subject of this score
   count: number;
   trustValue: number;
   degree: number;
@@ -16,18 +18,15 @@ export interface IScore {
   distrust: number;
   connected: boolean;
   visited: boolean;
-  from: Set<string>;
 
-  subject?: string; // The npub of the subject of this score
-  context?: string;
-  kind?: number;
 
-  path?: TrustPathArray;
+  edges?: EdgeArray;
 
-  addTrust(authorId: string, trustValue: number, degree: number): void;
+  addTrust(edge: IEdge, degree: number): void;
 }
 
 export class Score implements IScore {
+  subject?: string; // The npub of the subject of this score
   count: number = 0;
   trustValue: number = 0;
   degree: number = 0;
@@ -35,12 +34,10 @@ export class Score implements IScore {
   distrust: number = 0;
   connected: boolean = false;
   visited: boolean = false;
-  from: Set<string> = new Set<string>();
 
-  subject?: string; // The npub of the subject of this score
   kind?: number;
   context?: string;
-  path?: TrustPathArray;
+  edges?: EdgeArray | undefined;
 
 
   constructor(count: number = 0, trustValue: number = 0, degree: number = 0, trust: number = 0, distrust: number = 0, connected: boolean = false, visited: boolean = false) {
@@ -54,19 +51,20 @@ export class Score implements IScore {
   }
 
 
-  addTrust(authorId: string,trustValue: number, degree: number): void {
-    if (trustValue === 0) return; // Neutral edges are not counted
-    if(this.from.has(authorId)) return; // Don't add trust if already added from this author, from a more specific context
+  addTrust(edge: IEdge, degree: number): void {
+    if (edge.value === 0) return; // Neutral edges are not counted
     
     this.count += 1;
-    this.trustValue += trustValue;
-    if (trustValue === 1) {
+    this.trustValue += edge.value;
+    if (edge.value === 1) {
       this.trust += 1;
-    } else if (trustValue === -1) {
+    } else if (edge.value === -1) {
       this.distrust += 1;
     }
     this.degree = degree;
-    this.from.add(authorId);
+
+    if (!this.edges) this.edges = [];
+    this.edges.push(edge);
   }
   
 }

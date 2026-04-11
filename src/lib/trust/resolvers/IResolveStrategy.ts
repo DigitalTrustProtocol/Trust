@@ -27,5 +27,5 @@ export interface IResolveStrategy {
     authorId: string,
     subjectId: string,
     options?: IResolveStrategyOptions
-  ): Score;
+  ): Array<Score>
 }

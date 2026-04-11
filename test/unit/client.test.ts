@@ -93,7 +93,7 @@ describe('client wrapper', () => {
   });
 
   it('proxyResolve posts to /resolve and returns JSON', async () => {
-    const innerData = { trust: 1 };
+    const innerData = [{ trust: 1, trustValue: 1 }];
     const envelope = { ok: true, data: innerData };
     const fetchMock = vi
       .fn()
@@ -102,8 +102,7 @@ describe('client wrapper', () => {
 
     const result = await proxyResolve(undefined, {
       subject: 'npub1test',
-      contexts: 'test',
-      strategy: 'cache',
+      context: 'test',
       maxDepth: 3,
     });
 
@@ -114,8 +113,7 @@ describe('client wrapper', () => {
       },
       body: JSON.stringify({
         subject: 'npub1test',
-        contexts: 'test',
-        strategy: 'cache',
+        context: 'test',
         maxDepth: 3,
       }),
     });

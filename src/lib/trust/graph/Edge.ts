@@ -8,14 +8,16 @@ import {
   getContextFromTags,
   getExpireFromTags,
   getValueFromTags,
-  ITrustEvent,
-  KIND_TRUST,
+  ITrustEvent
 } from "../../nostr/nip32010.js";
 import { Node } from "./Node.js";
 import { EdgeMap } from "./EdgeMap.js";
 
 
 export interface IEdge {
+  eventid: string;
+  author: string;
+  kind: number;
   value: any;
   context: string;
   createdAt: number;
@@ -32,6 +34,8 @@ export interface IEdge {
 
 // Trust edge for kind 32010
 export class EdgeT1 implements IEdge {
+  eventid: string;
+  author: string;
   kind: number;
   value: 1 | 0 | -1 = 0;
   context: string = '';
@@ -42,7 +46,9 @@ export class EdgeT1 implements IEdge {
   content: string | undefined = undefined;
 
   constructor(event: ITrustEvent) {
-    this.kind = event.kind;
+    this.kind = event.kind; 
+    this.author = event.pubkey;
+    this.eventid = event.id;
     this.update(event);
   }
 
@@ -85,8 +91,11 @@ export class EdgeT1 implements IEdge {
   }
 }
 
+
     /** Edge key: author:d_tag so multiple authors can trust the same subject. */
+    /*
 export function EdgeKey(event: ITrustEvent): string {
       return `${event.pubkey}:${event.d_tag!}`;
     }
 
+*/

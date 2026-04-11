@@ -1,4 +1,4 @@
-import { EdgeKey, EdgeT1, IEdge } from './Edge.js';
+import { EdgeT1, IEdge } from './Edge.js';
 import { Node } from './Node.js';
 import { PATHS } from '../../../config.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
@@ -45,8 +45,7 @@ export class Graph {
   }
 
   getOrCreateEdge(event: ITrustEvent): IEdge {
-    const key = EdgeKey(event);
-    let edge = this.edges.get(key);
+    let edge = this.edges.get(event.id);
     if (!edge) {
       edge = this.createTrustEdge(event);
     }
@@ -62,14 +61,14 @@ export class Graph {
       throw new Error(`Unknown kind: ${event.kind}`);
     }
 
-    this.edges.set(EdgeKey(event), edge);
+    this.edges.set(event.id, edge);
     return edge;
   }
 
 
   isEventNewer(event: ITrustEvent): boolean {
     if (!event.d_tag) return true; // if the d_tag is not found, the event is invalid
-    const edge = this.edges.get(EdgeKey(event));
+    const edge = this.edges.get(event.id);
     if (!edge) return true; // if the edge is not found, the event is new
     if (edge.createdAt > event.created_at) return false; // If the edge is older than the new event, return undefined
     return event.created_at > edge.createdAt;
@@ -77,8 +76,7 @@ export class Graph {
 
 
   applyTrustEvent(trust: ITrustEvent): boolean {
-    const key = EdgeKey(trust);
-    let edge = this.edges.get(key);
+    let edge = this.edges.get(trust.id);
     if (edge) {
       if (edge.createdAt > trust.created_at) return false; // If the edge is older than the new event, return undefined
       if (edge.createdAt < trust.created_at) {
@@ -108,8 +106,7 @@ export class Graph {
   }
 
   removeTrustEvent(trust: ITrustEvent): boolean {
-    const key = EdgeKey(trust);
-    let edge = this.edges.get(key);
+    let edge = this.edges.get(trust.id);
 
     if (!edge) return false;
     if (edge.createdAt > trust.created_at) return false; // If the trust is older than the new edges, return false

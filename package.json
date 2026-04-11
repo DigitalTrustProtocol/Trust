@@ -31,7 +31,7 @@
     "test:coverage": "vitest run --coverage",
     "seed": "tsx scripts/seed-trust-network.ts",
     "heavy": "tsx scripts/heavy-load-test.ts",
-    "verify-trust-graph": "tsx scripts/verify-trust-graph.ts"
+    "verify": "tsx scripts/verify-trust-graph.ts"
   },
   "keywords": [
     "nostr",

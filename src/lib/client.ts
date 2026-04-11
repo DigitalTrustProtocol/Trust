@@ -92,7 +92,7 @@ export async function proxyTrust(
 export async function proxyResolve(
   baseUrl: string | undefined,
   params: ResolveParams,
-): Promise<Score> {
+): Promise<Score[]> {
   const base = normalizeBaseUrl(baseUrl);
 
   const res = await fetch(`${base}/resolve`, {
@@ -106,7 +106,7 @@ export async function proxyResolve(
     throw new Error(body?.error?.message ?? `Server /resolve request failed with status ${res.status}`);
   }
 
-  return unwrap<Score>(res);
+  return unwrap<Score[]>(res);
 }
 
 export async function proxyResolveBatch(
