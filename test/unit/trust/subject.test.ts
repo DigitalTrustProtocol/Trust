@@ -13,6 +13,24 @@ describe('subject module', () => {
         expect(r.tag).toBe('p');
         expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
       });
+
+      it('should force event id with e: prefix for 64-char hex', () => {
+        const r = parseSubject(`e:${TEST_EVENT_ID}`);
+        expect(r.tag).toBe('e');
+        expect(r.value).toBe(TEST_EVENT_ID.toLowerCase());
+      });
+
+      it('should force pubkey with p: prefix for 64-char hex', () => {
+        const r = parseSubject(`p:${TEST_PUBKEY}`);
+        expect(r.tag).toBe('p');
+        expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
+      });
+
+      it('should force URL with r: prefix', () => {
+        const r = parseSubject('r:example.com/foo');
+        expect(r.tag).toBe('r');
+        expect(r.value).toBe('https://example.com/foo');
+      });
     });
 
     describe('NIP-19', () => {

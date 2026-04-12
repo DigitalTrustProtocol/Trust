@@ -116,7 +116,7 @@ export function createMcpServer(): Server {
           const a = args as { subjects: string[]; value: number; context?: string; content?: string };
           const event = await sdk.add(a.subjects, {
             value: a.value as 1 | 0 | -1,
-            contexts: a.context,
+            context: a.context,
             content: a.content,
           });
           return { content: [{ type: 'text', text: JSON.stringify({ id: event.id, pubkey: event.pubkey, kind: event.kind }, null, 2) }] };

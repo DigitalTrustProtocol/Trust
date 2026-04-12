@@ -97,10 +97,9 @@ describe('trust e2e tests', () => {
       ]);
 
       expect(code).toBe(0);
-      const json = JSON.parse(stdout) as unknown[];
-      expect(Array.isArray(json)).toBe(true);
-      expect(json[0]).toHaveProperty('trust', 0);
-      expect(json[0]).toHaveProperty('distrust', 0);
+      const json = JSON.parse(stdout) as { trust?: number; distrust?: number };
+      expect(json).toHaveProperty('trust', 0);
+      expect(json).toHaveProperty('distrust', 0);
     });
   });
 

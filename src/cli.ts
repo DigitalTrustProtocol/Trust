@@ -59,10 +59,27 @@ program
 
 
 // add - Add trust to the system (kind 32010, NIP-32010)
+const ADD_SUBJECT_HELP = `
+NIP-32010 subjects (one or more positional args):
+  p — identity (pubkey): npub, nprofile, or 64-char hex
+  e — event: note, nevent, or 64-char hex event id
+  a — addressable: naddr or kind:pubkey:d_identifier
+  h — content hash: h:<64-char hex> (SHA-256 digest)
+  r — URL: https://... (normalized; fragment stripped)
+  i — external id (NIP-73): isbn:, doi:, https://..., etc.
+
+Force a tag when parsing would be wrong (e.g. 64-char hex is pubkey vs event id):
+  p:<value>  e:<value>  a:<value>  h:<64 hex>  r:<url>  i:<nip73-id>
+`.trim();
+
 program
   .command('add <subject> [subjects...]')
-  .description('Add trust for the given subject(s) (kind 32010)')
-  .option('-c, --contexts <contexts>', 'Trust context (e.g. development, commerce)')
+  .description('Publish a kind 32010 trust assertion for the given subject(s)')
+  .addHelpText('after', ADD_SUBJECT_HELP)
+  .option(
+    '-c, --context <context>',
+    'Trust scope: single `c` tag value (e.g. development, commerce). Omit for general trust.',
+  )
   .option('-v, --value <value>', 'Trust value: 1 (trust), 0 (neutral), -1 (distrust)', '1')
   .option('--content <content>', 'Optional note explaining the trust assertion')
   .option('-r, --relay <url...>', 'Relay URL(s) to publish to')
@@ -70,7 +87,7 @@ program
   .action(async (subject, subjects, options) => {
     await addCommand({
       subjects: [subject, ...(subjects || [])],
-      contexts: options.contexts,
+      context: options.context,
       value: parseInt(options.value, 10),
       content: options.content,
       relay: options.relay,

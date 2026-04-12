@@ -11,13 +11,14 @@ import { logger } from '../lib/logger.js';
 
 export async function addCommand(options: {
   subjects: string[];
-  contexts?: string;
+  /** Trust `c` tag (single context); omit for general trust. */
+  context?: string;
   value: number;
   content?: string;
   relay?: string[];
   json?: boolean;
 }): Promise<void> {
-  const { subjects, contexts: context, value, content = '', relay, json } = options;
+  const { subjects, context, value, content = '', relay, json } = options;
 
   if (subjects.length === 0) {
     throw new Error('At least one subject required');

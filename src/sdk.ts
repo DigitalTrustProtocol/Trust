@@ -37,6 +37,9 @@ export interface Identity {
 }
 
 export interface AddOptions {
+  /** Trust `c` tag (single context). Takes precedence over `contexts` if both are set. */
+  context?: string;
+  /** @deprecated Use `context` */
   contexts?: string;
   value?: 1 | 0 | -1;
   content?: string;
@@ -131,7 +134,7 @@ export async function add(subjects: string[], options?: AddOptions): Promise<Ver
   const parsed = parseSubjects(subjects);
   const template = buildTrustEventTemplate({
     subjects: parsed,
-    context: options?.contexts,
+    context: options?.context ?? options?.contexts,
     value,
     content: options?.content ?? '',
   });

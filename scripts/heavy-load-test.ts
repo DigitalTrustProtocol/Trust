@@ -22,6 +22,7 @@ const RESOLVE_URL = process.env.TRUST_LOAD_RESOLVE_URL ?? `${BASE_URL}/resolve`;
 const HEALTH_URL = process.env.TRUST_LOAD_HEALTH_URL ?? `${BASE_URL}/health`;
 const CONCURRENT_RESOLVE_REQUESTS = Math.max(1, Number(process.env.TRUST_LOAD_CONCURRENT_REQUESTS ?? 1_000));
 
+/** One `Score` from `/resolve` (API returns `data: Score[]`; we use index 0 for the subject). */
 type ResolveData = {
   connected?: boolean;
   degree?: number;
@@ -167,15 +168,26 @@ function extractResolveData(payload: unknown): ResolveData {
     throw new Error('Resolve response is not an object');
   }
 
-  const envelope = payload as ApiEnvelope<ResolveData>;
+  const envelope = payload as ApiEnvelope<ResolveData | ResolveData[]>;
   if (typeof envelope.ok === 'boolean') {
     if (!envelope.ok) {
       throw new Error(envelope.error?.message ?? 'Resolve API returned error');
     }
-    if (!envelope.data || typeof envelope.data !== 'object') {
+    const data = envelope.data;
+    if (data === undefined) {
       throw new Error('Resolve API response missing data');
     }
-    return envelope.data;
+    if (Array.isArray(data)) {
+      const primary = data[0];
+      if (!primary || typeof primary !== 'object') {
+        throw new Error('Resolve API data array is empty');
+      }
+      return primary;
+    }
+    if (typeof data !== 'object') {
+      throw new Error('Resolve API data is not an object or array');
+    }
+    return data;
   }
 
   return payload as ResolveData;

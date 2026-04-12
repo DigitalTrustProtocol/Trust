@@ -30,8 +30,10 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "seed": "tsx scripts/seed-trust-network.ts",
+    "seed-deg45": "tsx scripts/seed-trust-network-deg45.ts",
     "heavy": "tsx scripts/heavy-load-test.ts",
-    "verify": "tsx scripts/verify-trust-graph.ts"
+    "verify": "tsx scripts/verify-trust-graph.ts",
+    "load-test-keys": "tsx scripts/load-test-keys.ts"
   },
   "keywords": [
     "nostr",

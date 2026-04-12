@@ -15,6 +15,8 @@
  * Usage:
  *   npx tsx scripts/seed-trust-network.ts
  *   TRUST_LOAD_INSERT_PROGRESS_EVERY=50000 npx tsx scripts/seed-trust-network.ts
+ *
+ * Optional small degree-4/5 sample (100+100 edges): scripts/seed-trust-network-deg45.ts
  */
 
 import { finalizeEvent } from 'nostr-tools/pure';
