@@ -16,6 +16,7 @@ Trust is a **decentralized reputation graph** on Nostr. Participants sign **trus
 - The user asks about trust scores, “do I trust X”, Web of Trust, or Nostr trust events.
 - You are implementing or debugging this repo (`@dtp/trust`), the MCP server, or integrations.
 - You need to choose **context**, interpret **resolve** results, or explain **why** a path exists (`format: path`).
+- The user wants to **sign with their own Nostr key** (import `nsec` / hex, set primary, use MCP/SDK/CLI).
 
 ## Mental model
 
@@ -36,6 +37,31 @@ Do not confuse **Nostr follow graph (kind 3)** with **trust (32010)**; Trust mod
 3. **Pick context** deliberately (see [Context semantics](#context-semantics) below).
 4. **Resolve** before high-impact actions (execute code, send funds, delegate authority). Use `format: number` for thresholds; use `path` when the user needs an audit trail.
 5. **Publish carefully**: `trust add` / MCP `trust_add` signs and sends to relays—treat as **public, attributable statements**.
+
+## Importing a Nostr key (sign as your own pubkey)
+
+Trust signs events with the **primary** secret key in local identity storage (`~/.trust` by default, or override with **`TRUST_CONFIG_DIR`**). The CLI, SDK, and MCP all use that same store—there is no separate “API key”; control **who signs** by importing the right Nostr secret and setting it primary.
+
+### CLI
+
+1. **Import** a secret (creates `identity.json` + `keys/<pubkey>.key` if needed):
+   - **`trust identity import --secret '<value>'`** where `<value>` is either **`nsec1…`** (NIP-19) or **64 hex characters** (32-byte secp256k1 secret; letters case-insensitive).
+   - Optional: **`--label 'my-agent'`** for humans listing keys.
+2. **Confirm**: **`trust whoami`** or **`trust identity list`** (add **`--json`** for scripts).
+3. **Several keys?** Set which one signs: **`trust identity primary <npub|64-hex-pubkey>`**.
+4. **Remove** a registered key (does not delete relay-side data): **`trust identity remove <npub|hex>`**.
+
+You do **not** have to run **`trust init`** first if you only want your own key: **`trust identity import`** is enough. **`trust init`** is mainly for generating a new keypair and optional profile scaffolding.
+
+### Agents and automation
+
+- Point the process at a dedicated config dir so the agent’s key is isolated: e.g. set **`TRUST_CONFIG_DIR`** (or `HOME` with a fresh home) before running `trust` / `trust-mcp`.
+- Avoid putting **`nsec`** or raw hex in shell history or committed files; prefer a secret manager, short-lived env var, or secure file read into **`--secret`** in a wrapper script.
+- On disk, the key file stores the secret as **hex** (see `src/lib/identityStore.ts`); **`nsec`** is only an input format for **`identity import`**.
+
+### SDK / MCP
+
+There is no separate `importKey` on the public SDK today: configure identity **via the CLI** (or the same files written by **`trust identity import`**), then call **`add`**, **`resolve`**, or MCP tools—they load the **primary** key via `loadSecretKey()`.
 
 ## Context semantics
 
@@ -69,7 +95,7 @@ Binary: `trust-mcp` (see package `bin`). Tools wrap the SDK and return **JSON te
 |------|------|
 | `trust_resolve` | Resolve one subject (`subject`, optional `author`, `context`, `format`, `maxDepth`). |
 | `trust_resolve_batch` | Many subjects in one call. |
-| `trust_add` | Publish kind 32010 (`subjects[]`, `value` 1/0/-1, optional `context`, `content`). |
+| `trust_add` | Publish kind 32010 (`subjects[]` as strings—see [Add: subject strings](#add-subject-strings), `value` 1/0/-1, optional `context`, `content`). |
 | `trust_whoami` | Current identity or error if not initialized. |
 | `trust_trusted` | List subjects trusted by author in context. |
 | `trust_graph_stats` | Node/edge counts for loaded graph. |
@@ -78,7 +104,7 @@ Schema details: `src/mcp-server.ts`.
 
 ### CLI
 
-Typical flow: `trust init` → `trust add` / `trust sync` → `trust resolve … --json`. Commands live under `src/commands/`. Full command surface: `src/cli.ts`.
+Typical flow: `trust init` **or** `trust identity import …` → `trust add` / `trust sync` → `trust resolve … --json`. Identity subcommands: `trust identity import|list|generate|primary|remove`. Commands live under `src/commands/`. Full command surface: `src/cli.ts`.
 
 ### HTTP API
 
@@ -90,7 +116,29 @@ Server mode (`trust server`): REST routes include `/health`, `/identity`, `/trus
 import { resolve, resolveBatch, add, whoami } from '@dtp/trust';
 ```
 
-Options types: `ResolveOptions` (`authors`, `contexts`, `maxDepth`, `format`), `AddOptions` (`context`, `value`, `content`). File: `src/sdk.ts`.
+Options types: `ResolveOptions` (`authors`, `contexts`, `maxDepth`, `format`), `AddOptions` (`context`, `value`, `content`, `relay`, `relaysResolved`, `persistLocal`). File: `src/sdk.ts`. CLI `trust add` delegates to SDK `add()` (same parsing and tags).
+
+## Add: subject strings
+
+Strings passed to **`trust add`**, SDK **`add(subjects, …)`**, and MCP **`trust_add`** are parsed into NIP-32010 subject tags (`p`, `e`, `a`, `h`, `r`, `i`) plus optional **`k`** where the protocol allows.
+
+| Input | Tag | `k` (when present) |
+|--------|-----|---------------------|
+| **`npub` / `nprofile`** | `p` | — |
+| **`note` (NIP-19)** | `e` | **`1`** (short note kind) |
+| **`nevent`** | `e` | Decimal kind string **only if** the pointer includes a kind |
+| **`naddr`** or `kind:pubkey:d` | `a` | — |
+| **Bare 64-char hex** | **`h`** (content hash) | — |
+| **`p:` / `pubkey:`** + hex, `npub`, … | `p` | — |
+| **`e:`** + hex, `note`, `nevent`, … | `e` | Same rules as bare `note`/`nevent` when value is NIP-19 |
+| **`h:`** + 64 hex | `h` | — |
+| **`a:`** + `naddr` or `kind:pubkey:d` | `a` | — |
+| **`r:`** or `http(s)://…` | `r` | — |
+| **NIP-73** (`isbn:`, `doi:`, …) or **`i:`** + id | `i` | Scheme (e.g. `isbn`, `doi`)—**`k` immediately after that `i` on the wire** |
+
+**Authors** (`trust resolve --authors`, SDK `authors`, MCP `author`): bare 64-char hex is still treated as a **pubkey** (`p`), not a hash—this differs from **trust target** parsing.
+
+Implementation: `src/lib/trust/subject.ts`, tag order in events: `src/lib/nostr/nip32010.ts`.
 
 ## Protocol and extensions
 
@@ -129,8 +177,9 @@ const score = await resolve('npub1…', {
 - **No sync ⇒ empty or stale graph**: Resolve only sees what is loaded locally (or what the server has loaded).
 - **`maxDepth` is hard-capped at 4** in the standard resolver; larger values are clamped.
 - **Publishing trust is public**: Content and signatures are visible on relays; write sober, minimal `content`.
-- **Subject spelling**: Use stable canonical forms (hex pubkeys on wire; CLI/SDK accept npub and other parsers per `subject` helpers).
+- **Subject spelling (add vs resolve target)**: For **trust targets**, bare 64-hex is a **hash** (`h`); use `p:` / `pubkey:` / `npub` for people. For **author** fields, bare 64-hex is still a **pubkey**. See [Add: subject strings](#add-subject-strings).
 - **Do not infer global reputation**: Scores are **subjective** from the chosen author’s view, not an objective platform rating.
+- **Protect signing keys**: `nsec` / hex secrets grant full Nostr signing for that pubkey; treat `~/.trust` (or `TRUST_CONFIG_DIR`) like SSH keys—restricted permissions, no leaks in logs or repos.
 
 ## Documentation map
 
