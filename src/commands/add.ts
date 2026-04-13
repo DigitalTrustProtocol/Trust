@@ -1,12 +1,10 @@
 /**
  * Add command — publish kind 32010 (NIP-32010) trust events directly to relay servers.
- * The default relay list includes the local relay when one is running.
+ * Delegates to `add()` in `sdk.ts` so CLI and programmatic API share one code path.
  */
 
-import { parseSubjects } from '../lib/trust/subject.js';
-import { buildTrustEventTemplate } from '../lib/nostr/nip32010.js';
-import { signEvent } from '../lib/signer.js';
-import { getAvailableRelays, publishEvent } from '../lib/nostr/pool.js';
+import { add as sdkAdd } from '../sdk.js';
+import { getAvailableRelays } from '../lib/nostr/pool.js';
 import { logger } from '../lib/logger.js';
 
 export async function addCommand(options: {
@@ -24,33 +22,30 @@ export async function addCommand(options: {
     throw new Error('At least one subject required');
   }
 
-  const v = value === 1 ? 1 : value === -1 ? -1 : 0;
-  const parsed = parseSubjects(subjects);
-  const template = buildTrustEventTemplate({
-    subjects: parsed,
-    context,
-    value: v as 1 | 0 | -1,
-    content,
-  });
-
-  const event = signEvent(template);
-
-  let relays: string[] = [];
-  if (process.env.TRUST_E2E_OFFLINE !== '1') {
+  let relaysResolved: string[] | undefined;
+  if (process.env.TRUST_E2E_OFFLINE === '1') {
+    relaysResolved = [];
+  } else {
     const relaySelection = await getAvailableRelays(relay);
-    relays = relaySelection.selected;
+    relaysResolved = relaySelection.selected;
     if (relaySelection.offline.length > 0) {
       logger.warn(`Skipping offline relays: ${relaySelection.offline.map((status) => status.url).join(', ')}`);
     }
   }
 
-  await publishEvent(event, relays);
+  const event = await sdkAdd(subjects, {
+    context,
+    value,
+    content,
+    relay,
+    relaysResolved,
+  });
 
   if (json) {
     console.log(JSON.stringify(event));
   } else {
     logger.info('Added trust to the system via relay(s)');
     logger.info(`Event ID: ${event.id}`);
-    logger.info(`Relay(s): ${relays.join(', ')}`);
+    logger.info(`Relay(s): ${relaysResolved.join(', ')}`);
   }
 }

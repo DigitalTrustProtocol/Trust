@@ -40,9 +40,19 @@ export interface AddOptions {
   context?: string;
   /** @deprecated Use `context` */
   contexts?: string;
-  value?: 1 | 0 | -1;
+  /** Trust score: `1`, `0`, or `-1`. Other numeric inputs are treated as `0`. */
+  value?: 1 | 0 | -1 | number;
   content?: string;
   relay?: string[];
+  /**
+   * When set, publish to exactly these relay URLs (skips {@link getAvailableRelays} probing).
+   * The CLI passes this after probing (and uses `[]` when `TRUST_E2E_OFFLINE=1`).
+   */
+  relaysResolved?: string[];
+  /**
+   * When `false`, skip persisting the signed event into the local trust DB / graph. Default `true`.
+   */
+  persistLocal?: boolean;
 }
 
 export interface ResolveOptions {
@@ -82,6 +92,13 @@ async function ensureRuntimeContext(opts?: Record<string, unknown>): Promise<Run
   await setupStore(ctx);
   cachedRuntimeContext = ctx;
   return ctx;
+}
+
+function normalizeTrustValue(v: unknown): 1 | 0 | -1 {
+  const n = typeof v === 'number' ? v : v == null ? 1 : Number(v);
+  if (n === 1) return 1;
+  if (n === -1) return -1;
+  return 0;
 }
 
 function getAuthorPubkey(authors?: string): string {
@@ -127,7 +144,7 @@ export function whoami(): Identity | null {
 export async function add(subjects: string[], options?: AddOptions): Promise<VerifiedEvent> {
   if (subjects.length === 0) throw new Error('At least one subject required');
 
-  const value = options?.value ?? 1;
+  const value = normalizeTrustValue(options?.value ?? 1);
   const parsed = parseSubjects(subjects);
   const template = buildTrustEventTemplate({
     subjects: parsed,
@@ -137,11 +154,21 @@ export async function add(subjects: string[], options?: AddOptions): Promise<Ver
   });
 
   const event = signEvent(template) as VerifiedEvent;
-  const relaySelection = await getAvailableRelays(options?.relay);
-  await publishEvent(event, relaySelection.selected);
 
-  const ctx = await ensureRuntimeContext();
-  await graphInsertEvent(event, ctx);
+  let relays: string[];
+  if (options?.relaysResolved !== undefined) {
+    relays = options.relaysResolved;
+  } else {
+    const relaySelection = await getAvailableRelays(options?.relay);
+    relays = relaySelection.selected;
+  }
+
+  await publishEvent(event, relays);
+
+  if (options?.persistLocal !== false) {
+    const ctx = await ensureRuntimeContext();
+    await graphInsertEvent(event, ctx);
+  }
 
   return event;
 }
@@ -156,7 +183,7 @@ export async function resolve(subject: string, options?: ResolveOptions): Promis
   const format = options?.format ?? 'default';
 
   const ctx = await ensureRuntimeContext();
-  const graph = await loadGraph(ctx);
+  const graph = await loadGraph(ctx); // TODO: This is super slow for large graphs
 
   const scoreArray: Array<Score> = standardResolver.resolve(author, subjectId, {
     graph,
@@ -181,7 +208,7 @@ export async function resolveBatch(
   const format = options?.format ?? 'default';
 
   const ctx = await ensureRuntimeContext();
-  const graph = await loadGraph(ctx);
+  const graph = await loadGraph(ctx); // TODO: This is super slow for large graphs
 
   return subjects.map((subject) => {
     try {
