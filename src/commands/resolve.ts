@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { resolveTargetForQuery } from '../lib/trust/subject.js';
+import { parseAuthorPubkeyInput, resolveTargetForQuery } from '../lib/trust/subject.js';
 import { loadSecretKey } from '../lib/keys.js';
 import { getPublicKey } from 'nostr-tools/pure';
 import { isServerAvailable, proxyResolve } from '../lib/client.js';
@@ -69,11 +69,7 @@ export async function resolveTrustCommand(options: {
 
   let author: string | null = null;
   if (options.author) {
-    const parsed = resolveTargetForQuery(options.author);
-    if (parsed.tag !== 'p') {
-      throw new Error('Author must be a pubkey (npub or hex)');
-    }
-    author = parsed.value;
+    author = parseAuthorPubkeyInput(options.author);
   } else {
     author = getPrimaryPublicKeyHex();
   }

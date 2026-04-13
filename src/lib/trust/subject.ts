@@ -10,13 +10,20 @@ export type SubjectTag = 'p' | 'e' | 'a' | 'h' | 'r' | 'i';
 export interface ParsedSubject {
   tag: SubjectTag;
   value: string;
+  /**
+   * NIP-73 scheme for `i` subjects, or NIP-32010 asserted Nostr **kind** (decimal string, e.g. `"1"`)
+   * for `e` subjects when known (e.g. `note` → `"1"`, `nevent` with kind relay).
+   */
   k?: string;
 }
 
 const HEX_64 = /^[a-fA-F0-9]{64}$/;
 
-/** Optional `tag:value` prefix to force the NIP-32010 subject tag (disambiguates bare 64-char hex: pubkey vs event id). */
+/** Optional `tag:value` prefix to force the NIP-32010 subject tag (disambiguates bare 64-char hex). */
 const EXPLICIT_SUBJECT = /^([pehari]):([\s\S]+)$/i;
+
+/** `pubkey:<hex|npub|…>` — same as `p:` (identity subject, no `k`). */
+const PUBKEY_PREFIX = /^pubkey:([\s\S]+)$/i;
 
 // NIP-33 addressable event: a:kind:pubkey:d
 const ADDR_REGEX = /^(\d+):([a-fA-F0-9]{64}):(.+)$/;
@@ -41,9 +48,26 @@ function isNip73Id(input: string): { value: string; k: string } | null {
   return null;
 }
 
+function eventSubjectFromNip19Decoded(
+  decoded: ReturnType<typeof decode>,
+  eventIdLower: string
+): ParsedSubject {
+  if (decoded.type === 'note') {
+    return { tag: 'e', value: eventIdLower, k: '1' };
+  }
+  if (decoded.type === 'nevent') {
+    const kind = (decoded.data as { kind?: number }).kind;
+    if (kind != null) {
+      return { tag: 'e', value: eventIdLower, k: String(kind) };
+    }
+    return { tag: 'e', value: eventIdLower };
+  }
+  throw new Error('internal: expected note or nevent');
+}
+
 function parseForcedPubkey(rest: string): ParsedSubject {
   const t = rest.trim();
-  if (!t) throw new Error('Subject value cannot be empty after p:');
+  if (!t) throw new Error('Subject value cannot be empty after p: or pubkey:');
   if (HEX_64.test(t)) return { tag: 'p', value: t.toLowerCase() };
   try {
     const decoded = decode(t);
@@ -64,7 +88,7 @@ function parseForcedEvent(rest: string): ParsedSubject {
   try {
     const decoded = decode(t);
     if (decoded.type === 'note' || decoded.type === 'nevent') {
-      return { tag: 'e', value: extractEventId(t).toLowerCase() };
+      return eventSubjectFromNip19Decoded(decoded, extractEventId(t).toLowerCase());
     }
   } catch {
     /* not NIP-19 */
@@ -129,11 +153,14 @@ function parseForcedExternalId(rest: string): ParsedSubject {
 /**
  * Parse a single subject input into canonical representation.
  *
- * **Optional prefix** `p:`, `e:`, `a:`, `h:`, `r:`, or `i:` forces the NIP-32010 subject tag
- * (useful when bare 64-char hex would be ambiguous: pubkey `p` vs event id `e`).
+ * **Optional prefix** `p:`, `pubkey:`, `e:`, `a:`, `h:`, `r:`, or `i:` forces the NIP-32010 subject tag.
+ * Bare 64-char hex is treated as an **`h`** content hash (use `p:` / `e:` / `pubkey:` to disambiguate).
  *
- * Otherwise supports: hex pubkey, hex event id (via NIP-19), npub, nprofile, note, nevent, naddr (a tag),
- * URL (r tag), hash with `h:` + 64 hex (h tag), NIP-73 IDs (isbn:, doi:, geo:, etc.) for `i`.
+ * `note` / `nevent` (NIP-19) → `e` plus optional **`k`** (asserted kind): `note` → `k=1`; `nevent` includes `k`
+ * when the pointer carries a kind.
+ *
+ * Otherwise supports: npub, nprofile, note, nevent, naddr (a tag), URL (r tag), `h:` + 64 hex,
+ * NIP-73 IDs (isbn:, doi:, geo:, etc.) for `i`.
  */
 export function parseSubject(input: string): ParsedSubject {
   const trimmed = input.trim();
@@ -163,9 +190,9 @@ export function parseSubject(input: string): ParsedSubject {
     }
   }
 
-  // Hex pubkey (64 chars) - bare hex 64 treated as pubkey
-  if (HEX_64.test(trimmed)) {
-    return { tag: 'p', value: trimmed.toLowerCase() };
+  const pubkeyPref = trimmed.match(PUBKEY_PREFIX);
+  if (pubkeyPref) {
+    return parseForcedPubkey(pubkeyPref[1]!);
   }
 
   // NIP-19: npub, nprofile → p
@@ -177,7 +204,7 @@ export function parseSubject(input: string): ParsedSubject {
     }
     if (decoded.type === 'note' || decoded.type === 'nevent') {
       const eventId = extractEventId(trimmed);
-      return { tag: 'e', value: eventId.toLowerCase() };
+      return eventSubjectFromNip19Decoded(decoded, eventId.toLowerCase());
     }
     if (decoded.type === 'naddr') {
       const data = decoded.data as { kind: number; pubkey: string; identifier: string };
@@ -211,11 +238,6 @@ export function parseSubject(input: string): ParsedSubject {
     // Invalid URL
   }
 
-  // Hash (h tag) - 64 hex, requires explicit prefix to distinguish from pubkey
-  if (trimmed.toLowerCase().startsWith('h:') && HEX_64.test(trimmed.slice(2).trim())) {
-    return { tag: 'h', value: trimmed.slice(2).trim().toLowerCase() };
-  }
-
   // NIP-73 external content IDs (i tag)
   const nip73 = isNip73Id(trimmed);
   if (nip73) {
@@ -234,6 +256,11 @@ export function parseSubject(input: string): ParsedSubject {
     }
   }
 
+  // Bare 64-char hex → content hash (h). Use p:, e:, pubkey:, etc. for pubkey or event id.
+  if (HEX_64.test(trimmed)) {
+    return { tag: 'h', value: trimmed.toLowerCase() };
+  }
+
   throw new Error(`Cannot parse subject: ${trimmed}`);
 }
 
@@ -245,10 +272,29 @@ export function parseSubjects(inputs: string[]): ParsedSubject[] {
 }
 
 /**
- * Resolve a target string for query/resolve to canonical identity.
- * Same parsing as parseSubject; returns tag and canonical value for DB lookup.
+ * Resolve a trust **subject** for resolve/query APIs. Bare 64-hex is a content **hash** (`h`);
+ * use `p:`, `pubkey:`, or NIP-19 `npub` for pubkeys, `e:` / `note` / `nevent` for events.
  */
 export function resolveTargetForQuery(target: string): { tag: SubjectTag; value: string } {
   const parsed = parseSubject(target);
   return { tag: parsed.tag, value: parsed.value };
+}
+
+/**
+ * Parse input that must denote an **author** pubkey. Bare 64-hex is treated as `p` (same as
+ * `whoami` hex); this differs from `parseSubject`, where bare hex is an `h` hash.
+ */
+export function parseAuthorPubkeyInput(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new Error('Author input cannot be empty');
+  }
+  if (HEX_64.test(trimmed)) {
+    return trimmed.toLowerCase();
+  }
+  const parsed = parseSubject(trimmed);
+  if (parsed.tag !== 'p') {
+    throw new Error('Author must be a pubkey (npub or hex)');
+  }
+  return parsed.value;
 }

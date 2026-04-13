@@ -87,5 +87,23 @@ describe('nip32010 computeDTag / buildTrustEventTemplate', () => {
       expect(t.tags).toContainEqual(['c', 'dev']);
       expect(t.tags).toContainEqual(['v', '0']);
     });
+
+    it('emits k immediately after e when asserted kind is set', () => {
+      const subj: ParsedSubject = { tag: 'e', value: 'b'.repeat(64), k: '1' };
+      const t = buildTrustEventTemplate({ subjects: [subj], value: 1 });
+      const eIdx = t.tags.findIndex((x) => x[0] === 'e');
+      expect(eIdx).toBeGreaterThanOrEqual(0);
+      expect(t.tags[eIdx + 1]).toEqual(['k', '1']);
+    });
+
+    it('pairs k with each i subject in wire order', () => {
+      const s1: ParsedSubject = { tag: 'i', value: 'isbn:9780000000001', k: 'isbn' };
+      const s2: ParsedSubject = { tag: 'i', value: 'doi:10.1/x', k: 'doi' };
+      const t = buildTrustEventTemplate({ subjects: [s1, s2], value: 1 });
+      expect(t.tags).toContainEqual(['i', 'isbn:9780000000001']);
+      expect(t.tags).toContainEqual(['k', 'isbn']);
+      expect(t.tags).toContainEqual(['i', 'doi:10.1/x']);
+      expect(t.tags).toContainEqual(['k', 'doi']);
+    });
   });
 });

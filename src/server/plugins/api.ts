@@ -1,7 +1,7 @@
 import fp from 'fastify-plugin';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolveTargetForQuery } from '../../lib/trust/subject.js';
+import { parseAuthorPubkeyInput, resolveTargetForQuery } from '../../lib/trust/subject.js';
 import { loadSecretKey, loadKeyPair } from '../../lib/keys.js';
 import { getPublicKey } from 'nostr-tools/pure';
 import type { VerifiedEvent } from 'nostr-tools';
@@ -50,11 +50,11 @@ function normalizeContext(context: string | undefined): string | undefined {
 
 function resolveAuthor(author?: string): { author: string | null; error?: string } {
   if (author) {
-    const parsed = resolveTargetForQuery(author);
-    if (parsed.tag !== 'p') {
+    try {
+      return { author: parseAuthorPubkeyInput(author) };
+    } catch {
       return { author: null, error: 'Author must be a pubkey (npub or hex)' };
     }
-    return { author: parsed.value };
   }
   const sk = loadSecretKey();
   return { author: sk ? getPublicKey(sk).toLowerCase() : null };

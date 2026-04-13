@@ -1,17 +1,36 @@
 import { describe, it, expect } from 'vitest';
-import { encodeNpub, encodeNote, encodeNevent, encodeNprofile, encodeNaddr } from '../../../src/lib/nostr/nip19.js';
-import { parseSubject, parseSubjects, resolveTargetForQuery } from '../../../src/lib/trust/subject.js';
+import {
+  encodeNpub,
+  encodeNote,
+  encodeNevent,
+  encodeNprofile,
+  encodeNaddr,
+} from '../../../src/lib/nostr/nip19.js';
+import {
+  parseAuthorPubkeyInput,
+  parseSubject,
+  parseSubjects,
+  resolveTargetForQuery,
+} from '../../../src/lib/trust/subject.js';
 
 const TEST_PUBKEY = 'a'.repeat(64);
 const TEST_EVENT_ID = 'b'.repeat(64);
 
 describe('subject module', () => {
   describe('parseSubject', () => {
-    describe('hex pubkey', () => {
-      it('should parse 64-char hex as pubkey', () => {
+    describe('bare hex and explicit tags', () => {
+      it('should parse bare 64-char hex as h (content hash)', () => {
         const r = parseSubject(TEST_PUBKEY);
+        expect(r.tag).toBe('h');
+        expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
+        expect(r.k).toBeUndefined();
+      });
+
+      it('should parse pubkey: prefix as p', () => {
+        const r = parseSubject(`pubkey:${TEST_PUBKEY}`);
         expect(r.tag).toBe('p');
         expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
+        expect(r.k).toBeUndefined();
       });
 
       it('should force event id with e: prefix for 64-char hex', () => {
@@ -48,18 +67,28 @@ describe('subject module', () => {
         expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
       });
 
-      it('should parse note as event', () => {
+      it('should parse note as event with k=1 (short note kind)', () => {
         const note = encodeNote(TEST_EVENT_ID);
         const r = parseSubject(note);
         expect(r.tag).toBe('e');
         expect(r.value).toBe(TEST_EVENT_ID.toLowerCase());
+        expect(r.k).toBe('1');
       });
 
-      it('should parse nevent as event', () => {
+      it('should parse nevent without kind as e without k', () => {
         const nevent = encodeNevent(TEST_EVENT_ID);
         const r = parseSubject(nevent);
         expect(r.tag).toBe('e');
         expect(r.value).toBe(TEST_EVENT_ID.toLowerCase());
+        expect(r.k).toBeUndefined();
+      });
+
+      it('should parse nevent with kind as e with asserted k', () => {
+        const nevent = encodeNevent(TEST_EVENT_ID, undefined, undefined, 30023);
+        const r = parseSubject(nevent);
+        expect(r.tag).toBe('e');
+        expect(r.value).toBe(TEST_EVENT_ID.toLowerCase());
+        expect(r.k).toBe('30023');
       });
 
       it('should parse naddr as addressable', () => {
@@ -165,10 +194,32 @@ describe('subject module', () => {
       expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
     });
 
+    it('should resolve bare hex as h (subject / query target)', () => {
+      const r = resolveTargetForQuery(TEST_PUBKEY);
+      expect(r.tag).toBe('h');
+      expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
+    });
+
     it('should resolve URL to canonical form', () => {
       const r = resolveTargetForQuery('https://example.com/foo');
       expect(r.tag).toBe('r');
       expect(r.value).toBe('https://example.com/foo');
+    });
+  });
+
+  describe('parseAuthorPubkeyInput', () => {
+    it('should treat bare 64-hex as pubkey (author context)', () => {
+      expect(parseAuthorPubkeyInput(TEST_PUBKEY)).toBe(TEST_PUBKEY.toLowerCase());
+    });
+
+    it('should accept npub', () => {
+      const npub = encodeNpub(TEST_PUBKEY);
+      expect(parseAuthorPubkeyInput(npub)).toBe(TEST_PUBKEY.toLowerCase());
+    });
+
+    it('should reject note id as author', () => {
+      const note = encodeNote(TEST_EVENT_ID);
+      expect(() => parseAuthorPubkeyInput(note)).toThrow(/pubkey/);
     });
   });
 });

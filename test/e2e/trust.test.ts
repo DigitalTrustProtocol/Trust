@@ -136,7 +136,7 @@ describe('trust e2e tests', () => {
       const pubkey = JSON.parse(whoami.stdout).publicKey as string;
 
       const { stdout, stderr, code } = await runCli(
-        ['add', pubkey, '-v', '1', '-c', 'e2e-test'],
+        ['add', `p:${pubkey}`, '-v', '1', '-c', 'e2e-test'],
         { timeout: 30000, flushDelayMs: 400 },
       );
 

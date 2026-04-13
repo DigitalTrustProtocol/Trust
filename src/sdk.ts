@@ -12,8 +12,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { PATHS, DEFAULT_CONFIG, type UserConfig, getRuntimeConfig, type ResolvedRuntimeConfig } from './config.js';
 import { loadKeyPair, getOrCreateKeyPair, loadSecretKey, type KeyPair } from './lib/keys.js';
-import { parseSubjects } from './lib/trust/subject.js';
-import { resolveTargetForQuery } from './lib/trust/subject.js';
+import { parseAuthorPubkeyInput, parseSubjects, resolveTargetForQuery } from './lib/trust/subject.js';
 import { buildTrustEventTemplate } from './lib/nostr/nip32010.js';
 import { signEvent } from './lib/signer.js';
 import { getAvailableRelays, publishEvent } from './lib/nostr/pool.js';
@@ -87,9 +86,7 @@ async function ensureRuntimeContext(opts?: Record<string, unknown>): Promise<Run
 
 function getAuthorPubkey(authors?: string): string {
   if (authors) {
-    const parsed = resolveTargetForQuery(authors);
-    if (parsed.tag !== 'p') throw new Error('Author must be a pubkey (npub or hex)');
-    return parsed.value;
+    return parseAuthorPubkeyInput(authors);
   }
   const sk = loadSecretKey();
   if (!sk) throw new Error('No identity configured. Run trust init first.');

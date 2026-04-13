@@ -263,16 +263,12 @@ export function buildTrustEventTemplate(params: BuildTrustEventParams): EventTem
     tags.push(['c', context]);
   }
 
-  // Subject tags: p, e, a, h, r, i (+ k for i)
-  const kTags: string[] = [];
+  // Subject tags: p, e, a, h, r, i — optional `k` immediately after each `e` (asserted Nostr kind) or `i` (NIP-73 scheme)
   for (const subj of subjects) {
     tags.push([subj.tag, subj.value]);
-    if (subj.k) {
-      kTags.push(subj.k);
+    if (subj.k != null && subj.k !== '' && (subj.tag === 'e' || subj.tag === 'i')) {
+      tags.push(['k', subj.k]);
     }
-  }
-  if (kTags.length > 0) {
-    tags.push(['k', kTags[0]!]); // NIP-73: at least one k when using i
   }
 
   return {
