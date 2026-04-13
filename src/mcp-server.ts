@@ -1,15 +1,16 @@
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import * as sdk from './sdk.js';
 
-export function createMcpServer(): Server {
-  const server = new Server(
+export function createMcpServer(): McpServer {
+  const mcp = new McpServer(
     { name: 'trust', version: '0.1.0' },
     { capabilities: { tools: {} } },
   );
+  const { server } = mcp;
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
@@ -155,5 +156,5 @@ export function createMcpServer(): Server {
     }
   });
 
-  return server;
+  return mcp;
 }
