@@ -10,6 +10,7 @@ import { loadGraph } from '../lib/trust/graphManager.js';
 import { getRuntimeConfig, type ResolvedRuntimeConfig } from '../config.js';
 import { getRuntimeContext, setupStore } from '../lib/runtimeContext.js';
 import { getPrimaryPublicKeyHex } from '../lib/identityStore.js';
+import { getServerBaseUrlFromState } from '../lib/server-state.js';
 
 export type { ResolveFormat };
 
@@ -21,6 +22,11 @@ export type { ResolveFormat };
  */
 async function pickApiHost(cfg: ResolvedRuntimeConfig): Promise<string | null> {
   if (process.env.TRUST_E2E_OFFLINE === '1') return null;
+
+  const stateUrl = getServerBaseUrlFromState('api');
+  if (stateUrl && await isServerAvailable(stateUrl)) {
+    return stateUrl;
+  }
 
   if (cfg.database === 'sqlite' && existsSync(cfg.connectionString)) {
     const localUrl = `http://${cfg.host}:${cfg.port}`;

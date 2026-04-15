@@ -4,7 +4,13 @@ import { DEFAULT_RELAYS } from '../../config.js';
 import { RelayProbeOptions, RelaySelection, selectAvailableRelays } from './relayManager.js';
 
 /** Resolve relay list: use provided relays or fall back to DEFAULT_RELAYS. */
-export function getRelays(relayOpt?: string[]): string[] {
+export function getRelays(relayOpt?: string[] | string | undefined): string[] {
+  if(process.env.TRUST_E2E_OFFLINE === '1') {
+    return [];
+  }
+  if(typeof relayOpt === 'string') {
+    return [relayOpt];
+  }
   return relayOpt && relayOpt.length > 0 ? relayOpt : DEFAULT_RELAYS;
 }
 
@@ -23,6 +29,17 @@ export async function getAvailableRelays(
 let pool: NPool | null = null;
 export let connectionErrors: Map<string, number> = new Map();
 export let logMessages: string[] = [];
+
+export interface RelayPublishFailure {
+  relay: string;
+  error: string;
+}
+
+export interface PublishReport {
+  attempted: string[];
+  successful: string[];
+  failed: RelayPublishFailure[];
+}
 
 /**
  * Get or create the relay pool
@@ -76,30 +93,50 @@ export function getPool(
 
 /**
  * Publish an event to relays
- * Returns array of relay URLs that accepted the event
+ * Returns detailed per-relay publish result.
+ */
+export async function publishEventWithReport(
+  event: VerifiedEvent,
+  relays: string[] = DEFAULT_RELAYS
+): Promise<PublishReport> {
+  if (process.env.TRUST_E2E_OFFLINE === '1') {
+    return {
+      attempted: relays,
+      successful: relays,
+      failed: [],
+    };
+  }
+  const pool = getPool(0, relays);
+  const attempted = [...new Set(relays)];
+  const results = await Promise.all(attempted.map(async (relay) => {
+    try {
+      await pool.event(event, { relays: [relay] });
+      return { relay, ok: true as const };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { relay, ok: false as const, error: message };
+    }
+  }));
+
+  return {
+    attempted,
+    successful: results.filter((result) => result.ok).map((result) => result.relay),
+    failed: results
+      .filter((result) => !result.ok)
+      .map((result) => ({ relay: result.relay, error: result.error })),
+  };
+}
+
+/**
+ * Publish an event to relays
+ * Returns array of relay URLs that accepted the event.
  */
 export async function publishEvent(
   event: VerifiedEvent,
   relays: string[] = DEFAULT_RELAYS
 ): Promise<string[]> {
-  if (process.env.TRUST_E2E_OFFLINE === '1') {
-    return relays;
-  }
-  const pool = getPool();
-
-
-
-
-  try {
-    // NPool.event() uses the eventRouter, but we can override with specific relays
-    await pool.event(event, { relays });
-    // If successful, all relays that accepted are returned
-    // NPool.event() fulfills if ANY relay accepted
-    return relays;
-  } catch (error) {
-    // All relays rejected
-    return [];
-  }
+  const report = await publishEventWithReport(event, relays);
+  return report.successful;
 }
 
 /**
@@ -132,8 +169,9 @@ export async function queryEventById(
  * Close the pool and all connections
  */
 export async function closePool(localPool?: NPool): Promise<void> {
-  if (localPool) {
-    await localPool.close();
+  const poolToClose = localPool ?? pool;
+  if (poolToClose) {
+    await poolToClose.close();
   }
   pool = null;
 }

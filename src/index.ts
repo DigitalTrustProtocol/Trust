@@ -2,4 +2,11 @@
 import 'dotenv/config';
 import { program } from './cli.js';
 
-program.parse();
+async function main(): Promise<void> {
+  await program.parseAsync(process.argv);
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

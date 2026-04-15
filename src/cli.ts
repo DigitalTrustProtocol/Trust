@@ -82,7 +82,7 @@ program
   )
   .option('-v, --value <value>', 'Trust value: 1 (trust), 0 (neutral), -1 (distrust)', '1')
   .option('--content <content>', 'Optional note explaining the trust assertion')
-  .option('-r, --relay <url...>', 'Relay URL(s) to publish to')
+  .option('-r, --relays <url...> [url...]', 'Relay URL(s) to publish to')
   .option('--json', 'Output event as JSON')
   .action(async (subject, subjects, options) => {
     await addCommand({
@@ -90,7 +90,7 @@ program
       context: options.context,
       value: parseInt(options.value, 10),
       content: options.content,
-      relay: options.relay,
+      relays: options.relays,
       json: options.json,
     });
   });

@@ -1,11 +1,10 @@
 import { NPool } from "@nostrify/nostrify";
 import { getStore, Store } from "./db/dbManager.js";
 import { Graph } from "./trust/graph/Graph.js";
-import {  getRuntimeConfig, ResolvedRuntimeConfig } from "../config.js";
+import { ResolvedRuntimeConfig } from "../config.js";
 import { getAvailableRelays, getPool } from "./nostr/pool.js";
-import pino from "pino";
 import { loadGraph } from "./trust/graphManager.js";
-import { getPinoInstance } from "./logger.js";
+import { logger } from "./logger.js";
 
 let runtimeContext: RuntimeContext | null = null;
 
@@ -19,7 +18,7 @@ export interface RuntimeContext extends ResolvedRuntimeConfig {
     contextSet: Set<string> | undefined;
 
     abortController: AbortController;
-    loggerInstance?: pino.Logger;
+    logger?: typeof logger;
 }
 
 
@@ -34,17 +33,19 @@ export async function createRuntimeContext(config: ResolvedRuntimeConfig): Promi
         authorSet: config.authors ? new Set<string>(config.authors) : undefined,
         contextSet: config.contexts ? new Set<string>(config.contexts) : undefined,
         abortController,
+        logger,
     };
 }
 
-
+/*
 async function initRuntimeContext(opts?: Record<string, unknown>): Promise<RuntimeContext> {
     const cfg = getRuntimeConfig(opts);
     const runtimeContext = await getRuntimeContext(cfg);
     runtimeContext.store = await getStore(cfg);
-    runtimeContext.loggerInstance = getPinoInstance();
+    runtimeContext.logger = logger;
     return runtimeContext;
   }
+*/
 
 export async function getRuntimeContext(config: ResolvedRuntimeConfig): Promise<RuntimeContext> {
     if (!runtimeContext) {  
@@ -63,26 +64,26 @@ export async function setupRelayPool(runtimeContext: RuntimeContext): Promise<vo
     const relays = relaySelection.selected;
   
     if (relaySelection.offline.length > 0) {
-      runtimeContext.loggerInstance?.warn(`Skipping offline relays: ${relaySelection.offline.map((status) => status.url).join(', ')}`);
+      runtimeContext.logger?.warn(`Skipping offline relays: ${relaySelection.offline.map((status) => status.url).join(', ')}`);
     }
   
     runtimeContext.relays = relays;
     runtimeContext.pool = getPool(0, relays);
-    runtimeContext.loggerInstance?.flush();
+    runtimeContext.logger?.flush();
 }
 
 export async function setupStore(runtimeContext: RuntimeContext): Promise<void> {
-    runtimeContext.loggerInstance?.info('Initializing trust database...');
+    runtimeContext.logger?.info('Initializing trust database...');
     try {
     runtimeContext.store = await getStore(runtimeContext);
     } catch (error) {
-        runtimeContext.loggerInstance?.error('Error initializing trust database: ' + error);
+        runtimeContext.logger?.error('Error initializing trust database: ' + error);
     }
-    runtimeContext.loggerInstance?.flush();
+    runtimeContext.logger?.flush();
 }
 
 export async function setupApi(runtimeContext: RuntimeContext): Promise<void> {
-    runtimeContext.loggerInstance?.info('Initializing API...');
+    runtimeContext.logger?.info('Initializing API...');
     runtimeContext.graph = await loadGraph(runtimeContext);
-    runtimeContext.loggerInstance?.flush();
+    runtimeContext.logger?.flush();
 }

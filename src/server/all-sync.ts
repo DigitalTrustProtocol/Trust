@@ -37,7 +37,7 @@ export async function subscribeToAll(runtimeContext: RuntimeContext): Promise<Gr
           eventsInserted++;
           latestTimestamp = Math.max(latestTimestamp, await trackLatestSyncTime(SYNC_TIME_NS_SYNC, [event]));
         }
-        runtimeContext.loggerInstance?.info(`Received ${eventsReceived} events. Inserted ${eventsInserted} events.` as string);
+        runtimeContext.logger?.info(`Received ${eventsReceived} events. Inserted ${eventsInserted} events.` as string);
       },
       onClosed: (subscriptionID, reason) => {
         return true; // stop the subscription

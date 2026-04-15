@@ -7,9 +7,8 @@ import type { NostrClientMsg, NostrClientREQ } from '@nostrify/types';
 import type WebSocket from 'ws';
 import type { RawData } from 'ws';
 import { RuntimeContext } from '../../lib/runtimeContext.js';
-import { logger as rootLogger } from '../../lib/logger.js';
+import { logger } from '../../lib/logger.js';
 
-const log = rootLogger.child({ plugin: 'relay' });
 
 interface ActiveSubscription {
   id: string;
@@ -37,11 +36,15 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
   const clients = new Set<RelayClient>();
   app.decorate('relayClients', clients);
 
+  logger.info(`Relay: Websocket (NIP-32010): ws://${runtimeContext.host}:${runtimeContext.port}/relay`);
+  logger.info(`Relay: Info (NIP-11): http://${runtimeContext.host}:${runtimeContext.port}/relay-info`);
+  logger.info(`Relay: Relays: ${runtimeContext.relays.join(', ')}`);
+
   const relayInfo = {
     name: 'Trust Relay',
     description:
       'Trust server relay endpoint backed by local store. Supports NIP-01 relay messaging and NIP-11 relay info document.',
-    software: 'https://gitlab.com/keutmann/trust',
+    software: '@dtp/trust',
     version: process.env.npm_package_version ?? '0.1.0',
     supported_nips: [1, 11, 32010],
   };
@@ -51,20 +54,18 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
     return relayInfo;
   });
 
-  log.info('Relay plugin registered');
-
   app.get('/relay', { websocket: true }, (socket, _request) => {
     const client: RelayClient = {
       socket,
       subscriptions: new Map<string, ActiveSubscription>(),
     };
     clients.add(client);
-    log.debug({ clients: clients.size }, 'WebSocket client connected');
+    logger.debug({ clients: clients.size }, 'Relay: WebSocket client connected');
 
     socket.on('message', async (raw: RawData) => {
       const result = parseClientMessage(raw);
       if (!result.ok) {
-        log.debug({ error: result.error }, 'Invalid client message');
+        logger.debug({ error: result.error }, 'Relay: Invalid client message');
         sendRelayMessage(socket, ['NOTICE', `invalid: ${result.error}`]);
         return;
       }
@@ -85,12 +86,12 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
             await fanOutEvent(msg[1], clients);
             break;
           default:
-            log.warn({ type }, 'Unknown client message type');
+            logger.warn({ type }, 'Relay: Unknown client message type');
             sendRelayMessage(socket, ['NOTICE', `unsupported: unknown client message ${type}`]);
         }
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        log.error({ err: error, msgType: type }, 'Error handling relay message');
+        logger.error({ err: error, msgType: type }, 'Relay: Error handling relay message');
         sendRelayMessage(socket, ['NOTICE', `error: ${reason}`]);
       }
     });
@@ -98,11 +99,11 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
     socket.on('close', () => {
       closeAllSubscriptions(client);
       clients.delete(client);
-      log.debug({ clients: clients.size }, 'WebSocket client disconnected');
+      logger.debug({ clients: clients.size }, 'Relay: WebSocket client disconnected');
     });
 
     socket.on('error', (err) => {
-      log.error({ err }, 'WebSocket error');
+      logger.error({ err }, 'Relay: WebSocket error');
       closeAllSubscriptions(client);
       clients.delete(client);
     });
@@ -204,14 +205,14 @@ async function pollSubscription(client: RelayClient, sub: ActiveSubscription, ru
 
 async function handleEvent(event: NostrEvent, socket: WebSocket, runtimeContext: RuntimeContext): Promise<void> {
   if (!verifyEvent(event)) {
-    log.debug({ eventId: event.id }, 'Event rejected: invalid signature');
+    logger.debug({ eventId: event.id }, 'Relay: Event rejected: invalid signature');
     sendRelayMessage(socket, ['OK', event.id, false, 'invalid: failed event signature verification']);
     return;
   }
 
   const accepted = await insertEvent(event as VerifiedEvent, runtimeContext);
   if (accepted) {
-    log.debug({ eventId: event.id, kind: event.kind }, 'Event accepted');
+    logger.debug({ eventId: event.id, kind: event.kind }, 'Relay: Event accepted');
   }
   sendRelayMessage(socket, ['OK', event.id, accepted, accepted ? '' : 'duplicate: filtered or rejected']);
 }

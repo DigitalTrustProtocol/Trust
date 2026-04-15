@@ -1,8 +1,11 @@
 import { DEFAULT_CONFIG, getServerHost, getServerPort } from '../config.js';
 import type { Score } from '../lib/trust/resolvers/Score.js';
 import type { ApiEnvelope } from '../server/errors.js';
+import { getServerBaseUrlFromState } from './server-state.js';
 
 function getDefaultBaseUrl(): string {
+  const fromState = getServerBaseUrlFromState('api');
+  if (fromState) return fromState;
   const host = getServerHost(DEFAULT_CONFIG);
   const port = getServerPort(DEFAULT_CONFIG);
   const base = `http://${host}:${port}`;

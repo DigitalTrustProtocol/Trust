@@ -10,6 +10,7 @@ export interface Logger {
   warn:  (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
   fatal: (...args: unknown[]) => void;
+  flush: () => void;
   child: (bindings: Record<string, unknown>) => Logger;
 }
 
@@ -49,6 +50,7 @@ function wrapPino(getInstance: () => pino.Logger): Logger {
     warn:  makeLogFn('warn'),
     error: makeLogFn('error'),
     fatal: makeLogFn('fatal'),
+    flush: () => getInstance().flush(),
     child(bindings: Record<string, unknown>): Logger {
       const childInstance = getInstance().child(bindings);
       return wrapPino(() => childInstance);

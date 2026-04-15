@@ -14,7 +14,7 @@ export type ServerService = 'all' | 'relay' | 'api' | 'web';
 export async function createApp(service: ServerService = 'all', runtimeContext: RuntimeContext): Promise<FastifyInstance> {
 
   const app = Fastify({
-    loggerInstance: runtimeContext.loggerInstance ?? getPinoInstance(),
+    loggerInstance: getPinoInstance(),
   }) as unknown as FastifyInstance;
 
   if (service === 'all' || service === 'api') {

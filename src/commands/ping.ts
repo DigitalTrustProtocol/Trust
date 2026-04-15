@@ -1,5 +1,6 @@
 import { isServerAvailable, normalizeBaseUrl } from '../lib/client.js';
 import { logger } from '../lib/logger.js';
+import { getServerBaseUrlFromState, readServerState } from '../lib/server-state.js';
 
 export interface PingOptions {
   url?: string;
@@ -7,13 +8,21 @@ export interface PingOptions {
 }
 
 export async function pingCommand(options: PingOptions): Promise<void> {
-  const baseUrl = normalizeBaseUrl(options.url);
+
+  let url = options.url ?? getServerBaseUrlFromState('api');
+  if(!url) {
+    logger.error('No server URL found');
+    process.exitCode = 1;
+    return;
+  }
+  const baseUrl = normalizeBaseUrl(url);
   const available = await isServerAvailable(baseUrl);
+
 
   if (options.json) {
     const out = {
       baseUrl: baseUrl ?? undefined,
-      available,
+      available
     };
     console.log(JSON.stringify(out));
     if (!available) {

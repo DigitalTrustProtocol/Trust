@@ -15,7 +15,7 @@ import { loadKeyPair, getOrCreateKeyPair, loadSecretKey, type KeyPair } from './
 import { parseAuthorPubkeyInput, parseSubjects, resolveTargetForQuery } from './lib/trust/subject.js';
 import { buildTrustEventTemplate } from './lib/nostr/nip32010.js';
 import { signEvent } from './lib/signer.js';
-import { getAvailableRelays, publishEvent } from './lib/nostr/pool.js';
+import { getAvailableRelays, getRelays, publishEventWithReport, type PublishReport } from './lib/nostr/pool.js';
 import { Score } from './lib/trust/resolvers/Score.js';
 import standardResolver from './lib/trust/resolvers/trustResolver.js';
 import { loadGraph, insertEvent as graphInsertEvent } from './lib/trust/graphManager.js';
@@ -48,7 +48,9 @@ export interface AddOptions {
    * When set, publish to exactly these relay URLs (skips {@link getAvailableRelays} probing).
    * The CLI passes this after probing (and uses `[]` when `TRUST_E2E_OFFLINE=1`).
    */
-  relaysResolved?: string[];
+  relays?: string[];
+  /** Optional callback with per-relay publish success/failure details. */
+  onPublishReport?: (report: PublishReport) => void;
   /**
    * When `false`, skip persisting the signed event into the local trust DB / graph. Default `true`.
    */
@@ -155,15 +157,10 @@ export async function add(subjects: string[], options?: AddOptions): Promise<Ver
 
   const event = signEvent(template) as VerifiedEvent;
 
-  let relays: string[];
-  if (options?.relaysResolved !== undefined) {
-    relays = options.relaysResolved;
-  } else {
-    const relaySelection = await getAvailableRelays(options?.relay);
-    relays = relaySelection.selected;
-  }
+  const relays = getRelays(options?.relays);
 
-  await publishEvent(event, relays);
+  const publishReport = await publishEventWithReport(event, relays);
+  options?.onPublishReport?.(publishReport);
 
   if (options?.persistLocal !== false) {
     const ctx = await ensureRuntimeContext();

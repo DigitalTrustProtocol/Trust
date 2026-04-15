@@ -2,10 +2,15 @@ import { getLatestSyncTime, rollForwardSyncTime, SYNC_TIME_NS_SYNC } from '../li
 import { getPinoInstance, initLogger, logger } from '../lib/logger.js';
 import { createApp, type ServerService } from '../server/app.js';
 import { getStore } from '../lib/db/dbManager.js';
-import { getRuntimeConfig,type ResolvedRuntimeConfig } from '../config.js';
-import { getRuntimeContext, RuntimeContext, setupApi, setupRelayPool } from '../lib/runtimeContext.js';
+import { getRuntimeConfig, type ResolvedRuntimeConfig } from '../config.js';
+import { getRuntimeContext, RuntimeContext, setupRelayPool } from '../lib/runtimeContext.js';
+import { clearServerState, touchServerState, writeServerState } from '../lib/server-state.js';
+import { FastifyInstance } from 'fastify';
+import { createServer } from 'node:net';
 
 const VALID_SERVICES = new Set<string>(['all', 'relay', 'api', 'web']);
+let heartbeat: NodeJS.Timeout | null = null;
+
 
 export function parseServerService(raw: string | undefined): ServerService {
   if (raw === undefined || raw.trim() === '') return 'all';
@@ -31,26 +36,74 @@ export async function serverCommand(options: {
   database?: string;
   connectionString?: string;
 }): Promise<void> {
-  initLogger('server');
 
-  const cfg = getRuntimeConfig(options);
 
-  logger.info({
-    service: cfg.service,
-    database: cfg.database,
-    connectionString: cfg.database === 'postgres' ? '***' : cfg.connectionString,
-    host: cfg.host,
-    port: cfg.port,
-    logLevel: process.env.TRUST_LOG_LEVEL ?? 'info',
-    relays: cfg.relays.length,
-    authors: cfg.authors?.length ?? 'all',
-    contexts: cfg.contexts?.length ?? 'all',
-    maxDepth: cfg.maxDepth,
-  }, 'Starting Trust server');
+  try {
+    const cfg = getRuntimeConfig(options);
+    await assertPortAvailable(cfg.host, cfg.port);
 
-  const runtimeContext = await initRuntimeContext(cfg);
+    logger.info(`Starting Trust server on http://${cfg.host}:${cfg.port} (service: ${cfg.service})`);
+    logger.info(`Database: ${cfg.database}`);
+    
+    const runtimeContext = await initRuntimeContext(cfg);
 
-  await runWebServer(runtimeContext);
+    await runWebServer(runtimeContext);
+
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to start Trust server');
+    logger.flush();
+  }
+}
+
+async function assertPortAvailable(host: string, port: number): Promise<void> {
+  const hostsToCheck = host === 'localhost' ? ['127.0.0.1', '::1'] : [host];
+  for (const targetHost of hostsToCheck) {
+    await assertPortAvailableOnHost(targetHost, port, host);
+  }
+}
+
+async function assertPortAvailableOnHost(targetHost: string, port: number, displayHost: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const server = createServer();
+    let settled = false;
+
+    const finish = (err?: Error): void => {
+      if (settled) return;
+      settled = true;
+      server.removeAllListeners();
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve();
+    };
+
+    const timeout = setTimeout(() => {
+      finish(new Error(`Could not verify port ${port} availability on host "${displayHost}" (probe timeout).`));
+    }, 3000);
+
+    server.once('error', (err: NodeJS.ErrnoException) => {
+      clearTimeout(timeout);
+      if (err.code === 'EADDRINUSE') {
+        finish(new Error(`Port ${port} is already in use on host "${displayHost}". Stop the existing process or use --port.`));
+        return;
+      }
+      finish(err);
+    });
+
+    server.once('listening', () => {
+      clearTimeout(timeout);
+      server.close((closeErr) => {
+        if (closeErr) {
+          finish(closeErr);
+          return;
+        }
+        finish();
+      });
+    });
+
+    server.listen({ host: targetHost, port, exclusive: true });
+  });
 }
 
 
@@ -58,19 +111,17 @@ async function initRuntimeContext(resolved: ResolvedRuntimeConfig): Promise<Runt
   const runtimeContext = await getRuntimeContext(resolved);
   runtimeContext.store = await getStore(resolved);
 
-  runtimeContext.loggerInstance = getPinoInstance();
-
-  if(runtimeContext.service === 'all' || runtimeContext.service === 'relay') {
+  if (runtimeContext.service === 'all' || runtimeContext.service === 'relay') {
     await setupRelayPool(runtimeContext);
   }
-  if(runtimeContext.service === 'all' || runtimeContext.service === 'api') {
+  if (runtimeContext.service === 'all' || runtimeContext.service === 'api') {
 
     //await setupApi(runtimeContext);
   }
-  if(runtimeContext.service === 'all' || runtimeContext.service === 'web') {
+  if (runtimeContext.service === 'all' || runtimeContext.service === 'web') {
   }
 
-  
+
   return runtimeContext;
 }
 
@@ -78,46 +129,53 @@ async function runWebServer(runtimeContext: RuntimeContext): Promise<void> {
   const host = runtimeContext.host;
   const port = runtimeContext.port;
   const relays = runtimeContext.relays;
-  const json = runtimeContext.json;
   const service = runtimeContext.service;
 
   const app = await createApp(service, runtimeContext);
-  try {
-    await app.listen({ host, port });
-  } catch (error) {
-    logger.error({ err: error, host, port, service }, 'Failed to start Trust server');
-    throw error;
-  }
+  const serverState = setupServerState(app, runtimeContext);
 
-  if (json) {
-    console.log(
-      JSON.stringify({
-        service,
-        host,
-        port,
-        relays,
-        relayEndpoint: service === 'all' || service === 'relay' ? `ws://${host}:${port}/relay` : undefined,
-        relayInfo: service === 'all' || service === 'relay' ? `http://${host}:${port}/relay-info` : undefined,
-        status: 'listening',
-      }),
-    );
-  } else {
-    logger.info(`Trust server listening on http://${host}:${port} (service: ${service})`);
-    if (relays.length > 0) {
-      logger.info(`Relays: ${relays.join(', ')}`);
-    }
-    if (service === 'all' || service === 'relay') {
-      logger.info(`Relay websocket (NIP-32010): ws://${host}:${port}/relay`);
-      logger.info(`Relay info (NIP-11): http://${host}:${port}/relay-info`);
-    }
-    if (service === 'all' || service === 'api') {
-      logger.info(`REST API: http://${host}:${port}/trust, /resolve, /health`);
-    }
-    if (service === 'all' || service === 'web') {
-      logger.info(`Web: http://${host}:${port}/`);
-    }
-  }
+  await app.listen({ host, port });
+  serverState.start();
 }
+
+function setupServerState(app: FastifyInstance, runtimeContext: RuntimeContext): { start: () => void } {
+  let shutdownStarted = false;
+  
+  const cleanupServerState = (): void => {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+    clearServerState(process.pid);
+  };
+
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
+    logger.info({ signal }, 'Shutting down Trust server');
+    cleanupServerState();
+    await app.close();
+  };
+
+  process.once('SIGINT', () => { void shutdown('SIGINT'); });
+  process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
+
+  app.addHook('onClose', async () => {
+    cleanupServerState();
+  });
+
+  const start = (): void => {
+    const { host, port, service } = runtimeContext;
+    writeServerState({ host, port, service });
+    heartbeat = setInterval(() => {
+      touchServerState(process.pid);
+    }, 5000);
+    heartbeat.unref();
+  };
+
+  return { start };
+}
+
 
 export async function getSinceFromTimestamp(since: string | undefined): Promise<number> {
   if (since !== undefined) {

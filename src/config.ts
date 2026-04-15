@@ -24,7 +24,7 @@ export const DEFAULT_REMOTE_RELAYS = [
   'wss://relay.primal.net',
   'wss://relay.damus.io',
   'wss://nos.lol',
-  'ws://localhost:3417/relay'
+  'wss://trust.dance/relay'
 ];
 
 
@@ -41,6 +41,7 @@ export const PATHS = {
   keysDir: join(CONFIG_DIR, 'keys'),
   trustDb: join(CONFIG_DIR, 'trust.db'),
   graphCache: join(CONFIG_DIR, 'graph-cache.bin'),
+  serverState: join(CONFIG_DIR, 'server-state.json'),
 } as const;
 
 // User configuration stored in config.json

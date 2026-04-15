@@ -18,13 +18,12 @@ import { NSQLite } from '../../lib/db/NSQLite.js';
 import { RuntimeContext } from '../../lib/runtimeContext.js';
 import { ok, sendError, ErrorCode } from '../errors.js';
 import { PATHS, type UserConfig } from '../../config.js';
-import { kvGet, kvSet, kvKeyLastSeenSyncTime } from '../../lib/db/kv.js';
-import { logger as rootLogger } from '../../lib/logger.js';
+import { kvGet, kvSet } from '../../lib/db/kv.js';
+import { logger } from '../../lib/logger.js';
 import { KIND_TRUST, KIND_TRUST_MAX, KIND_TRUST_MIN } from '../../lib/nostr/nip32010.js';
 import { getLatestSyncTime, SYNC_TIME_NS_SYNC } from '../../lib/syncTime.js';
 import { exportGraphForViz } from '../../lib/trust/graphExport.js';
-
-const log = rootLogger.child({ plugin: 'api' });
+import prettyBytes from 'pretty-bytes';
 
 type ResolveBody = {
   subject: string;
@@ -67,44 +66,21 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
   const isSplitApi = runtimeContext.service === 'api';
 
   app.addHook('onReady', async () => {
-    const mb = (bytes: number): number => Math.round((bytes / (1024 * 1024)) * 100) / 100;
+    const prettyInt = (value: number): string => value.toLocaleString();
     const beforeMem = process.memoryUsage();
-    log.info({
-      memory: {
-        rssMb: mb(beforeMem.rss),
-        heapUsedMb: mb(beforeMem.heapUsed),
-        heapTotalMb: mb(beforeMem.heapTotal),
-        externalMb: mb(beforeMem.external),
-      },
-    }, 'Memory usage before graph load');
+    logger.info('Graph: Loading trust into memory');
+    logger.flush();
 
-    log.info('Loading trust graph');
     await loadGraph(runtimeContext);
+
     const afterMem = process.memoryUsage();
-    log.info({
-      nodes: runtimeContext.graph?.nodes.size ?? 0,
-      edges: runtimeContext.graph?.edges.size ?? 0,
-      memory: {
-        before: {
-          rssMb: mb(beforeMem.rss),
-          heapUsedMb: mb(beforeMem.heapUsed),
-          heapTotalMb: mb(beforeMem.heapTotal),
-          externalMb: mb(beforeMem.external),
-        },
-        after: {
-          rssMb: mb(afterMem.rss),
-          heapUsedMb: mb(afterMem.heapUsed),
-          heapTotalMb: mb(afterMem.heapTotal),
-          externalMb: mb(afterMem.external),
-        },
-        delta: {
-          rssMb: mb(afterMem.rss - beforeMem.rss),
-          heapUsedMb: mb(afterMem.heapUsed - beforeMem.heapUsed),
-          heapTotalMb: mb(afterMem.heapTotal - beforeMem.heapTotal),
-          externalMb: mb(afterMem.external - beforeMem.external),
-        },
-      },
-    }, 'Trust graph loaded');
+    const nodeCount = runtimeContext.graph?.nodes.size ?? 0;
+    const edgeCount = runtimeContext.graph?.edges.size ?? 0;
+    logger.info(`Graph: Loaded with ${prettyInt(nodeCount)} nodes and ${prettyInt(edgeCount)} edges`);
+    logger.info(`Graph: Memory usage delta: ${prettyBytes(afterMem.rss - beforeMem.rss, { locale: true, minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+    logger.info(`API: http://${runtimeContext.host}:${runtimeContext.port}/resolve, /health`);
+
+    logger.flush();
 
     if (!isSplitApi) return;
 
@@ -115,7 +91,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
 
     // ── Postgres: direct LISTEN/NOTIFY from DB triggers ──────────
     if (store instanceof NPostgres && store.pgPool) {
-      log.info('Subscribing to Postgres LISTEN/NOTIFY for graph changes');
+      logger.info('Graph: Subscribing to Postgres LISTEN/NOTIFY for graph changes');
       await store.listenForGraphChanges((payload) => {
         void (async () => {
           if (payload.kind < KIND_TRUST_MIN || payload.kind > KIND_TRUST_MAX) return;
@@ -126,21 +102,21 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
               const ev = await store.getEvent(payload.event_id);
               if (ev) {
                 applyTrustEventToGraph(ev as VerifiedEvent, graph);
-                log.debug({ op: 'INSERT', eventId: payload.event_id }, 'Graph updated via NOTIFY');
+                logger.debug({ op: 'INSERT', eventId: payload.event_id }, 'Graph updated via NOTIFY');
               }
             } else if (payload.op === 'DELETE' && payload.raw_event) {
               const raw = Buffer.from(payload.raw_event, 'base64');
               removeTrustEventFromGraphPacked(new Uint8Array(raw), graph);
-              log.debug({ op: 'DELETE', eventId: payload.event_id }, 'Graph edge removed via NOTIFY');
+              logger.debug({ op: 'DELETE', eventId: payload.event_id }, 'Graph edge removed via NOTIFY');
             }
           } catch (err) {
-            log.error({ err, eventId: payload.event_id, op: payload.op }, 'Failed to apply NOTIFY payload to graph');
+            logger.error({ err, eventId: payload.event_id, op: payload.op }, 'Failed to apply NOTIFY payload to graph');
           }
         })();
       });
 
       app.addHook('onClose', async () => {
-        log.info('Stopping Postgres LISTEN/NOTIFY');
+        logger.info('Graph: Stopping Postgres LISTEN/NOTIFY');
         await store.stopListening();
       });
       return;
@@ -152,7 +128,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       let lastCreatedAt = savedTs ? Number(savedTs) : 0;
 
       const pollMs = Math.max(1000, Number(process.env.TRUST_GRAPH_NOTIFY_POLL_MS ?? 5000));
-      log.info({ pollMs }, 'Starting SQLite graph poll');
+      logger.info({ pollMs }, 'Graph: Starting SQLite graph poll');
       const timer = setInterval(() => {
         void (async () => {
           try {
@@ -164,17 +140,17 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
               }
             }
             if (events.length > 0) {
-              log.debug({ count: events.length }, 'SQLite poll applied new events to graph');
+              logger.debug({ count: events.length }, 'Graph: SQLite poll applied new events to graph');
               await kvSet(KV_GRAPH_LAST_CREATED_AT, String(lastCreatedAt));
             }
           } catch (err) {
-            log.error({ err }, 'SQLite graph poll failed');
+            logger.error({ err }, 'Graph: SQLite graph poll failed');
           }
         })();
       }, pollMs);
 
       app.addHook('onClose', async () => {
-        log.info('Stopping SQLite graph poll');
+        logger.info('Graph: Stopping SQLite graph poll');
         clearInterval(timer);
       });
     }
@@ -214,7 +190,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     let config: UserConfig | null = null;
     if (existsSync(PATHS.config)) {
       try { config = JSON.parse(readFileSync(PATHS.config, 'utf-8')); } catch (err) {
-        log.warn({ err }, 'Failed to parse config.json for /identity');
+        logger.warn({ err }, 'Failed to parse config.json for /identity');
       }
     }
 

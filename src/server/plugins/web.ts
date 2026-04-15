@@ -3,17 +3,17 @@ import fastifyStatic from '@fastify/static';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
-import { logger as rootLogger } from '../../lib/logger.js';
+import { logger } from '../../lib/logger.js';
+import { RuntimeContext } from '../../lib/runtimeContext.js';
 
-const log = rootLogger.child({ plugin: 'web' });
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-export default fp(async function webPlugin(app) {
+export default fp(async function webPlugin(app, runtimeContext: RuntimeContext) {
   const webRoot = join(__dirname, '..', '..', 'web');
   const hasBuiltSpa = existsSync(join(webRoot, 'index.html'));
 
   if (hasBuiltSpa) {
-    log.info({ webRoot }, 'Serving web dashboard');
+    logger.info(`Web: http://${runtimeContext.host}:${runtimeContext.port}/`);
     await app.register(fastifyStatic, {
       root: webRoot,
       prefix: '/',
@@ -24,7 +24,7 @@ export default fp(async function webPlugin(app) {
       return reply.sendFile('index.html');
     });
   } else {
-    log.warn('Web dashboard not built — run `npm run build:web` to enable');
+    logger.warn('Web: Dashboard not built — run `npm run build:web` to enable');
     app.get('/', async () => ({
       name: 'Trust',
       message: 'Web dashboard not built. Run `npm run build:web` first.',

@@ -4,7 +4,7 @@
  */
 
 import { add as sdkAdd } from '../sdk.js';
-import { getAvailableRelays } from '../lib/nostr/pool.js';
+import { closePool, getRelays, type PublishReport } from '../lib/nostr/pool.js';
 import { logger } from '../lib/logger.js';
 
 export async function addCommand(options: {
@@ -13,39 +13,46 @@ export async function addCommand(options: {
   context?: string;
   value: number;
   content?: string;
-  relay?: string[];
+  relays?: string[];
   json?: boolean;
 }): Promise<void> {
-  const { subjects, context, value, content = '', relay, json } = options;
+  const { subjects, context, value, content = '', relays, json } = options;
 
   if (subjects.length === 0) {
     throw new Error('At least one subject required');
   }
 
-  let relaysResolved: string[] | undefined;
-  if (process.env.TRUST_E2E_OFFLINE === '1') {
-    relaysResolved = [];
-  } else {
-    const relaySelection = await getAvailableRelays(relay);
-    relaysResolved = relaySelection.selected;
-    if (relaySelection.offline.length > 0) {
-      logger.warn(`Skipping offline relays: ${relaySelection.offline.map((status) => status.url).join(', ')}`);
+  let publishReport: PublishReport | undefined;
+  let requestedRelays = getRelays(relays);
+  
+
+  try {
+    const event = await sdkAdd(subjects, {
+      context,
+      value,
+      content,
+      relays: requestedRelays,
+      onPublishReport: (report) => {
+        publishReport = report;
+      },
+    });
+
+    if (json) {
+      console.log(JSON.stringify(event));
+    } else {
+      logger.info('Added trust to the system via relay(s)');
+      logger.info(`Event ID: ${event.id}`);
+      logger.info(`Relay(s) requested: ${requestedRelays?.join(', ')}`);
+      if (publishReport) {
+        logger.info(`Relay(s) successful: ${publishReport.successful.join(', ') || '(none)'}`);
+        if (publishReport.failed.length > 0) {
+          logger.warn(
+            `Relay(s) failed: ${publishReport.failed.map((failure) => `${failure.relay} (${failure.error})`).join(', ')}`
+          );
+        }
+      }
     }
-  }
-
-  const event = await sdkAdd(subjects, {
-    context,
-    value,
-    content,
-    relay,
-    relaysResolved,
-  });
-
-  if (json) {
-    console.log(JSON.stringify(event));
-  } else {
-    logger.info('Added trust to the system via relay(s)');
-    logger.info(`Event ID: ${event.id}`);
-    logger.info(`Relay(s): ${relaysResolved.join(', ')}`);
+  } finally {
+    await closePool();
   }
 }
