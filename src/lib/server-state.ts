@@ -36,6 +36,10 @@ function normalizeBaseUrl(host: string, port: number): string {
   return `http://${host}:${port}`.replace(/\/+$/, '');
 }
 
+function normalizeRelayUrl(host: string, port: number): string {
+  return `ws://${host}:${port}/relay`.replace(/\/+$/, '');
+}
+
 function writeState(state: ServerState): void {
   const dir = dirname(PATHS.serverState);
   if (!existsSync(dir)) {
@@ -113,4 +117,21 @@ export function getServerBaseUrlFromState(requiredCapability?: ServerCapability)
   if (!isPidRunning(state.pid)) return null;
   if (requiredCapability && !serviceSupportsCapability(state.service, requiredCapability)) return null;
   return normalizeBaseUrl(state.host, state.port);
+}
+
+export function getServerRelayUrlFromState(): string | null {
+  const state = readServerState();
+  if (!state) return null;
+  if (!isPidRunning(state.pid)) return null;
+  if (!serviceSupportsCapability(state.service, 'relay')) return null;
+  return normalizeRelayUrl(state.host, state.port);
+}
+
+/**
+ * Add local server relay URL when local server is running relay service.
+ */
+export function withLocalServerRelay(relays: string[]): string[] {
+  const localRelay = getServerRelayUrlFromState();
+  if (!localRelay) return relays;
+  return Array.from(new Set([...relays, localRelay]));
 }

@@ -1,7 +1,9 @@
 import { NPool, NRelay1, NRelay1Opts } from '@nostrify/nostrify';
-import type { VerifiedEvent, Filter, NostrEvent } from 'nostr-tools';
-import { DEFAULT_RELAYS } from '../../config.js';
+import type { VerifiedEvent, Filter } from 'nostr-tools';
+import { DEFAULT_RELAYS, DEFAULT_REMOTE_RELAYS } from '../../config.js';
 import { RelayProbeOptions, RelaySelection, selectAvailableRelays } from './relayManager.js';
+
+const DEFAULT_RELAY_PUBLISH_TIMEOUT_MS = 10_000;
 
 /** Resolve relay list: use provided relays or fall back to DEFAULT_RELAYS. */
 export function getRelays(relayOpt?: string[] | string | undefined): string[] {
@@ -11,7 +13,7 @@ export function getRelays(relayOpt?: string[] | string | undefined): string[] {
   if(typeof relayOpt === 'string') {
     return [relayOpt];
   }
-  return relayOpt && relayOpt.length > 0 ? relayOpt : DEFAULT_RELAYS;
+  return relayOpt && relayOpt.length > 0 ? relayOpt : DEFAULT_REMOTE_RELAYS;
 }
 
 /**
@@ -108,9 +110,33 @@ export async function publishEventWithReport(
   }
   const pool = getPool(0, relays);
   const attempted = [...new Set(relays)];
+  const timeoutMsRaw = Number(process.env.TRUST_RELAY_PUBLISH_TIMEOUT_MS);
+  const timeoutMs = Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
+    ? timeoutMsRaw
+    : DEFAULT_RELAY_PUBLISH_TIMEOUT_MS;
+
+  const withTimeout = <T>(promise: Promise<T>): Promise<T> => {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`Publish timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      void promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
+  };
+
   const results = await Promise.all(attempted.map(async (relay) => {
     try {
-      await pool.event(event, { relays: [relay] });
+      await withTimeout(pool.event(event, { relays: [relay] }));
       return { relay, ok: true as const };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

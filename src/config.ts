@@ -92,7 +92,7 @@ const DEFAULT_SYNC_KINDS = [32010];
 
 export const DEFAULT_CONFIG: UserConfig = {
   version: 1,
-  relays: DEFAULT_RELAYS,
+  relays: DEFAULT_REMOTE_RELAYS,
   createdAt: new Date().toISOString(),
   serverPort: DEFAULT_SERVER_PORT,
   serverHost: DEFAULT_SERVER_HOST,

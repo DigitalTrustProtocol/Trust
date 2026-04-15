@@ -116,7 +116,7 @@ Server mode (`trust server`): REST routes include `/health`, `/identity`, `/trus
 import { resolve, resolveBatch, add, whoami } from '@dtp/trust';
 ```
 
-Options types: `ResolveOptions` (`authors`, `contexts`, `maxDepth`, `format`), `AddOptions` (`context`, `value`, `content`, `relay`, `relaysResolved`, `persistLocal`). File: `src/sdk.ts`. CLI `trust add` delegates to SDK `add()` (same parsing and tags).
+Options types: `ResolveOptions` (`authors`, `contexts`, `maxDepth`, `format`), `AddOptions` (`context`, `value`, `content`, `relay`, `relaysResolved`). File: `src/sdk.ts`. CLI `trust add` delegates to SDK `add()` (same parsing and tags).
 
 ## Add: subject strings
 

@@ -145,7 +145,7 @@ export async function add(subjects: string[], options?: AddOptions): Promise<Ver
   const parsed = parseSubjects(subjects);
   const template = buildTrustEventTemplate({
     subjects: parsed,
-    context: options?.context ?? options?.contexts,
+    context: options?.context,
     value,
     content: options?.content ?? '',
   });
