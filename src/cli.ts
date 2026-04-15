@@ -223,7 +223,6 @@ program
   )
   .option('--database <driver>', 'Database type: sqlite or postgres (default: sqlite)')
   .option('--connection-string <value>', 'Database connection: file path for sqlite, URL for postgres')
-  .option('--json', 'Output startup info as JSON')
   .action(async (options) => {
     try {
       await serverCommand({
@@ -237,7 +236,6 @@ program
         service: options.service,
         database: options.database,
         connectionString: options.connectionString,
-        json: options.json,
       });
     } finally {
     }

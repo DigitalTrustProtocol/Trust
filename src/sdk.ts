@@ -43,7 +43,6 @@ export interface AddOptions {
   /** Trust score: `1`, `0`, or `-1`. Other numeric inputs are treated as `0`. */
   value?: 1 | 0 | -1 | number;
   content?: string;
-  relay?: string[];
   /**
    * When set, publish to exactly these relay URLs (skips {@link getAvailableRelays} probing).
    * The CLI passes this after probing (and uses `[]` when `TRUST_E2E_OFFLINE=1`).
@@ -51,10 +50,6 @@ export interface AddOptions {
   relays?: string[];
   /** Optional callback with per-relay publish success/failure details. */
   onPublishReport?: (report: PublishReport) => void;
-  /**
-   * When `false`, skip persisting the signed event into the local trust DB / graph. Default `true`.
-   */
-  persistLocal?: boolean;
 }
 
 export interface ResolveOptions {
@@ -161,11 +156,6 @@ export async function add(subjects: string[], options?: AddOptions): Promise<Ver
 
   const publishReport = await publishEventWithReport(event, relays);
   options?.onPublishReport?.(publishReport);
-
-  if (options?.persistLocal !== false) {
-    const ctx = await ensureRuntimeContext();
-    await graphInsertEvent(event, ctx);
-  }
 
   return event;
 }

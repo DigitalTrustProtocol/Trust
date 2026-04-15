@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../src/config.js', () => {
+vi.mock('../../src/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/config.js')>();
   return {
+    ...actual,
     DEFAULT_CONFIG: {
-      version: 1,
-      relays: [],
-      createdAt: 'test',
+      ...actual.DEFAULT_CONFIG,
       serverPort: 3417,
       serverHost: 'localhost',
     },

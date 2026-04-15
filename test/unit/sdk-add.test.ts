@@ -8,7 +8,16 @@ import { hexToBytes } from 'nostr-tools/utils';
 const TEST_SECRET_KEY = 'a'.repeat(64);
 
 vi.mock('../../src/lib/nostr/pool.js', () => ({
-  publishEvent: vi.fn().mockResolvedValue([]),
+  getRelays: vi.fn((relayOpt?: string[] | string) => {
+    if (Array.isArray(relayOpt)) return relayOpt;
+    if (typeof relayOpt === 'string') return [relayOpt];
+    return [];
+  }),
+  publishEventWithReport: vi.fn().mockResolvedValue({
+    attempted: [],
+    successful: [],
+    failed: [],
+  }),
   getAvailableRelays: vi.fn().mockResolvedValue({
     selected: ['wss://relay.mock'],
     offline: [],
@@ -34,7 +43,7 @@ vi.mock('../../src/config.js', async (importOriginal) => {
 });
 
 import { add } from '../../src/sdk.js';
-import { publishEvent } from '../../src/lib/nostr/pool.js';
+import { publishEventWithReport } from '../../src/lib/nostr/pool.js';
 import {
   encodeNpub,
   encodeNote,
@@ -64,7 +73,7 @@ describe('sdk add() subject parsing and k tags', () => {
     const sk = hexToBytes(TEST_SECRET_KEY);
     addIdentityKey(sk);
     TEST_PUBKEY = getPublicKey(sk).toLowerCase();
-    vi.mocked(publishEvent).mockClear();
+    vi.mocked(publishEventWithReport).mockClear();
   });
 
   afterEach(() => {
@@ -73,8 +82,7 @@ describe('sdk add() subject parsing and k tags', () => {
 
   async function addOne(subject: string) {
     return add([subject], {
-      relaysResolved: [],
-      persistLocal: false,
+      relays: [],
       value: 1,
     });
   }
@@ -198,8 +206,7 @@ describe('sdk add() subject parsing and k tags', () => {
 
   it('batch: note + isbn preserves e,k then i,k order', async () => {
     const event = await add([encodeNote(TEST_EVENT_ID), 'isbn:9780000000001'], {
-      relaysResolved: [],
-      persistLocal: false,
+      relays: [],
       value: 1,
     });
     const seq = subjectWireTags(event.tags);
@@ -210,10 +217,10 @@ describe('sdk add() subject parsing and k tags', () => {
     expect(seq).toHaveLength(4);
   });
 
-  it('calls publishEvent with empty relay list when relaysResolved is []', async () => {
+  it('calls publishEventWithReport with empty relay list when relaysResolved is []', async () => {
     await addOne(encodeNpub(TEST_PUBKEY));
-    expect(publishEvent).toHaveBeenCalledTimes(1);
-    const [, relays] = vi.mocked(publishEvent).mock.calls[0]!;
+    expect(publishEventWithReport).toHaveBeenCalledTimes(1);
+    const [, relays] = vi.mocked(publishEventWithReport).mock.calls[0]!;
     expect(relays).toEqual([]);
   });
 });

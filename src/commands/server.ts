@@ -30,7 +30,6 @@ export async function serverCommand(options: {
   contexts?: string;
   kinds?: number[];
   maxDepth?: number;
-  json?: boolean;
   /** Omitted or `all`: run relay, API, and web in one process. */
   service?: ServerService;
   database?: string;
