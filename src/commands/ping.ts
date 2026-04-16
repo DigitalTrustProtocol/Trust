@@ -11,9 +11,7 @@ export async function pingCommand(options: PingOptions): Promise<void> {
 
   let url = options.url ?? getServerBaseUrlFromState('api');
   if(!url) {
-    logger.error('No server URL found');
-    process.exitCode = 1;
-    return;
+    url = 'https://trust.dance';
   }
   const baseUrl = normalizeBaseUrl(url);
   const available = await isServerAvailable(baseUrl);

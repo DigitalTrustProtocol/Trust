@@ -17,7 +17,7 @@ import { NPostgres } from '../../lib/db/NPostgres.js';
 import { NSQLite } from '../../lib/db/NSQLite.js';
 import { RuntimeContext } from '../../lib/runtimeContext.js';
 import { ok, sendError, ErrorCode } from '../errors.js';
-import { PATHS, type UserConfig } from '../../config.js';
+import { getRuntimeConfig, PATHS, type UserConfig } from '../../config.js';
 import { kvGet, kvSet } from '../../lib/db/kv.js';
 import { logger } from '../../lib/logger.js';
 import { KIND_TRUST, KIND_TRUST_MAX, KIND_TRUST_MIN } from '../../lib/nostr/nip32010.js';
@@ -157,7 +157,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
   });
 
   // ── Health & Ping ──────────────────────────────────────────────────
-
+  /*
   app.get('/health', async (_request: FastifyRequest, reply: FastifyReply) => {
     const graph = runtimeContext.graph;
     if (!graph) {
@@ -176,7 +176,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       uptime: Math.floor((Date.now() - startTime) / 1000),
     });
   });
-
+  */
   app.get('/ping', async () => ok({ status: 'ok' }));
 
   // ── Identity ───────────────────────────────────────────────────────
@@ -187,12 +187,8 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       return sendError(reply, 404, ErrorCode.NO_IDENTITY, 'No identity configured. Run trust init first.');
     }
 
-    let config: UserConfig | null = null;
-    if (existsSync(PATHS.config)) {
-      try { config = JSON.parse(readFileSync(PATHS.config, 'utf-8')); } catch (err) {
-        logger.warn({ err }, 'Failed to parse config.json for /identity');
-      }
-    }
+
+    let config = getRuntimeConfig();
 
     return ok({
       publicKey: keyPair.publicKey,
@@ -349,7 +345,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
   });
 
   // ── Graph export (visualization) ───────────────────────────────────
-
+  /*
   app.get<{
     Querystring: { maxEdges?: string };
   }>('/graph/export', async (request, reply) => {
@@ -361,7 +357,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     const snapshot = exportGraphForViz(graph, { maxEdges });
     return ok(snapshot);
   });
-
+  */
   // ── Events Query ───────────────────────────────────────────────────
 
   app.get<{

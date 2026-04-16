@@ -1,6 +1,5 @@
 import { closeTrustDb, Store } from '../lib/db/dbManager.js';
 import { closePool } from '../lib/nostr/pool.js';
-import { statusLine } from '../lib/utils.js';
 import { getRuntimeConfig } from '../config.js';
 import { getSinceFromTimestamp } from './server.js';
 import { logger } from '../lib/logger.js';

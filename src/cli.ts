@@ -256,9 +256,9 @@ program
     }
   });
 
-registerConfig(program);
+//registerConfig(program); // TODO: re-enable this when we have a proper config command
 
-const identity = program.command('identity').description('Manage signing keys (primary + additional identities)');
+const identity = program.command('identity').description('Manage signing keys (primary + additional identities)\r\nNote: The keys are stored in clear text in the ~/.trust/keys directory');
 
 identity
   .command('list')

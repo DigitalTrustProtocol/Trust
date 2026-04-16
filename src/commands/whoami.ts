@@ -1,12 +1,12 @@
-import { existsSync, readFileSync } from 'node:fs';
 import { loadKeyPair } from '../lib/keys.js';
-import { PATHS, type UserConfig } from '../config.js';
+import { getRuntimeConfig, loadUserConfig } from '../config.js';
 import { logger } from '../lib/logger.js';
+import { getServerRelayUrlFromState, withLocalServerRelay } from '../lib/server-state.js';
 
 /**
  * Display current identity information
  */
-export async function whoamiCommand(options: { json?: boolean }): Promise<void> {
+export async function whoamiCommand(options: { json?: boolean; relays?: string[] }): Promise<void> {
   const keyPair = loadKeyPair();
 
   if (!keyPair) {
@@ -14,22 +14,16 @@ export async function whoamiCommand(options: { json?: boolean }): Promise<void> 
     process.exit(1);
   }
 
-  let config: UserConfig | null = null;
-  if (existsSync(PATHS.config)) {
-    try {
-      config = JSON.parse(readFileSync(PATHS.config, 'utf-8'));
-    } catch {
-      // Ignore config errors
-    }
-  }
+  const runtimeConfig = getRuntimeConfig(options);
+  const resolvedRelays = withLocalServerRelay(runtimeConfig.relays);
 
   if (options.json) {
     const output = {
       publicKey: keyPair.publicKey,
       npub: keyPair.npub,
-      profile: config?.profile || null,
+      profile: runtimeConfig.profile || null,
       profileUrl: `https://trust.dance/${keyPair.npub}`,
-      relays: config?.relays || [],
+      relays: resolvedRelays
     };
     console.log(JSON.stringify(output, null, 2));
     return;
@@ -39,21 +33,23 @@ export async function whoamiCommand(options: { json?: boolean }): Promise<void> 
   console.log('--------');
   console.log(`Public Key:  ${keyPair.publicKey}`);
   console.log(`npub:        ${keyPair.npub}`);
-  console.log(`Profile URL: https://dpeep.com/profile/${keyPair.npub}`);
+  console.log(`Profile URL: https://trust.dance/${keyPair.npub}`);
 
-  if (config?.profile) {
+  if (runtimeConfig.profile) {
     console.log('');
     console.log('Profile');
     console.log('-------');
-    if (config.profile.name) console.log(`Name:  ${config.profile.name}`);
-    if (config.profile.about) console.log(`About: ${config.profile.about}`);
-    if (config.profile.lud16) console.log(`Lightning: ${config.profile.lud16}`);
+    if (runtimeConfig.profile.name) console.log(`Name:  ${runtimeConfig.profile.name}`);
+    if (runtimeConfig.profile.about) console.log(`About: ${runtimeConfig.profile.about}`);
+    if (runtimeConfig.profile.lud16) console.log(`Lightning: ${runtimeConfig.profile.lud16}`);
   }
 
-  if (config?.relays && config.relays.length > 0) {
+  if (resolvedRelays.length > 0) {
     console.log('');
     console.log('Relays');
     console.log('------');
-    config.relays.forEach((r) => console.log(`  ${r}`));
+    resolvedRelays.forEach((relay) => {
+      console.log(`  ${relay}`);
+    });
   }
 }

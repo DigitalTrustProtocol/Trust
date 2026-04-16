@@ -1,6 +1,6 @@
 import { NPool, NRelay1, NRelay1Opts } from '@nostrify/nostrify';
 import type { VerifiedEvent, Filter } from 'nostr-tools';
-import { DEFAULT_RELAYS, DEFAULT_REMOTE_RELAYS } from '../../config.js';
+import { DEFAULT_REMOTE_RELAYS } from '../../config.js';
 import { RelayProbeOptions, RelaySelection, selectAvailableRelays } from './relayManager.js';
 
 const DEFAULT_RELAY_PUBLISH_TIMEOUT_MS = 2_000;
@@ -48,7 +48,7 @@ export interface PublishReport {
  */
 export function getPool(
   eoseTimeout: number = 0,
-  relays: string[] = DEFAULT_RELAYS,
+  relays: string[] = DEFAULT_REMOTE_RELAYS,
 ): NPool {
   if(pool) {
     return pool;
@@ -99,7 +99,7 @@ export function getPool(
  */
 export async function publishEventWithReport(
   event: VerifiedEvent,
-  relays: string[] = DEFAULT_RELAYS
+  relays: string[] = DEFAULT_REMOTE_RELAYS
 ): Promise<PublishReport> {
   if (process.env.TRUST_E2E_OFFLINE === '1') {
     return {
@@ -159,7 +159,7 @@ export async function publishEventWithReport(
  */
 export async function publishEvent(
   event: VerifiedEvent,
-  relays: string[] = DEFAULT_RELAYS
+  relays: string[] = DEFAULT_REMOTE_RELAYS
 ): Promise<string[]> {
   const report = await publishEventWithReport(event, relays);
   return report.successful;
@@ -170,7 +170,7 @@ export async function publishEvent(
  */
 export async function queryEvents(
   filter: Filter | Filter[],
-  relays: string[] = DEFAULT_RELAYS
+  relays: string[] = DEFAULT_REMOTE_RELAYS
 ): Promise<VerifiedEvent[]> {
   const pool = getPool();
   const filters = Array.isArray(filter) ? filter : [filter];
@@ -185,7 +185,7 @@ export async function queryEvents(
  */
 export async function queryEventById(
   id: string,
-  relays: string[] = DEFAULT_RELAYS
+  relays: string[] = DEFAULT_REMOTE_RELAYS
 ): Promise<VerifiedEvent | null> {
   const events = await queryEvents({ ids: [id] }, relays);
   return events[0] || null;
@@ -200,4 +200,28 @@ export async function closePool(localPool?: NPool): Promise<void> {
     await poolToClose.close();
   }
   pool = null;
+}
+
+/** Keep only strings that are valid `ws:` / `wss:` URLs (avoids sync throws in the relay client). */
+export function partitionRelayWebSocketUrls(urls: string[]): { ok: string[]; bad: string[] } {
+  const ok: string[] = [];
+  const bad: string[] = [];
+  for (const raw of urls) {
+    const u = raw.trim();
+    if (!u) {
+      bad.push(raw);
+      continue;
+    }
+    try {
+      const parsed = new URL(u);
+      if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
+        bad.push(raw);
+        continue;
+      }
+      ok.push(u);
+    } catch {
+      bad.push(raw);
+    }
+  }
+  return { ok, bad };
 }

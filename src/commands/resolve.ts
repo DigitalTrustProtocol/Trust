@@ -28,12 +28,14 @@ async function pickApiHost(cfg: ResolvedRuntimeConfig): Promise<string | null> {
     return stateUrl;
   }
 
+  /*
   if (cfg.database === 'sqlite' && existsSync(cfg.connectionString)) {
     const localUrl = `http://${cfg.host}:${cfg.port}`;
     if (await isServerAvailable(localUrl)) {
       return localUrl;
     }
   }
+  */
 
   if (await isServerAvailable(cfg.remoteApiUrl)) {
     return cfg.remoteApiUrl;
