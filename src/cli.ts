@@ -182,12 +182,25 @@ program
 program
   .command('show <d-tag>')
   .description('Show a trust event by d tag value')
+  .option(
+    '--source <name>',
+    'Source to query: relay (default) or database',
+    (val: string) => {
+      const v = String(val).trim().toLowerCase();
+      if (v !== 'relay' && v !== 'database') {
+        throw new Error('Invalid --source value. Use relay or database.');
+      }
+      return v;
+    },
+    'relay',
+  )
   .option('-r, --relays <url...>', 'Relay URL(s)')
   .option('--json', 'Output event as JSON')
   .action(async (dTag, options) => {
     try {
       await showTrustCommand({
         dTag,
+        source: options.source,
         relays: options.relays,
         json: options.json
       });

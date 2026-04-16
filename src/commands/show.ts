@@ -4,6 +4,8 @@ import { logger } from '../lib/logger.js';
 import { getRuntimeConfig } from '../config.js';
 import { withLocalServerRelay } from '../lib/server-state.js';
 import { NPool } from '@nostrify/nostrify';
+import { getStore, closeStore } from '../lib/db/dbManager.js';
+import type { Store } from '../lib/db/dbManager.js';
 
 /** After the first relay sends EOSE, wait this long (ms) for stragglers before aborting the pool query. */
 const SHOW_QUERY_EOSE_STRAGGLER_MS = 2_000;
@@ -35,14 +37,39 @@ function prettyPrintEvent(event: {
 export async function showTrustCommand(options: {
   dTag: string,
   relays?: string[],
+  source?: 'relay' | 'database',
   json?: boolean
 }): Promise<void> {
   const dTag = options.dTag.trim();
   const isJson = options.json ?? false;
+  const source = options.source ?? 'relay';
 
   let pool: NPool | null = null;
+  let store: Store | null = null;
 
   try {
+    if (source === 'database') {
+      // Query the local store by `d` tag. This lets `trust show` work offline and matches e2e expectations.
+      const cfg = getRuntimeConfig({ ...options, authors: '*' });
+      store = await getStore(cfg);
+      const events = await store.query([{ kinds: [KIND_TRUST], '#d': [dTag] }], {});
+      const local = events[0] ?? null;
+
+      if (local) {
+        if (isJson) console.log(JSON.stringify(local, null, 2));
+        else prettyPrintEvent(local);
+        return;
+      }
+
+      if (isJson) {
+        console.log(JSON.stringify({ error: 'not_found', dTag }, null, 2));
+      } else {
+        logger.info('Event not found');
+      }
+      process.exitCode = 1;
+      return;
+    }
+
     let requestedRelays: string[] = options.relays ?? [];
     if (requestedRelays.length === 0) {
       const config = getRuntimeConfig(options);
@@ -65,12 +92,17 @@ export async function showTrustCommand(options: {
       } else {
         logger.info(`Event not found`);
       }
+      process.exitCode = 1;
     }
   } catch (error) {
     logger.error(error);
+    process.exitCode = 1;
   } finally {
     if (pool) {
       await pool.close();
+    }
+    if (store) {
+      await closeStore(store);
     }
   }
 }

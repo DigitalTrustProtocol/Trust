@@ -39,7 +39,8 @@ export async function createApp(service: ServerService = 'all', runtimeContext: 
           description: 'Decentralized Web of Trust identity and reputation for AI agents',
           version: '0.1.0',
         },
-        servers: [{ url: '/' }],
+        // Versioned REST API base path.
+        servers: [{ url: '/v1' }],
         tags: [
           { name: 'default', description: 'Ping and misc endpoints' },
           { name: 'relay', description: 'Nostr relay endpoints' },

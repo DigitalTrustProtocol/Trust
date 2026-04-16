@@ -28,7 +28,7 @@ export async function unwrap<T>(res: Response): Promise<T> {
 
 export async function fetchGraphExport(apiBase: string, maxEdges = 10_000) {
   const base = apiBase.replace(/\/+$/, '');
-  const url = `${base || ''}/graph/export?maxEdges=${maxEdges}`;
+  const url = `${base || ''}/v1/graph/export?maxEdges=${maxEdges}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Graph export failed: ${res.status}`);
   return unwrap<{
@@ -43,7 +43,7 @@ export async function postResolve(
   body: { subject: string; author: string; context?: string; maxDepth?: number; format?: 'path' | 'default' | 'number' },
 ) {
   const base = apiBase.replace(/\/+$/, '');
-  const res = await fetch(`${base || ''}/resolve`, {
+  const res = await fetch(`${base || ''}/v1/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

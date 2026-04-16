@@ -76,7 +76,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     const edgeCount = runtimeContext.graph?.edges.size ?? 0;
     logger.info(`Graph: Loaded with ${prettyInt(nodeCount)} nodes and ${prettyInt(edgeCount)} edges`);
     logger.info(`Graph: Memory usage delta: ${prettyBytes(afterMem.rss - beforeMem.rss, { locale: true, minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
-    logger.info(`API: http://${runtimeContext.host}:${runtimeContext.port}/resolve`);
+    logger.info(`API: http://${runtimeContext.host}:${runtimeContext.port}/v1/resolve`);
 
     logger.flush();
 
@@ -176,7 +176,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
   });
   */
   app.get(
-    '/ping',
+    '/v1/ping',
     {
       schema: {
         tags: ['default'],
@@ -188,7 +188,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
   // ── Identity ───────────────────────────────────────────────────────
 
   app.get(
-    '/identity',
+    '/v1/identity',
     {
       schema: {
         tags: ['identity'],
@@ -257,7 +257,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
   // ── Resolve (single) ──────────────────────────────────────────────
 
   app.post<{ Body: ResolveBody }>(
-    '/resolve',
+    '/v1/resolve',
     {
       schema: {
         tags: ['resolve'],
@@ -301,7 +301,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
   // ── Resolve (batch) ────────────────────────────────────────────────
 
   app.post<{ Body: ResolveBatchBody }>(
-    '/resolve/batch',
+    '/v1/resolve/batch',
     {
       schema: {
         tags: ['resolve'],
@@ -357,7 +357,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
   // ── Graph Stats ────────────────────────────────────────────────────
 
   app.get(
-    '/graph/stats',
+    '/v1/graph/stats',
     {
       schema: {
         tags: ['graph'],
@@ -427,7 +427,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
 
   app.get<{
     Querystring: { author?: string; context?: string };
-  }>('/trusted', {
+  }>('/v1/trusted', {
     schema: {
       tags: ['graph'],
     },

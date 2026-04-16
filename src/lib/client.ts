@@ -24,7 +24,7 @@ export async function isServerAvailable(baseUrl?: string, timeoutMs = 2000): Pro
   const base = normalizeBaseUrl(baseUrl);
 
   try {
-    const res = await fetch(`${base}/ping`, {
+    const res = await fetch(`${base}/v1/ping`, {
       method: 'GET',
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -78,7 +78,7 @@ export async function proxyTrust(
 ): Promise<unknown> {
   const base = normalizeBaseUrl(baseUrl);
 
-  const res = await fetch(`${base}/trust`, {
+  const res = await fetch(`${base}/v1/trust`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
@@ -98,7 +98,7 @@ export async function proxyResolve(
 ): Promise<Score[]> {
   const base = normalizeBaseUrl(baseUrl);
 
-  const res = await fetch(`${base}/resolve`, {
+  const res = await fetch(`${base}/v1/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
@@ -118,7 +118,7 @@ export async function proxyResolveBatch(
 ): Promise<unknown[]> {
   const base = normalizeBaseUrl(baseUrl);
 
-  const res = await fetch(`${base}/resolve/batch`, {
+  const res = await fetch(`${base}/v1/resolve/batch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
