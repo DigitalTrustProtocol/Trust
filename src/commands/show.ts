@@ -1,9 +1,12 @@
-import { queryEvents } from '../lib/nostr/pool.js';
-import { getAvailableRelays } from '../lib/nostr/pool.js';
+import { getPool } from '../lib/nostr/pool.js';
 import { KIND_TRUST } from '../lib/nostr/nip32010.js';
 import { logger } from '../lib/logger.js';
 import { getRuntimeConfig } from '../config.js';
-import { closeTrustDb, getStore } from '../lib/db/dbManager.js';
+import { withLocalServerRelay } from '../lib/server-state.js';
+import { NPool } from '@nostrify/nostrify';
+
+/** After the first relay sends EOSE, wait this long (ms) for stragglers before aborting the pool query. */
+const SHOW_QUERY_EOSE_STRAGGLER_MS = 2_000;
 
 function prettyPrintEvent(event: {
   id: string;
@@ -30,45 +33,44 @@ function prettyPrintEvent(event: {
 }
 
 export async function showTrustCommand(options: {
-  dTag: string;
-  relay?: string[];
-  source?: 'database' | 'server' | 'relay';
-  json?: boolean;
+  dTag: string,
+  relays?: string[],
+  json?: boolean
 }): Promise<void> {
   const dTag = options.dTag.trim();
   const isJson = options.json ?? false;
-  const source = options.source ?? 'relay';
 
-  let found = false;
+  let pool: NPool | null = null;
 
-  if (source === 'relay') {
-    const relaySelection = await getAvailableRelays(options.relay);
-    const relays = relaySelection.selected;
-    if (!isJson && relaySelection.offline.length > 0) {
-      logger.warn(`Skipping offline relays: ${relaySelection.offline.map((status) => status.url).join(', ')}`);
+  try {
+    let requestedRelays: string[] = options.relays ?? [];
+    if (requestedRelays.length === 0) {
+      const config = getRuntimeConfig(options);
+      requestedRelays = withLocalServerRelay(config.relays);
     }
-    const events = await queryEvents(
-      { kinds: [KIND_TRUST], '#d': [dTag] },
-      relays,
-    );
+
+    pool = getPool(SHOW_QUERY_EOSE_STRAGGLER_MS, requestedRelays); // 2 seconds timeout
+    const events = await pool.query([{ kinds: [KIND_TRUST], '#d': [dTag] }], { relays: requestedRelays });
+
     const remote = events[0] ?? null;
     if (remote) {
-      if (!isJson) logger.info('Event was found via relays.');
-      found = true;
       if (isJson) {
-        console.log(JSON.stringify(remote));
+        console.log(JSON.stringify(remote, null, 2));
       } else {
         prettyPrintEvent(remote);
       }
-    }
-  }
-
-  if (!found) {
-    if (isJson) {
-      console.log(JSON.stringify({ error: 'not_found', dTag }));
     } else {
-      logger.error(`Event not found: ${dTag}`);
+      if (isJson) {
+        console.log(JSON.stringify({ error: 'not_found', dTag }, null, 2));
+      } else {
+        logger.info(`Event not found`);
+      }
     }
-    process.exitCode = 1;
+  } catch (error) {
+    logger.error(error);
+  } finally {
+    if (pool) {
+      await pool.close();
+    }
   }
 }

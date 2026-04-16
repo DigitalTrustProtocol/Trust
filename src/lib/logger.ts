@@ -13,8 +13,8 @@ export interface Logger {
   flush: () => void;
   child: (bindings: Record<string, unknown>) => Logger;
 }
-
-let _logger: pino.Logger = buildCliLogger('info');
+let _logLevel: string = process.env.TRUST_LOG_LEVEL ?? 'info';
+let _logger: pino.Logger = buildCliLoggerCleanPrint(_logLevel);
 
 function buildCliLogger(level: string): pino.Logger {
   return pino({
@@ -30,6 +30,22 @@ function buildCliLogger(level: string): pino.Logger {
     },
   });
 }
+
+function buildCliLoggerCleanPrint(level: string): pino.Logger {
+  return pino({
+    level,
+    transport: {
+      target: 'pino-pretty',
+      options: {
+        colorize: true,
+        ignore: 'time,level,pid,hostname,name,caller',
+        hideObject: true,
+        sync: true,
+      },
+    },
+  });
+}
+
 
 function buildServerLogger(logFile: string | undefined, level: string): pino.Logger {
   const target = process.env.TRUST_LOG_FILE ?? logFile;
@@ -73,7 +89,7 @@ export function initLogger(mode: LogMode, options?: { logFile?: string; level?: 
   const level = process.env.TRUST_LOG_LEVEL ?? options?.level ?? 'info';
   _logger = mode === 'server'
     ? buildServerLogger(options?.logFile, level)
-    : buildCliLogger(level);
+    : buildCliLoggerCleanPrint(level);
 }
 
 /**

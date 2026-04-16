@@ -3,7 +3,7 @@ import type { VerifiedEvent, Filter } from 'nostr-tools';
 import { DEFAULT_RELAYS, DEFAULT_REMOTE_RELAYS } from '../../config.js';
 import { RelayProbeOptions, RelaySelection, selectAvailableRelays } from './relayManager.js';
 
-const DEFAULT_RELAY_PUBLISH_TIMEOUT_MS = 10_000;
+const DEFAULT_RELAY_PUBLISH_TIMEOUT_MS = 2_000;
 
 /** Resolve relay list: use provided relays or fall back to DEFAULT_RELAYS. */
 export function getRelays(relayOpt?: string[] | string | undefined): string[] {

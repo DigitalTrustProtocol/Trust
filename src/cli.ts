@@ -182,15 +182,13 @@ program
 program
   .command('show <d-tag>')
   .description('Show a trust event by d tag value')
-  .option('-r, --relay <url...>', 'Relay URL(s) if not in local DB')
-  .option('--source <source>', 'Where to look: database, server, relay (default: database/server then relay)')
+  .option('-r, --relays <url...>', 'Relay URL(s)')
   .option('--json', 'Output event as JSON')
   .action(async (dTag, options) => {
     try {
       await showTrustCommand({
         dTag,
-        relay: options.relay,
-        source: options.source,
+        relays: options.relays,
         json: options.json
       });
     } finally {

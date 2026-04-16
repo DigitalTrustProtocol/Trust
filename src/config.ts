@@ -310,12 +310,14 @@ function getCliBoolean(cli: Record<string, unknown>, key: string): boolean | und
 
 function getStringArray(v: string | undefined): string[] | undefined {
   if (v === undefined) return undefined; // undefined is undefined
-  if (v.trim() === '') return []; // empty string is an empty array
-  if (typeof v === 'string' && v.trim() !== '') {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') {
+    if (v.trim() === '') return []; // empty string is an empty array
     const parts = v
       .split(',')
       .map((x) => x.trim())
       .filter(Boolean);
+
     return parts;
   };
   return [];
@@ -490,7 +492,7 @@ function parseKindsEnv(raw: string | undefined): number[] | undefined {
 }
 
 function mergeEffectiveRelays(cli: Record<string, unknown>, base: UserConfig): string[] {
-  let relays = getStringArray(cli['relay'] ? cli['relay'] as string : process.env.TRUST_RELAYS?.trim());
+  let relays = getStringArray(cli['relays'] ? cli['relays'] as string : process.env.TRUST_RELAYS?.trim());
   if (relays) {
     return relays;
   }   
