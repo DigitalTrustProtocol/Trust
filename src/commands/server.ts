@@ -49,7 +49,7 @@ export async function serverCommand(options: {
     await runWebServer(runtimeContext);
 
   } catch (error) {
-    logger.error({ err: error }, 'Failed to start Trust server');
+    logger.error('Failed to start Trust server: ' + (error as Error).message);
     logger.flush();
   }
 }
@@ -111,7 +111,7 @@ async function initRuntimeContext(resolved: ResolvedRuntimeConfig): Promise<Runt
   runtimeContext.store = await getStore(resolved);
 
   if (runtimeContext.service === 'all' || runtimeContext.service === 'relay') {
-    await setupRelayPool(runtimeContext);
+    //await setupRelayPool(runtimeContext);
   }
   if (runtimeContext.service === 'all' || runtimeContext.service === 'api') {
 
@@ -127,7 +127,6 @@ async function initRuntimeContext(resolved: ResolvedRuntimeConfig): Promise<Runt
 async function runWebServer(runtimeContext: RuntimeContext): Promise<void> {
   const host = runtimeContext.host;
   const port = runtimeContext.port;
-  const relays = runtimeContext.relays;
   const service = runtimeContext.service;
 
   const app = await createApp(service, runtimeContext);

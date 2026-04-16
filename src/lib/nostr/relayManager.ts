@@ -91,12 +91,16 @@ export async function probeRelay(url: string, options: RelayProbeOptions = {}): 
   const startedAt = Date.now();
   const timeoutController = new AbortController();
   const timer = setTimeout(() => timeoutController.abort('relay probe timeout'), timeoutMs);
-  const relay = new NRelay1(relayUrl, { backoff: false, idleTimeout: false });
-  const probeFilter: Filter[] = [{ kinds: [1], limit: 1 }];
-  const iterator = relay.req(probeFilter, { signal: timeoutController.signal })[Symbol.asyncIterator]();
+  let relay: NRelay1 | null = null;
+  let iterator: AsyncIterator<any> | null = null;
 
   let status: RelayStatus;
   try {
+    relay = new NRelay1(relayUrl, { backoff: false, idleTimeout: false });
+    const probeFilter: Filter[] = [{ kinds: [1], limit: 1 }];
+    iterator = relay.req(probeFilter, { signal: timeoutController.signal })[Symbol.asyncIterator]();
+    if (!iterator) throw new Error('Failed to create relay probe iterator');
+
     const first = await iterator.next();
     if (first.done) {
       status = {
@@ -125,8 +129,12 @@ export async function probeRelay(url: string, options: RelayProbeOptions = {}): 
     };
   } finally {
     clearTimeout(timer);
-    await iterator.return?.(undefined).catch(() => {});
-    await relay.close().catch(() => {});
+    if (iterator) {
+      await iterator.return?.(undefined).catch(() => {});
+    }
+    if (relay) {
+      await relay.close().catch(() => {});
+    }
   }
 
   relayStatusCache.set(relayUrl, status);

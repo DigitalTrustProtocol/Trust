@@ -1,6 +1,5 @@
 import fp from 'fastify-plugin';
 import type { FastifyRequest, FastifyReply } from 'fastify';
-import { existsSync, readFileSync } from 'node:fs';
 import { parseAuthorPubkeyInput, resolveTargetForQuery } from '../../lib/trust/subject.js';
 import { loadSecretKey, loadKeyPair } from '../../lib/keys.js';
 import { getPublicKey } from 'nostr-tools/pure';
@@ -22,7 +21,6 @@ import { kvGet, kvSet } from '../../lib/db/kv.js';
 import { logger } from '../../lib/logger.js';
 import { KIND_TRUST, KIND_TRUST_MAX, KIND_TRUST_MIN } from '../../lib/nostr/nip32010.js';
 import { getLatestSyncTime, SYNC_TIME_NS_SYNC } from '../../lib/syncTime.js';
-import { exportGraphForViz } from '../../lib/trust/graphExport.js';
 import prettyBytes from 'pretty-bytes';
 
 type ResolveBody = {
@@ -78,7 +76,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     const edgeCount = runtimeContext.graph?.edges.size ?? 0;
     logger.info(`Graph: Loaded with ${prettyInt(nodeCount)} nodes and ${prettyInt(edgeCount)} edges`);
     logger.info(`Graph: Memory usage delta: ${prettyBytes(afterMem.rss - beforeMem.rss, { locale: true, minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
-    logger.info(`API: http://${runtimeContext.host}:${runtimeContext.port}/resolve, /health`);
+    logger.info(`API: http://${runtimeContext.host}:${runtimeContext.port}/resolve`);
 
     logger.flush();
 
@@ -177,11 +175,26 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     });
   });
   */
-  app.get('/ping', async () => ok({ status: 'ok' }));
+  app.get(
+    '/ping',
+    {
+      schema: {
+        tags: ['default'],
+      },
+    },
+    async () => ok({ status: 'ok' }),
+  );
 
   // ── Identity ───────────────────────────────────────────────────────
 
-  app.get('/identity', async (_request: FastifyRequest, reply: FastifyReply) => {
+  app.get(
+    '/identity',
+    {
+      schema: {
+        tags: ['identity'],
+      },
+    },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
     const keyPair = loadKeyPair();
     if (!keyPair) {
       return sendError(reply, 404, ErrorCode.NO_IDENTITY, 'No identity configured. Run trust init first.');
@@ -193,10 +206,10 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     return ok({
       publicKey: keyPair.publicKey,
       npub: keyPair.npub,
-      profile: config?.profile ?? null,
-      relays: config?.relays ?? [],
+      profile: config?.profile ?? null
     });
-  });
+    },
+  );
 
   // ── Trust (add) ────────────────────────────────────────────────────
 
@@ -245,6 +258,11 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
 
   app.post<{ Body: ResolveBody }>(
     '/resolve',
+    {
+      schema: {
+        tags: ['resolve'],
+      },
+    },
     async (request: FastifyRequest<{ Body: ResolveBody }>, reply: FastifyReply) => {
       const body = request.body;
       const context = normalizeContext(body.context);
@@ -284,6 +302,11 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
 
   app.post<{ Body: ResolveBatchBody }>(
     '/resolve/batch',
+    {
+      schema: {
+        tags: ['resolve'],
+      },
+    },
     async (request: FastifyRequest<{ Body: ResolveBatchBody }>, reply: FastifyReply) => {
       const body = request.body;
       const subjects = body.subjects ?? [];
@@ -333,7 +356,14 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
 
   // ── Graph Stats ────────────────────────────────────────────────────
 
-  app.get('/graph/stats', async () => {
+  app.get(
+    '/graph/stats',
+    {
+      schema: {
+        tags: ['graph'],
+      },
+    },
+    async () => {
     const graph = getLoadedGraph();
     const lastSeenRaw = await getLatestSyncTime(SYNC_TIME_NS_SYNC);
     return ok({
@@ -342,7 +372,8 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       lastSync: lastSeenRaw ? Number(lastSeenRaw) : null,
       uptime: Math.floor((Date.now() - startTime) / 1000),
     });
-  });
+    },
+  );
 
   // ── Graph export (visualization) ───────────────────────────────────
   /*
@@ -359,7 +390,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
   });
   */
   // ── Events Query ───────────────────────────────────────────────────
-
+ /*
   app.get<{
     Querystring: {
       author?: string;
@@ -391,12 +422,16 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     const page = offset > 0 ? events.slice(offset, offset + limit) : events;
     return ok(page);
   });
-
+*/
   // ── Trusted Subjects ───────────────────────────────────────────────
 
   app.get<{
     Querystring: { author?: string; context?: string };
-  }>('/trusted', async (request, reply) => {
+  }>('/trusted', {
+    schema: {
+      tags: ['graph'],
+    },
+  }, async (request, reply) => {
     const q = request.query;
     const { author, error: authorError } = resolveAuthor(q.author);
 

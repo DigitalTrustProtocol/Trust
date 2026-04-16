@@ -41,8 +41,9 @@ export async function createApp(service: ServerService = 'all', runtimeContext: 
         },
         servers: [{ url: '/' }],
         tags: [
-          { name: 'health', description: 'Health and status' },
-          { name: 'trust', description: 'Trust assertions' },
+          { name: 'default', description: 'Ping and misc endpoints' },
+          { name: 'relay', description: 'Nostr relay endpoints' },
+          //{ name: 'trust', description: 'Trust assertions' },
           { name: 'resolve', description: 'Trust resolution' },
           { name: 'graph', description: 'Graph queries' },
           { name: 'identity', description: 'Identity management' },

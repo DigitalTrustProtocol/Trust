@@ -38,7 +38,6 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
 
   logger.info(`Relay: Websocket (NIP-32010): ws://${runtimeContext.host}:${runtimeContext.port}/relay`);
   logger.info(`Relay: Info (NIP-11): http://${runtimeContext.host}:${runtimeContext.port}/relay-info`);
-  logger.info(`Relay: Relays: ${runtimeContext.relays.join(', ')}`);
 
   const relayInfo = {
     name: 'Trust Relay',
@@ -49,10 +48,18 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
     supported_nips: [1, 11, 32010],
   };
 
-  app.get('/relay-info', async (_request, reply) => {
-    reply.header('content-type', 'application/nostr+json');
-    return relayInfo;
-  });
+  app.get(
+    '/relay-info',
+    {
+      schema: {
+        tags: ['relay'],
+      },
+    },
+    async (_request, reply) => {
+      reply.header('content-type', 'application/nostr+json');
+      return relayInfo;
+    },
+  );
 
   app.get('/relay', { websocket: true }, (socket, _request) => {
     const client: RelayClient = {
