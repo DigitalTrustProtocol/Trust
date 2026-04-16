@@ -38,6 +38,8 @@ export async function serverCommand(options: {
 
 
   try {
+    initLogger('server'); // Initialize logger for server mode
+    
     const cfg = getRuntimeConfig(options);
     await assertPortAvailable(cfg.host, cfg.port);
 

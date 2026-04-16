@@ -6,8 +6,8 @@ type LogMode = 'server' | 'cli';
 export interface Logger {
   trace: (...args: unknown[]) => void;
   debug: (...args: unknown[]) => void;
-  info:  (...args: unknown[]) => void;
-  warn:  (...args: unknown[]) => void;
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
   fatal: (...args: unknown[]) => void;
   flush: () => void;
@@ -48,11 +48,25 @@ function buildCliLoggerCleanPrint(level: string): pino.Logger {
 
 
 function buildServerLogger(logFile: string | undefined, level: string): pino.Logger {
+  const options = {
+    level,
+    transport: {
+      target: 'pino-pretty',
+      options: {
+        colorize: true,
+        translateTime: 'SYS:standard',
+        ignore: 'pid,hostname',
+        sync: true,
+      }
+    }
+  };
+
   const target = process.env.TRUST_LOG_FILE ?? logFile;
   if (!target) {
-    return pino({ level });
+    return pino(options);
   }
-  return pino({ level }, pino.destination(target));
+
+  return pino(options, pino.destination(target));
 }
 
 function wrapPino(getInstance: () => pino.Logger): Logger {
@@ -62,8 +76,8 @@ function wrapPino(getInstance: () => pino.Logger): Logger {
   return {
     trace: makeLogFn('trace'),
     debug: makeLogFn('debug'),
-    info:  makeLogFn('info'),
-    warn:  makeLogFn('warn'),
+    info: makeLogFn('info'),
+    warn: makeLogFn('warn'),
     error: makeLogFn('error'),
     fatal: makeLogFn('fatal'),
     flush: () => getInstance().flush(),

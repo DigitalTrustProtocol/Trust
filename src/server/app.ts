@@ -51,7 +51,21 @@ export async function createApp(service: ServerService = 'all', runtimeContext: 
         ],
       },
     });
-    await app.register(fastifySwaggerUi, { routePrefix: '/docs' });
+    await app.register(fastifySwaggerUi, {
+      routePrefix: '/docs',
+      theme: {
+        css: [
+          {
+            filename: 'trust-swagger.css',
+            content: `
+.swagger-ui .topbar {
+  display: none !important;
+}
+`.trim(),
+          },
+        ],
+      },
+    });
   }
 
   if (service === 'all' || service === 'relay') {

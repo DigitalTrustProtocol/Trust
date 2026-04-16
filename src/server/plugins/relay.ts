@@ -2,6 +2,7 @@ import fp from 'fastify-plugin';
 import websocket from '@fastify/websocket';
 import { matchFilters, verifyEvent } from 'nostr-tools';
 import type { NostrEvent, Filter, VerifiedEvent } from 'nostr-tools';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { insertEvent } from '../../lib/trust/graphManager.js';
 import type { NostrClientMsg, NostrClientREQ } from '@nostrify/types';
 import type WebSocket from 'ws';
@@ -37,7 +38,9 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
   app.decorate('relayClients', clients);
 
   logger.info(`Relay: Websocket (NIP-32010): ws://${runtimeContext.host}:${runtimeContext.port}/relay`);
-  logger.info(`Relay: Info (NIP-11): http://${runtimeContext.host}:${runtimeContext.port}/relay-info`);
+  logger.info(
+    `Relay: Info (NIP-11): http://${runtimeContext.host}:${runtimeContext.port}/relay (Accept: application/nostr+json)`,
+  );
 
   const relayInfo = {
     name: 'Trust Relay',
@@ -48,6 +51,30 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
     supported_nips: [1, 11, 32010],
   };
 
+  function addNip11CorsHeaders(reply: FastifyReply): void {
+    // NIP-11: "Relays MUST accept CORS requests by sending
+    // Access-Control-Allow-Origin, Access-Control-Allow-Headers, and Access-Control-Allow-Methods headers."
+    reply.header('Access-Control-Allow-Origin', '*');
+    reply.header('Access-Control-Allow-Headers', 'Accept, Content-Type');
+    reply.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  }
+
+  function wantsNip11Json(request: FastifyRequest): boolean {
+    const accept = request.headers?.accept;
+    if (typeof accept !== 'string') return false;
+    return accept
+      .split(',')
+      .map((part) => part.trim().toLowerCase())
+      .some((part) => part === 'application/nostr+json' || part.startsWith('application/nostr+json;'));
+  }
+
+  // Preflight for NIP-11 CORS on the same URI as the websocket.
+  app.options('/relay', async (_request, reply) => {
+    addNip11CorsHeaders(reply);
+    return reply.status(204).send();
+  });
+
+  // Deprecated alias for older clients / docs.
   app.get(
     '/relay-info',
     {
@@ -56,12 +83,36 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
       },
     },
     async (_request, reply) => {
+      addNip11CorsHeaders(reply);
       reply.header('content-type', 'application/nostr+json');
       return relayInfo;
     },
   );
 
-  app.get('/relay', { websocket: true }, (socket, _request) => {
+  // NIP-11 + NIP-01 on the same URI.
+  app.route({
+    method: 'GET',
+    url: '/relay',
+    schema: {
+      // Hidden from Swagger/OpenAPI docs – this is a websocket/NIP-11 utility endpoint.
+      hide: true,
+    },
+    handler: async (request: FastifyRequest, reply: FastifyReply) => {
+      // NIP-11: serve the relay information document over HTTP on the same URI as the websocket.
+      if (wantsNip11Json(request)) {
+        addNip11CorsHeaders(reply);
+        reply.header('content-type', 'application/nostr+json');
+        return relayInfo;
+      }
+
+      // For plain HTTP requests without the NIP-11 Accept header, guide clients to use websockets.
+      addNip11CorsHeaders(reply);
+      return reply.status(426).send({
+        error: 'upgrade_required',
+        message: 'Connect via WebSocket, or send Accept: application/nostr+json for relay info.',
+      });
+    },
+    wsHandler: (socket, _request) => {
     const client: RelayClient = {
       socket,
       subscriptions: new Map<string, ActiveSubscription>(),
@@ -114,6 +165,7 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
       closeAllSubscriptions(client);
       clients.delete(client);
     });
+    },
   });
 }, { name: 'trust-relay' });
 
