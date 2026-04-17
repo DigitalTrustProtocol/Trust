@@ -1,6 +1,6 @@
 import { isServerAvailable, normalizeBaseUrl } from '../lib/client.js';
 import { logger } from '../lib/logger.js';
-import { getServerBaseUrlFromState, readServerState } from '../lib/server-state.js';
+import { getServerBaseUrlFromState } from '../lib/server-state.js';
 
 export interface PingOptions {
   url?: string;

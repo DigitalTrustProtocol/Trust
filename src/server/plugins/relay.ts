@@ -74,20 +74,6 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
     return reply.status(204).send();
   });
 
-  // Deprecated alias for older clients / docs.
-  app.get(
-    '/relay-info',
-    {
-      schema: {
-        tags: ['relay'],
-      },
-    },
-    async (_request, reply) => {
-      addNip11CorsHeaders(reply);
-      reply.header('content-type', 'application/nostr+json');
-      return relayInfo;
-    },
-  );
 
   // NIP-11 + NIP-01 on the same URI.
   app.route({

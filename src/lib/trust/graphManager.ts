@@ -1,5 +1,6 @@
 import { VerifiedEvent } from 'nostr-tools';
 import { Packr } from 'msgpackr';
+import os from 'node:os';
 import { Graph } from './graph/Graph.js';
 import { getStore, Store } from '../db/dbManager.js';
 import { asTrustEvent, isTrustEventValid, KIND_TRUST } from '../nostr/nip32010.js';
@@ -9,8 +10,28 @@ import { RuntimeContext } from '../runtimeContext.js';
 import { createTrustFilters } from '../../server/graph-sync.js';
 
 const packr = new Packr({ structuredClone: false });
+const BYTES_PER_MILLION_NODES = 1024 * 1024 * 1024;
+const NODES_PER_MEMORY_GB = 1_000_000;
 
 let graph: Graph | null = null;
+
+export type GraphLoadMode = 'all-authors' | 'author-perspective';
+
+export interface GraphLoadPreflight {
+  requestedMode: GraphLoadMode;
+  selectedMode: GraphLoadMode;
+  trustEventCount: number;
+  estimatedNodeCount: number;
+  estimatedRequiredBytes: number;
+  memory: {
+    totalBytes: number;
+    freeBytes: number;
+    availableBytes: number;
+    processHeapUsedBytes: number;
+    processRssBytes: number;
+  };
+  hasEnoughMemoryForAllAuthors: boolean;
+}
 
 export function getLoadedGraph(): Graph | null {
   return graph;
@@ -24,6 +45,48 @@ export async function getGraph(): Promise<Graph | null> {
   return graph;
 }
 
+export async function preflightGraphLoad(runtimeContext: RuntimeContext): Promise<GraphLoadPreflight> {
+  const store = runtimeContext.store ?? (await getStore(runtimeContext));
+  runtimeContext.store = store;
+
+  const kinds = runtimeContext.kinds?.length ? runtimeContext.kinds : [KIND_TRUST];
+  const countRes = await store.count([{ kinds }]);
+  const trustEventCount = countRes.count ?? 0;
+  const estimatedNodeCount = trustEventCount;
+  const estimatedRequiredBytes = Math.ceil((estimatedNodeCount / NODES_PER_MEMORY_GB) * BYTES_PER_MILLION_NODES);
+
+  const freeBytes = os.freemem();
+  const availableBytes = freeBytes;
+  const memoryUsage = process.memoryUsage();
+  const requestedMode: GraphLoadMode = runtimeContext.authors?.length ? 'author-perspective' : 'all-authors';
+  const hasEnoughMemoryForAllAuthors = availableBytes >= estimatedRequiredBytes;
+
+  let selectedMode: GraphLoadMode = requestedMode;
+  if (requestedMode === 'all-authors' && !hasEnoughMemoryForAllAuthors) {
+    selectedMode = 'author-perspective';
+  }
+  if (requestedMode === 'author-perspective' && !hasEnoughMemoryForAllAuthors) {
+    throw new Error(
+      `Insufficient memory for author-perspective graph load: estimated ${estimatedRequiredBytes} bytes for ~${estimatedNodeCount} nodes, available ${availableBytes} bytes.`,
+    );
+  }
+
+  return {
+    requestedMode,
+    selectedMode,
+    trustEventCount,
+    estimatedNodeCount,
+    estimatedRequiredBytes,
+    memory: {
+      totalBytes: os.totalmem(),
+      freeBytes,
+      availableBytes,
+      processHeapUsedBytes: memoryUsage.heapUsed,
+      processRssBytes: memoryUsage.rss,
+    },
+    hasEnoughMemoryForAllAuthors,
+  };
+}
 
 export async function loadGraph(runtimeContext: RuntimeContext): Promise<Graph> {
   if (graph) return graph;
@@ -31,10 +94,18 @@ export async function loadGraph(runtimeContext: RuntimeContext): Promise<Graph> 
   graph = new Graph();
   runtimeContext.graph = graph;
 
+  const preflight = await preflightGraphLoad(runtimeContext);
   const authors = runtimeContext.authors;
 
-  if(authors?.length) {
-    await getGraphFromDB(runtimeContext);
+  if (preflight.selectedMode === 'author-perspective') {
+    if (authors?.length) {
+      await getGraphFromDB(runtimeContext);
+    } else {
+      await getGraphFromDB({
+        ...runtimeContext,
+        authors: [runtimeContext.primaryPubkey],
+      });
+    }
   } else {
     await getGraphFromDBAllAuthors(runtimeContext);
   }

@@ -8,13 +8,18 @@ import type {
   NRelay,
 } from '@nostrify/types';
 import { Machina } from '@nostrify/nostrify/utils';
-import { Kysely, type SelectQueryBuilder, sql } from 'kysely';
+import { InsertResult, Kysely, type SelectQueryBuilder, sql } from 'kysely';
 import { getFilterLimit, sortEvents } from 'nostr-tools';
 import { Packr } from 'msgpackr';
 import { ExtendedNRelay } from './dbManager.js';
 
 const DENORMALIZED_TAGS = new Set(['d', 'c', 't']);
 const packr = new Packr({ structuredClone: false });
+
+/** Bind JSONB columns as JSON text; nested JS arrays are otherwise serialized as PG array literals (`{{...}}`), which are invalid JSON. */
+function jsonb(value: unknown) {
+  return sql`CAST(${JSON.stringify(value)} AS jsonb)`;
+}
 
 
 /** Kysely database schema for Nostr. */
@@ -126,10 +131,10 @@ export class NPostgres implements ExtendedNRelay {
       let inserted = false;
       let result = await NPostgres.trx(this.db, (trx) => {
         return this.withTimeout(trx, opts.timeout, async (trx) => {
-          await Promise.all([
-            this.deleteEvents(trx, event),
-            async () => inserted = await this.insertEvent(trx, event),
-          ]);
+          // deleteEvents (e.g. kind 5) must run before insert; the old Promise.all
+          // passed a non-invoked `async () => ...`, so insertEvent never ran.
+          await this.deleteEvents(trx, event);
+          inserted = await this.insertEvent(trx, event);
         });
       });
 
@@ -232,6 +237,11 @@ export class NPostgres implements ExtendedNRelay {
     }, {} as Record<string, string[]>);
 
     const searchText = this.indexSearch(event);
+    const searchExt = await this.indexExtensions(event);
+
+    let tags = jsonb(event.tags) as unknown as NPostgresSchema['nostr_events']['tags'];
+    let tags_index = jsonb(tagsIndex) as unknown as NPostgresSchema['nostr_events']['tags_index'];
+    let search_ext = jsonb(searchExt) as unknown as NPostgresSchema['nostr_events']['search_ext'];
 
     const row: NPostgresSchema['nostr_events'] = {
       id: event.id,
@@ -239,14 +249,12 @@ export class NPostgres implements ExtendedNRelay {
       pubkey: event.pubkey,
       created_at: event.created_at,
       raw_event: packr.pack(event),
-      tags: event.tags,
-      tags_index: tagsIndex,
-      search_ext: await this.indexExtensions(event),
+      tags,
+      tags_index,
+      search_ext,
       search: searchText ? sql`to_tsvector(${searchText})` : null,
       d: parameterized ? d ?? '' : null,
-      t:
-        tTag ??
-        (event.kind === 32010 ? this.deriveTrustKindFromD(d ?? null, '32010') : null),
+      t: tTag,
       c,
     };
 
@@ -277,13 +285,9 @@ export class NPostgres implements ExtendedNRelay {
               search: eb.ref('excluded.search'),
               search_ext: eb.ref('excluded.search_ext'),
             })).where((eb) =>
-              eb.or([
-                eb('nostr_events.created_at', '<', eb.ref('excluded.created_at')),
-                eb.and([
-                  eb('nostr_events.created_at', '=', eb.ref('excluded.created_at')),
-                  eb('nostr_events.id', '<', eb.ref('excluded.id')),
-                ]),
-              ])
+              // Replace only when incoming event is strictly newer by time.
+              // Event id is not a time signal; equal `created_at` keeps the existing row.
+              eb('nostr_events.created_at', '<', eb.ref('excluded.created_at'))
             )
         )
         .execute();
@@ -292,9 +296,14 @@ export class NPostgres implements ExtendedNRelay {
         .values(row)
         .execute();
     }
-    if (result)
-      return result.numInsertedOrUpdatedRows > 0;
-    return false;
+
+    let isInserted = false;
+    if (result && result[0]) {
+      let insertResult = result[0]! as InsertResult;
+
+      isInserted = (insertResult.numInsertedOrUpdatedRows && insertResult.numInsertedOrUpdatedRows > 0) as boolean;
+    }
+    return isInserted;
   }
 
   /** Whether results should be sorted reverse-chronologically by the database. */
@@ -447,11 +456,37 @@ export class NPostgres implements ExtendedNRelay {
       query = query.where('c', 'in', contexts);
     }
 
-    const rows = query.stream(1000);
+    // Prefer cursor-based streaming when available. Some Postgres dialect setups
+    // don't provide `cursor`, in which case Kysely throws and we fall back.
+    try {
+      const rows = query.stream(1000);
+      for await (const row of rows) {
+        if (signal?.aborted) break;
+        yield packr.unpack(row.raw_event) as NostrEvent;
+      }
+      return;
+    } catch (err) {
+      if (!(err instanceof Error) || !err.message.includes("'cursor' is not present in your postgres dialect config")) {
+        throw err;
+      }
+    }
 
-    for await (const row of rows) {
-      if (signal?.aborted) break;
-      yield packr.unpack(row.raw_event) as NostrEvent;
+    const pageSize = 1000;
+    let offset = 0;
+    while (!signal?.aborted) {
+      const rows = await query
+        .orderBy('created_at', 'asc')
+        .orderBy('id', 'asc')
+        .limit(pageSize)
+        .offset(offset)
+        .execute();
+
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        if (signal?.aborted) break;
+        yield packr.unpack(row.raw_event) as NostrEvent;
+      }
+      offset += rows.length;
     }
   }
 

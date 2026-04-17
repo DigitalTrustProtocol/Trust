@@ -44,3 +44,12 @@ npx . issue npub1l7g7dw8fqtpltqzvyuy9vdtkjj9n90p08exrye8uj8rme8edjr4s8c0e23 -v 1
 npx . resolve npub1l7g7dw8fqtpltqzvyuy9vdtkjj9n90p08exrye8uj8rme8edjr4s8c0e23 -c clawstr -format full
 
 538
+
+# Init
+$env:TRUST_POSTGRES_URL="postgres://postgres:3k90ijjLAu1IZgAE7H0jdgs6huEjSGPjstj84ORCZ2K84KUtucJTjZfNhFRaDH4d@204.168.173.151:5432/postgres"
+
+trust add npub14lzj20zaxn9jjd7mxxmvu7594dkal6p4ydfsllp7u0eesuzgc8hsdgcm2v --relays ws://localhost:3417/relay
+trust add npub1lkg4ae7a6zfu4x099wzdntcult8344feg25w5rl39c7kddstfx0s99q8ye --relays ws://localhost:3417/relay
+
+trust show 14ef37f455f58524f6ae7c2034b36062fa8dacae8ebb51fc4e711fc62cad872e --relays ws://localhost:3417/relay
+trust show fd915ee7ddd093ca99e52b84d9af1cfacf1ad53942a8ea0ff12e3d66b60b499f --relays ws://localhost:3417/relay

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Kysely, PostgresDialect, SqliteDialect } from 'kysely';
 import { Pool } from 'pg';
+import Cursor from 'pg-cursor';
 import { getRuntimeConfig } from '../../config.js';
 import type { ResolvedRuntimeConfig } from '../../config.js';
 import { NSQLite, NSQLiteOpts, NSQLiteSchema } from './NSQLite.js';
@@ -49,7 +50,7 @@ export async function createStore(cfg: ResolvedRuntimeConfig): Promise<Store> {
 export async function createNPostgresStore(url: string): Promise<NPostgres> {
   const pool = new Pool({ connectionString: url });
   const db = new Kysely<any>({
-    dialect: new PostgresDialect({ pool }),
+    dialect: new PostgresDialect({ pool, cursor: Cursor }),
   });
   const store = new NPostgres(db);
   store.setPool(pool);

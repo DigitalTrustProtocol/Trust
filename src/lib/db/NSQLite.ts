@@ -174,16 +174,13 @@ export class NSQLite implements ExtendedNRelay  {
 
       const existing = await existingQuery
         .orderBy('created_at', 'desc')
-        .orderBy('id', 'desc')
         .limit(1)
         .executeTakeFirst();
 
       if (existing) {
         const existingCreated = Number(existing.created_at);
-        if (
-          existingCreated > event.created_at ||
-          (existingCreated === event.created_at && existing.id >= event.id)
-        ) {
+        // Same as Postgres upsert: only replace when incoming is strictly newer by time.
+        if (existingCreated >= event.created_at) {
           return false;
         }
 

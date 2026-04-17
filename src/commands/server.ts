@@ -140,13 +140,14 @@ async function runWebServer(runtimeContext: RuntimeContext): Promise<void> {
 
 function setupServerState(app: FastifyInstance, runtimeContext: RuntimeContext): { start: () => void } {
   let shutdownStarted = false;
-  
+  const { service } = runtimeContext;
+
   const cleanupServerState = (): void => {
     if (heartbeat) {
       clearInterval(heartbeat);
       heartbeat = null;
     }
-    clearServerState(process.pid);
+    clearServerState(service, process.pid);
   };
 
   const shutdown = async (signal: string): Promise<void> => {
@@ -168,7 +169,7 @@ function setupServerState(app: FastifyInstance, runtimeContext: RuntimeContext):
     const { host, port, service } = runtimeContext;
     writeServerState({ host, port, service });
     heartbeat = setInterval(() => {
-      touchServerState(process.pid);
+      touchServerState(service, process.pid);
     }, 5000);
     heartbeat.unref();
   };
