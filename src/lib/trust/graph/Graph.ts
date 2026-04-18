@@ -78,7 +78,7 @@ export class Graph {
   applyTrustEvent(trust: ITrustEvent): boolean {
     let edge = this.edges.get(trust.parameterizedId);
     if (edge) {
-      if (edge.createdAt >= trust.created_at) return false; // If the edge is older than the new event, return undefined
+      if (edge.createdAt >= trust.created_at) return false; // If the edge is older than the new event, return false
       if (edge.createdAt < trust.created_at) {
         edge.update(trust); // update the edge from memory with the new event
       }

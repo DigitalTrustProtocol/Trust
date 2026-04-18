@@ -51,9 +51,12 @@ export function startGraphRelayListener(runtimeContext: RuntimeContext, graph: G
   let closed = false;
   let subId = `g${randomBytes(6).toString('hex')}`;
 
-  const seenIds = new Set<string>();
+  //const seenIds = new Set<string>();
   const SEEN_CAP = 50_000;
 
+  /*
+  // This is used to prevent duplicate events from being processed
+  // But it is not needed anymore because the graph is used to store the events and it will automatically deduplicate them
   const bumpSeen = (id: string): boolean => {
     if (seenIds.has(id)) return false;
     seenIds.add(id);
@@ -63,7 +66,7 @@ export function startGraphRelayListener(runtimeContext: RuntimeContext, graph: G
     }
     return true;
   };
-
+  */
   const buildFilters = () => {
     const sinceSec = Math.max(0, Math.floor(Date.now() / 1000) - 120);
     //const authors = runtimeContext.graphLoadMode === 'author' ? runtimeContext.authors : undefined;
@@ -83,9 +86,8 @@ export function startGraphRelayListener(runtimeContext: RuntimeContext, graph: G
     const event: NostrEvent = msg[1] as NostrEvent;
     if (event.kind < KIND_TRUST_MIN || event.kind > KIND_TRUST_MAX) return; // only process trust events
     if (!verifyEvent(event)) return;
-    if (!bumpSeen(event.id)) return;
 
-      applyTrustEventToGraph(event, graph);
+    applyTrustEventToGraph(event, graph);
   };
 
   const clearReconnect = (): void => {
