@@ -66,7 +66,6 @@ export class Score implements IScore {
     if (!this.edges) this.edges = [];
     this.edges.push(edge);
   }
-  
 }
 
 

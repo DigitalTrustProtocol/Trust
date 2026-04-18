@@ -45,7 +45,7 @@ export class Graph {
   }
 
   getOrCreateEdge(event: ITrustEvent): IEdge {
-    let edge = this.edges.get(event.id);
+    let edge = this.edges.get(event.parameterizedId);
     if (!edge) {
       edge = this.createTrustEdge(event);
     }
@@ -61,14 +61,14 @@ export class Graph {
       throw new Error(`Unknown kind: ${event.kind}`);
     }
 
-    this.edges.set(event.replacementId, edge);
+    this.edges.set(event.parameterizedId, edge);
     return edge;
   }
 
 
   isEventNewer(event: ITrustEvent): boolean {
     //if (!event.d_tag) return true; // if the d_tag is not found, the event is invalid
-    const edge = this.edges.get(event.replacementId);
+    const edge = this.edges.get(event.parameterizedId);
     if (!edge) return true; // if the edge is not found, the event is new
     if (edge.createdAt >= event.created_at) return false; // If the edge is older than the new event, return undefined
     return true;
@@ -76,7 +76,7 @@ export class Graph {
 
 
   applyTrustEvent(trust: ITrustEvent): boolean {
-    let edge = this.edges.get(trust.replacementId);
+    let edge = this.edges.get(trust.parameterizedId);
     if (edge) {
       if (edge.createdAt >= trust.created_at) return false; // If the edge is older than the new event, return undefined
       if (edge.createdAt < trust.created_at) {
@@ -106,7 +106,7 @@ export class Graph {
   }
 
   removeTrustEvent(trust: ITrustEvent): boolean {
-    let edge = this.edges.get(trust.replacementId);
+    let edge = this.edges.get(trust.parameterizedId);
 
     if (!edge) return false;
     if (edge.createdAt > trust.created_at) return false; // If the trust is older than the new edges, return false

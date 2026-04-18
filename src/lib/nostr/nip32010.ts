@@ -49,7 +49,7 @@ export type ITrustEvent = VerifiedEvent & {
   t_tag?: string;
   p_tag?: string;
   c_tag?: string;
-  replacementId: string;
+  parameterizedId: string;
 };
 
 
@@ -134,7 +134,7 @@ export function asTrustEvent(event: Event): ITrustEvent {
   e.p_tag = getTagValueFromTags(event, 'p');
   e.c_tag = getTagValueFromTags(event, 'c');
 
-  e.replacementId = event.pubkey + e.d_tag; // the author and d_tag are the replacementId, as multiple events can have the same d_tag from different authors
+  e.parameterizedId = event.pubkey + e.d_tag; // the author and d_tag are the replacementId, as multiple events can have the same d_tag from different authors
 
   return e;
 }
