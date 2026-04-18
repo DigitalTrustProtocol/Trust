@@ -41,6 +41,79 @@ export const PATHS = {
   serverState: join(CONFIG_DIR, 'server-state.json'),
 } as const;
 
+/**
+ * NIP-11 `limitation` fields plus matching relay enforcement.
+ * @see https://nips.nostr.com/11
+ */
+export interface RelayLimitation {
+  max_message_length: number;
+  max_subscriptions: number;
+  max_limit: number;
+  max_subid_length: number;
+  max_event_tags: number;
+  max_content_length: number;
+  min_pow_difficulty: number;
+  auth_required: boolean;
+  payment_required: boolean;
+  restricted_writes: boolean;
+  /** Reject events older than `now - created_at_lower_limit` seconds when positive. */
+  created_at_lower_limit: number;
+  /** Reject events with `created_at` more than this many seconds ahead of relay time. */
+  created_at_upper_limit: number;
+  default_limit: number;
+}
+
+/** Defaults aligned with NIP-11 examples; override via `config.json` → `relay.limitation`. */
+export const DEFAULT_RELAY_LIMITATION: RelayLimitation = {
+  max_message_length: 16384,
+  max_subscriptions: 300,
+  max_limit: 5000,
+  max_subid_length: 100,
+  max_event_tags: 100,
+  max_content_length: 8196,
+  min_pow_difficulty: 0,
+  auth_required: false,
+  payment_required: false,
+  restricted_writes: false,
+  created_at_lower_limit: 31536000,
+  created_at_upper_limit: 3,
+  default_limit: 500,
+};
+
+function sanitizeRelayLimitation(l: RelayLimitation): RelayLimitation {
+  const max_limit = Math.max(1, Math.min(100_000, Math.floor(l.max_limit)));
+  const default_limit = Math.max(1, Math.min(max_limit, Math.floor(l.default_limit)));
+  return {
+    ...l,
+    max_message_length: Math.max(512, Math.min(16_777_216, Math.floor(l.max_message_length))),
+    max_subscriptions: Math.max(1, Math.min(10_000, Math.floor(l.max_subscriptions))),
+    max_limit,
+    max_subid_length: Math.max(8, Math.min(2000, Math.floor(l.max_subid_length))),
+    max_event_tags: Math.max(1, Math.min(50_000, Math.floor(l.max_event_tags))),
+    max_content_length: Math.max(256, Math.min(1_000_000, Math.floor(l.max_content_length))),
+    min_pow_difficulty: Math.max(0, Math.min(256, Math.floor(l.min_pow_difficulty))),
+    default_limit,
+    created_at_lower_limit: Math.max(0, Math.min(10 * 365 * 86400, Math.floor(l.created_at_lower_limit))),
+    created_at_upper_limit: Math.max(0, Math.min(86400 * 365, Math.floor(l.created_at_upper_limit))),
+  };
+}
+
+export function mergeRelayLimitation(partial?: Partial<RelayLimitation>): RelayLimitation {
+  const base = { ...DEFAULT_RELAY_LIMITATION };
+  if (!partial) return sanitizeRelayLimitation(base);
+  const keys = Object.keys(DEFAULT_RELAY_LIMITATION) as (keyof RelayLimitation)[];
+  for (const k of keys) {
+    const v = partial[k];
+    if (v === undefined) continue;
+    if (typeof v === 'boolean') {
+      (base as Record<string, unknown>)[k] = v;
+    } else if (typeof v === 'number' && Number.isFinite(v)) {
+      (base as Record<string, unknown>)[k] = v;
+    }
+  }
+  return sanitizeRelayLimitation(base);
+}
+
 // User configuration stored in config.json
 export interface UserConfig {
 
@@ -87,6 +160,10 @@ export interface UserConfig {
   json?: boolean;
   /** Remote API base URL used when no local server is available (default: https://trust.dance). */
   remoteApiUrl?: string;
+  /** Relay websocket policy and NIP-11 `limitation` advertisement. */
+  relay?: {
+    limitation?: Partial<RelayLimitation>;
+  };
 }
 
 const DEFAULT_SYNC_KINDS = [32010];
@@ -114,6 +191,8 @@ export const DEFAULT_CONFIG: UserConfig = {
  * and focus — no parallel option objects.
  */
 export type ResolvedRuntimeConfig = UserConfig & {
+  /** Effective relay limits (merged defaults + `config.json` `relay.limitation`). */
+  relay: { limitation: RelayLimitation };
   primaryPubkey: string;
   /**
    * Hex pubkeys to retain in graph/sync filters, or `undefined` = no author filter (all authors).
@@ -618,6 +697,8 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
 
   const remoteApiUrl = (process.env.TRUST_REMOTE_API_URL?.trim() || base.remoteApiUrl || DEFAULT_REMOTE_API_URL);
 
+  const relayLimitation = mergeRelayLimitation(base.relay?.limitation);
+
   return {
     ...base,
     authors,
@@ -636,6 +717,7 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
     database,
     connectionString,
     remoteApiUrl,
+    relay: { limitation: relayLimitation },
   } as ResolvedRuntimeConfig;
 }
 

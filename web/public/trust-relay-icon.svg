@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Trust relay">
+  <defs>
+    <linearGradient id="bg" x1="22%" y1="8%" x2="78%" y2="92%">
+      <stop offset="0%" stop-color="#1a3a5c"/>
+      <stop offset="100%" stop-color="#0c1f36"/>
+    </linearGradient>
+  </defs>
+  <!-- Thin outer frame so rounded tile reads; shield is the dominant mark -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <path
+    fill="#f2f6fb"
+    d="M256 36L468 162L468 298Q468 408 256 480Q44 408 44 298L44 162Z"
+  />
+  <path
+    fill="none"
+    stroke="#c5d4e8"
+    stroke-width="6"
+    stroke-linejoin="round"
+    d="M256 36L468 162L468 298Q468 408 256 480Q44 408 44 298L44 162Z"
+  />
+  <!-- Relay graph scaled to the enlarged shield -->
+  <g fill="none" stroke="#1e4976" stroke-width="15" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M256 128v98"/>
+    <path d="M256 226l-62 118"/>
+    <path d="M256 226l62 118"/>
+  </g>
+  <circle cx="256" cy="128" r="26" fill="#1e4976"/>
+  <circle cx="194" cy="344" r="26" fill="#1e4976"/>
+  <circle cx="318" cy="344" r="26" fill="#1e4976"/>
+</svg>

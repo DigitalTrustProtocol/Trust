@@ -11,7 +11,64 @@ import { logger } from '../../lib/logger.js';
 import { parseClientMessage } from '../../lib/nostr/relayManager.js';
 import { asTrustEvent, isTrustEventValid, KIND_TRUST } from '../../lib/nostr/nip32010.js';
 import { InsertEventOptions } from '../../lib/db/dbManager.js';
+import type { RelayLimitation } from '../../config.js';
+import {
+  applyRelayFilterLimits,
+  enforceRelayEventWritePolicy,
+  websocketInboundByteLength,
+} from '../../lib/nostr/relayPolicy.js';
 
+/** Public site and default NIP-11 URLs (production relay: wss://relay.trust.dance/relay). */
+const TRUST_PUBLIC_ORIGIN = 'https://trust.dance';
+
+/** NIP-11 `icon` — static file from the trust.dance web build (`web/public/` → site root). */
+const TRUST_RELAY_ICON_URL = `${TRUST_PUBLIC_ORIGIN}/trust-relay-icon.svg`;
+
+/**
+ * Shared terms URL for Trust services (web, API, relay).
+ * Override with `TRUST_TERMS_OF_SERVICE_URL` if your deployment uses a different path.
+ */
+const TRUST_TERMS_OF_SERVICE_URL =
+  process.env.TRUST_TERMS_OF_SERVICE_URL?.trim() || `${TRUST_PUBLIC_ORIGIN}/terms`;
+
+const HEX64 = /^[0-9a-f]{64}$/i;
+
+function optionalRelayHexPubkey(raw: string | undefined): string | undefined {
+  const v = raw?.trim().toLowerCase();
+  return v && HEX64.test(v) ? v : undefined;
+}
+
+/**
+ * NIP-11 relay information document.
+ * @see https://nips.nostr.com/11
+ *
+ * Set `TRUST_RELAY_NIP11_PUBKEY` and `TRUST_RELAY_NIP11_SELF` (64-char hex) when you have
+ * administrative and relay identity keys.
+ */
+function buildRelayNip11Document(limitation: RelayLimitation): Record<string, unknown> {
+  const doc: Record<string, unknown> = {
+    name: 'Trust Relay (DWoTR)',
+    description: [
+      'Trust is a decentralized web-of-trust Reputation system for identities and AI agents. This relay stores Nostr events, with first-class support for kind 32010 (NIP-32010).',
+      'The public community relay is wss://relay.trust.dance on the same path as this software. Subscribe with REQ/CLOSE (NIP-01); the server answers with EVENT, EOSE, OK, and NOTICE.',
+      'Use HTTP GET on this URL with Accept: application/nostr+json to retrieve this document (NIP-11).',
+    ].join('\n\n'),
+    icon: TRUST_RELAY_ICON_URL,
+    contact: TRUST_PUBLIC_ORIGIN,
+    supported_nips: [1, 9, 11, 13, 33, 50, 32010],
+    software: 'https://github.com/DigitalTrustProtocol/Trust',
+    version: process.env.npm_package_version ?? '0.1.0',
+    terms_of_service: TRUST_TERMS_OF_SERVICE_URL,
+    limitation: { ...limitation },
+  };
+
+  const pubkey = optionalRelayHexPubkey(process.env.TRUST_RELAY_NIP11_PUBKEY);
+  const self = optionalRelayHexPubkey(process.env.TRUST_RELAY_NIP11_SELF);
+  if (pubkey) doc.pubkey = pubkey;
+  if (self) doc.self = self;
+
+  return doc;
+}
 
 interface ActiveSubscription {
   id: string;
@@ -44,14 +101,7 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
     `Relay: Info (NIP-11): http://${runtimeContext.host}:${runtimeContext.port}/relay (Accept: application/nostr+json)`,
   );
 
-  const relayInfo = {
-    name: 'Trust Relay',
-    description:
-      'Trust server relay endpoint backed by local store. Supports NIP-01 relay messaging and NIP-11 relay info document.',
-    software: '@dtp/trust',
-    version: process.env.npm_package_version ?? '0.1.0',
-    supported_nips: [1, 11, 32010],
-  };
+  const relayInfo = buildRelayNip11Document(runtimeContext.relay.limitation);
 
   function addNip11CorsHeaders(reply: FastifyReply): void {
     // NIP-11: "Relays MUST accept CORS requests by sending
@@ -110,6 +160,17 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
     logger.debug({ clients: clients.size }, 'Relay: WebSocket client connected');
 
     socket.on('message', async (raw: RawData) => {
+      const lim = runtimeContext.relay.limitation;
+      const inboundBytes = websocketInboundByteLength(raw);
+      if (inboundBytes > lim.max_message_length) {
+        logger.debug({ inboundBytes, max: lim.max_message_length }, 'Relay: Message too large');
+        sendRelayMessage(socket, [
+          'NOTICE',
+          `policy: message exceeds max_message_length (${lim.max_message_length} bytes, NIP-11)`,
+        ]);
+        return;
+      }
+
       const result = parseClientMessage(raw);
       if (!result.ok) {
         logger.debug({ error: result.error }, 'Relay: Invalid client message');
@@ -189,9 +250,18 @@ function handleClose(client: RelayClient, subscriptionId: string): void {
 }
 
 async function handleReq(client: RelayClient, req: NostrClientREQ, runtimeContext: RuntimeContext): Promise<void> {
+  const lim = runtimeContext.relay.limitation;
   const [, subscriptionId, ...filters] = req;
   if (!subscriptionId) {
     sendRelayMessage(client.socket, ['NOTICE', 'invalid: missing subscription id']);
+    return;
+  }
+  if (subscriptionId.length > lim.max_subid_length) {
+    sendRelayMessage(client.socket, [
+      'CLOSED',
+      subscriptionId,
+      `policy: subscription id exceeds max_subid_length (${lim.max_subid_length}, NIP-11)`,
+    ]);
     return;
   }
   if (!filters.length) {
@@ -199,11 +269,22 @@ async function handleReq(client: RelayClient, req: NostrClientREQ, runtimeContex
     return;
   }
 
+  const hadSubscription = client.subscriptions.has(subscriptionId);
   handleClose(client, subscriptionId);
+  if (!hadSubscription && client.subscriptions.size >= lim.max_subscriptions) {
+    sendRelayMessage(client.socket, [
+      'CLOSED',
+      subscriptionId,
+      `policy: max_subscriptions (${lim.max_subscriptions}) per connection (NIP-11)`,
+    ]);
+    return;
+  }
+
+  const normalizedFilters = (filters as Filter[]).map((f) => applyRelayFilterLimits(f, lim));
 
   const sub: ActiveSubscription = {
     id: subscriptionId,
-    filters: filters as Filter[],
+    filters: normalizedFilters,
     seen: new Set<string>(),
     latestCreatedAt: 0,
     polling: false,
@@ -256,10 +337,18 @@ async function pollSubscription(client: RelayClient, sub: ActiveSubscription, ru
 
 async function handleEvent(event: NostrEvent, socket: WebSocket, runtimeContext: RuntimeContext): Promise<boolean> {
   const store = runtimeContext.store;
-  
+  const lim = runtimeContext.relay.limitation;
+
   if (!verifyEvent(event)) {
     logger.debug({ eventId: event.id }, 'Relay: Event rejected: invalid signature');
     sendRelayMessage(socket, ['OK', event.id, false, 'invalid: failed event signature verification']);
+    return false;
+  }
+
+  const policyReason = enforceRelayEventWritePolicy(event, lim, Math.floor(Date.now() / 1000));
+  if (policyReason) {
+    logger.debug({ eventId: event.id, policyReason }, 'Relay: Event rejected by policy');
+    sendRelayMessage(socket, ['OK', event.id, false, policyReason]);
     return false;
   }
 
