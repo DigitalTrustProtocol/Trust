@@ -51,22 +51,6 @@ export function startGraphRelayListener(runtimeContext: RuntimeContext, graph: G
   let closed = false;
   let subId = `g${randomBytes(6).toString('hex')}`;
 
-  //const seenIds = new Set<string>();
-  const SEEN_CAP = 50_000;
-
-  /*
-  // This is used to prevent duplicate events from being processed
-  // But it is not needed anymore because the graph is used to store the events and it will automatically deduplicate them
-  const bumpSeen = (id: string): boolean => {
-    if (seenIds.has(id)) return false;
-    seenIds.add(id);
-    if (seenIds.size > SEEN_CAP) {
-      const first = seenIds.values().next();
-      if (!first.done) seenIds.delete(first.value);
-    }
-    return true;
-  };
-  */
   const buildFilters = () => {
     const sinceSec = Math.max(0, Math.floor(Date.now() / 1000) - 120);
     //const authors = runtimeContext.graphLoadMode === 'author' ? runtimeContext.authors : undefined;
