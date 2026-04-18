@@ -10,7 +10,7 @@ import type {
 import { Kysely, sql } from 'kysely';
 import { getFilterLimit, sortEvents } from 'nostr-tools';
 import { Packr } from 'msgpackr';
-import { ExtendedNRelay } from './dbManager.js';
+import { ExtendedNRelay, InsertEventOptions } from './dbManager.js';
 
 const DENORMALIZED_TAGS = new Set(['d', 'c', 't']);
 const packr = new Packr({ structuredClone: false });
@@ -43,7 +43,7 @@ export interface NSQLiteOpts {
 
 
 
-export class NSQLite implements ExtendedNRelay  {
+export class NSQLite implements ExtendedNRelay {
   db: Kysely<NSQLiteSchema>;
   private indexTags: (event: NostrEvent) => string[][];
   private indexSearch: (event: NostrEvent) => string | undefined;
@@ -68,39 +68,37 @@ export class NSQLite implements ExtendedNRelay  {
     }
   }
 
-  async event(event: NostrEvent, opts?: { signal?: AbortSignal }): Promise<void> {
+  async event(event: NostrEvent, opts: InsertEventOptions = {}): Promise<void> {
     if (NKinds.ephemeral(event.kind)) return;
 
     if (await this.isDeleted(event)) {
-      if(opts) {
-        (opts as any).isDeleted = true; // indicate that the event was deleted
-        (opts as any).isInserted = false; // indicate that the event was not inserted into the database
-      }
+      opts.isDeleted = true; // indicate that the event was deleted
+      opts.isInserted = false; // indicate that the event was not inserted into the database
       return;
     }
 
     try {
-      if (opts?.signal?.aborted) return;
+      if (opts.signal?.aborted) return;
 
       await NSQLite.trx(this.db, async (trx) => {
-        await this.deleteEvents(trx, event);
-        let inserted = await this.insertEvent(trx, event);
-        if(inserted && opts) 
-          (opts as any).isInserted = true; // indicate that the event was inserted into the database
+        if (event.kind === 5) await this.deleteEvents(trx, event);
+        opts.isInserted = await this.insertEvent(trx, event);
       });
     } catch (e) {
-      if (e instanceof Error && e.message.includes('UNIQUE constraint failed')) return;
+      if (e instanceof Error) {
+        opts.errorMessage = e.message;
+        opts.isError = true;
+
+        if (e instanceof Error && e.message.includes('UNIQUE constraint failed')) {
+          opts.isDublicate = true;
+          return;
+        } else if (e instanceof Error && e.message.includes('timeout')) {
+          opts.isTimeout = true;
+          return;
+        } 
+      }
       throw e;
     }
-  }
-
-  private deriveTrustKindFromD(dTagValue: string | null, fallback: string): string | null {
-    if (!dTagValue) return null;
-    // Future format: <trust_kind>|<hex(64)>[|context]
-    const m = dTagValue.match(/^(\d+)\|([a-fA-F0-9]{64})(\|.*)?$/);
-    if (m?.[1]) return m[1]!;
-    // d tag without kind prefix; use default kind.
-    return fallback;
   }
 
   protected async isDeleted(event: NostrEvent): Promise<boolean> {
@@ -122,7 +120,7 @@ export class NSQLite implements ExtendedNRelay  {
   }
 
   protected async deleteEvents(db: Kysely<NSQLiteSchema>, event: NostrEvent): Promise<void> {
-    if (event.kind !== 5) return;
+
 
     const ids = new Set(event.tags.filter(([name]) => name === 'e').map(([_name, value]) => value));
     const addrs = new Set(event.tags.filter(([name]) => name === 'a').map(([_name, value]) => value));
@@ -157,9 +155,7 @@ export class NSQLite implements ExtendedNRelay  {
     const tTag = event.tags.find(([name]) => name === 't')?.[1] ?? null;
     const cTag = event.tags.find(([name]) => name === 'c')?.[1] ?? null;
     const d = addressable ? dTag : null;
-    const t =
-      tTag ??
-      (event.kind === 32010 ? this.deriveTrustKindFromD(dTag, '32010') : null);
+    const t = tTag ?? null;
 
     if (replaceable || addressable) {
       let existingQuery = trx
@@ -181,7 +177,7 @@ export class NSQLite implements ExtendedNRelay  {
         const existingCreated = Number(existing.created_at);
         // Same as Postgres upsert: only replace when incoming is strictly newer by time.
         if (existingCreated >= event.created_at) {
-          return false;
+          return false; // the event is not newer than the existing event
         }
 
         await trx.deleteFrom('nostr_events').where('id', '=', existing.id).execute();
@@ -348,24 +344,24 @@ export class NSQLite implements ExtendedNRelay  {
 
   async *allEvents(kinds: number[], authors: string[], contexts: string[], signal?: AbortSignal): AsyncIterable<NostrEvent> {
     let query = this.db.selectFrom('nostr_events').selectAll('nostr_events');
-    if(kinds.length === 1) {
+    if (kinds.length === 1) {
       query = query.where('kind', '=', kinds[0]);
-    } 
-    if(kinds.length > 1) {
+    }
+    if (kinds.length > 1) {
       query = query.where('kind', 'in', kinds);
     }
 
-    if(authors.length === 1) {
+    if (authors.length === 1) {
       query = query.where('pubkey', '=', authors[0]);
     }
-    if(authors.length > 1) {
+    if (authors.length > 1) {
       query = query.where('pubkey', 'in', authors);
     }
 
-    if(contexts.length === 1) {
+    if (contexts.length === 1) {
       query = query.where('c', '=', contexts[0]);
     }
-    if(contexts.length > 1) {
+    if (contexts.length > 1) {
       query = query.where('c', 'in', contexts);
     }
 

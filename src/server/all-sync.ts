@@ -1,15 +1,11 @@
 import { NPool } from "@nostrify/nostrify";
 import { subscriptionOptions } from "./relay-sub.js";
-import { KIND_TRUST } from "../lib/nostr/nip32010.js";
 import { insertEvent } from "../lib/trust/graphManager.js";
 import { SYNC_TIME_NS_SYNC, trackLatestSyncTime } from "../lib/syncTime.js";
 import { startRelaySubscription } from "./relay-sub.js";
 import { createTrustFilters, GraphSyncResult } from "./graph-sync.js";
 import { logger } from "../lib/logger.js";
 import { RuntimeContext } from "../lib/runtimeContext.js";
-import { Store } from "../lib/db/dbManager.js";
-import { Graph } from "../lib/trust/graph/Graph.js";
-import { run } from "node:test";
 import { Filter } from "nostr-tools";
 
 export async function subscribeToAll(runtimeContext: RuntimeContext): Promise<GraphSyncResult> {

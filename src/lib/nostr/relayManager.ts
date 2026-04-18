@@ -1,5 +1,6 @@
-import { NRelay1 } from '@nostrify/nostrify';
+import { NostrClientMsg, NRelay1 } from '@nostrify/nostrify';
 import type { Filter, VerifiedEvent } from 'nostr-tools';
+import { RawData } from 'ws';
 
 export type RelayAccess = 'read' | 'write' | 'read-write';
 
@@ -163,3 +164,22 @@ export async function selectAvailableRelays(relays: string[], options: RelayProb
 export function clearRelayStatusCache(): void {
   relayStatusCache.clear();
 }
+
+export function parseClientMessage(raw: RawData):
+  | { ok: true; msg: NostrClientMsg }
+  | { ok: false; error: string } {
+  const text = typeof raw === 'string' ? raw : raw.toString();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, error: 'message is not valid JSON' };
+  }
+
+  if (!Array.isArray(parsed) || parsed.length === 0 || typeof parsed[0] !== 'string') {
+    return { ok: false, error: 'message must be a JSON array with a message type' };
+  }
+
+  return { ok: true, msg: parsed as NostrClientMsg };
+}
+

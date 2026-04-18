@@ -5,6 +5,7 @@ import { loadKeyPair } from './lib/keys.js';
 import { nip19 } from 'nostr-tools';
 
 const ALL_TOKEN = 'all';
+export type GraphLoadMode = 'all' | 'author';
 
 // Allow override via env (e.g. TRUST_CONFIG_DIR=./trust for local testing)
 const CONFIG_DIR = process.env.TRUST_CONFIG_DIR
@@ -42,6 +43,9 @@ export const PATHS = {
 
 // User configuration stored in config.json
 export interface UserConfig {
+
+  graphLoadMode: GraphLoadMode;
+  /** Version of the config file. */
   version: number;
   relays: string[];
   /**
@@ -53,6 +57,7 @@ export interface UserConfig {
    * Trust `c` tag values to retain, or `"All"`. Empty string matches events with no/missing context tag.
    */
   contexts?: string[];
+
   db?: {
     driver?: 'sqlite' | 'postgres';
     sqlitePath?: string;
@@ -87,6 +92,7 @@ export interface UserConfig {
 const DEFAULT_SYNC_KINDS = [32010];
 
 export const DEFAULT_CONFIG: UserConfig = {
+  graphLoadMode: 'author',
   version: 1,
   relays: DEFAULT_REMOTE_RELAYS,
   createdAt: new Date().toISOString(),
@@ -107,18 +113,18 @@ export const DEFAULT_CONFIG: UserConfig = {
  * Single resolved instance: file + defaults + CLI + identity. Use this for host/port/relays/sync
  * and focus — no parallel option objects.
  */
-export type ResolvedRuntimeConfig = Omit<UserConfig, 'authors' | 'contexts'> & {
+export type ResolvedRuntimeConfig = UserConfig & {
   primaryPubkey: string;
   /**
    * Hex pubkeys to retain in graph/sync filters, or `undefined` = no author filter (all authors).
    * Resolved: CLI `--authors` → `TRUST_AUTHORS` → `config.json`; empty / `*` / `all` → undefined.
    */
-  authors: string[] | undefined;
+  //authors: string[] | undefined;
   /**
    * Trust `c` tag values to retain, or `undefined` = no context filter (all contexts).
    * Resolved: CLI `--contexts` → `TRUST_CONTEXTS` → `config.json`; empty / `*` / `all` → undefined.
    */
-  contexts: string[] | undefined;
+  //contexts: string[] | undefined;
   /** Effective HTTP bind (CLI > `TRUST_SERVER_*` env > config > defaults). */
   host: string;
   port: number;

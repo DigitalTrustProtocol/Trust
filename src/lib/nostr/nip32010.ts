@@ -9,6 +9,8 @@ import type { Event, EventTemplate, VerifiedEvent } from 'nostr-tools';
 import { sha256 } from '@noble/hashes/sha2';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils';
 import type { ParsedSubject } from '../trust/subject.js';
+import { NostrClientMsg } from '@nostrify/nostrify';
+import { RawData } from 'ws';
 
 export const KIND_TRUST = 32010; // Minimum kind for trust events
 export const KIND_TRUST_MIN = 32010; // Minimum kind for trust events
@@ -47,6 +49,7 @@ export type ITrustEvent = VerifiedEvent & {
   t_tag?: string;
   p_tag?: string;
   c_tag?: string;
+  replacementId: string;
 };
 
 
@@ -130,6 +133,8 @@ export function asTrustEvent(event: Event): ITrustEvent {
   e.t_tag = getTagValueFromTags(event, 't');
   e.p_tag = getTagValueFromTags(event, 'p');
   e.c_tag = getTagValueFromTags(event, 'c');
+
+  e.replacementId = event.pubkey + e.d_tag; // the author and d_tag are the replacementId, as multiple events can have the same d_tag from different authors
 
   return e;
 }
@@ -278,3 +283,6 @@ export function buildTrustEventTemplate(params: BuildTrustEventParams): EventTem
     created_at: Math.floor(Date.now() / 1000),
   };
 }
+
+
+

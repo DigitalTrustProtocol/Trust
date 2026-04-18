@@ -15,7 +15,7 @@ import { EdgeMap } from "./EdgeMap.js";
 
 
 export interface IEdge {
-  eventid: string;
+  replacementId: string;
   author: string;
   kind: number;
   value: any;
@@ -34,7 +34,7 @@ export interface IEdge {
 
 // Trust edge for kind 32010
 export class EdgeT1 implements IEdge {
-  eventid: string;
+  replacementId: string;
   author: string;
   kind: number;
   value: 1 | 0 | -1 = 0;
@@ -48,7 +48,7 @@ export class EdgeT1 implements IEdge {
   constructor(event: ITrustEvent) {
     this.kind = event.kind; 
     this.author = event.pubkey;
-    this.eventid = event.id;
+    this.replacementId = event.replacementId;
     this.update(event);
   }
 

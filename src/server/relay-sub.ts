@@ -1,10 +1,7 @@
 import { type VerifiedEvent, type Filter, verifyEvent } from 'nostr-tools';
 import { getPool } from '../lib/nostr/pool.js';
-import { KIND_TRUST, asTrustEvent } from '../lib/nostr/nip32010.js';
-import { SYNC_TIME_NS_SYNC, trackLatestSyncTime, updateLastSeenSyncTime } from '../lib/syncTime.js';
-import { getGraph, insertEvent } from '../lib/trust/graphManager.js';
-import { chunksOf } from '../lib/utils.js';
-import { NostrRelayMsg, NPool, NStore } from '@nostrify/nostrify';
+import { KIND_TRUST } from '../lib/nostr/nip32010.js';
+import { NostrRelayMsg, NPool } from '@nostrify/nostrify';
 import { Graph } from '../lib/trust/graph/Graph.js';
 
 let eventIDSet = new Set<string>();

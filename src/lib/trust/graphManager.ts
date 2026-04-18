@@ -2,12 +2,13 @@ import { VerifiedEvent } from 'nostr-tools';
 import { Packr } from 'msgpackr';
 import os from 'node:os';
 import { Graph } from './graph/Graph.js';
-import { getStore, Store } from '../db/dbManager.js';
+import { getStore, InsertEventOptions, Store } from '../db/dbManager.js';
 import { asTrustEvent, isTrustEventValid, KIND_TRUST } from '../nostr/nip32010.js';
 import { KIND_DELETE_REQUEST_EVENT as KIND_DELETE_REQUEST } from '../nostr/nip09.js';
 import { KIND_USER_METADATA } from '../nostr/nip01.js';
 import { RuntimeContext } from '../runtimeContext.js';
 import { createTrustFilters } from '../../server/graph-sync.js';
+import { GraphLoadMode } from '../../config.js';
 
 const packr = new Packr({ structuredClone: false });
 const BYTES_PER_MILLION_NODES = 1024 * 1024 * 1024;
@@ -15,7 +16,6 @@ const NODES_PER_MEMORY_GB = 1_000_000;
 
 let graph: Graph | null = null;
 
-export type GraphLoadMode = 'all-authors' | 'author-perspective';
 
 export interface GraphLoadPreflight {
   requestedMode: GraphLoadMode;
@@ -58,14 +58,14 @@ export async function preflightGraphLoad(runtimeContext: RuntimeContext): Promis
   const freeBytes = os.freemem();
   const availableBytes = freeBytes;
   const memoryUsage = process.memoryUsage();
-  const requestedMode: GraphLoadMode = runtimeContext.authors?.length ? 'author-perspective' : 'all-authors';
+  const requestedMode: GraphLoadMode = runtimeContext.graphLoadMode;
   const hasEnoughMemoryForAllAuthors = availableBytes >= estimatedRequiredBytes;
 
   let selectedMode: GraphLoadMode = requestedMode;
-  if (requestedMode === 'all-authors' && !hasEnoughMemoryForAllAuthors) {
-    selectedMode = 'author-perspective';
+  if (requestedMode === 'all' && !hasEnoughMemoryForAllAuthors) {
+    selectedMode = 'author';
   }
-  if (requestedMode === 'author-perspective' && !hasEnoughMemoryForAllAuthors) {
+  if (requestedMode === 'author' && !hasEnoughMemoryForAllAuthors) {
     throw new Error(
       `Insufficient memory for author-perspective graph load: estimated ${estimatedRequiredBytes} bytes for ~${estimatedNodeCount} nodes, available ${availableBytes} bytes.`,
     );
@@ -95,17 +95,14 @@ export async function loadGraph(runtimeContext: RuntimeContext): Promise<Graph> 
   runtimeContext.graph = graph;
 
   const preflight = await preflightGraphLoad(runtimeContext);
-  const authors = runtimeContext.authors;
 
-  if (preflight.selectedMode === 'author-perspective') {
-    if (authors?.length) {
-      await getGraphFromDB(runtimeContext);
-    } else {
-      await getGraphFromDB({
-        ...runtimeContext,
-        authors: [runtimeContext.primaryPubkey],
-      });
-    }
+  if (preflight.selectedMode === 'author') {
+    let authors = runtimeContext.authors?.length ? runtimeContext.authors : [runtimeContext.primaryPubkey];
+    
+    await getGraphFromDB({
+      ...runtimeContext,
+      authors: authors,
+    });
   } else {
     await getGraphFromDBAllAuthors(runtimeContext);
   }
@@ -114,7 +111,7 @@ export async function loadGraph(runtimeContext: RuntimeContext): Promise<Graph> 
 }
 
 export async function insertEvent(event: VerifiedEvent, runtimeContext: RuntimeContext): Promise<boolean> {
-  const {store, graph } = runtimeContext;
+  const { store, graph } = runtimeContext;
 
   if (event.kind === KIND_TRUST) {
     return await insertTrustEvent(event, store!, graph!);
@@ -150,21 +147,19 @@ async function insertTrustEvent(event: VerifiedEvent, store?: Store, graphInst?:
   const trustEvent = asTrustEvent(event);
   if (!isTrustEventValid(trustEvent)) return false;
 
-  const opt: Record<string, unknown> = {};
+  const opt: InsertEventOptions = {};
   await store?.event(trustEvent, opt);
 
-  let inserted = (opt as { isInserted?: boolean }).isInserted ?? false;
-  const deleted = (opt as { isDeleted?: boolean }).isDeleted ?? false;
 
-  if (graphInst && inserted) {
-    inserted = graphInst.applyTrustEvent(trustEvent);
+  if (graphInst && opt.isInserted) {
+    return graphInst.applyTrustEvent(trustEvent);
   }
 
-  if (graphInst && deleted) {
+  if (graphInst && opt.isDeleted) {
     graphInst.removeTrustEvent(trustEvent);
   }
 
-  return inserted;
+  return opt.isInserted ?? false;
 }
 
 async function insertUserMetadataEvent(event: VerifiedEvent, store?: Store, graphInst?: Graph): Promise<boolean> {
@@ -181,7 +176,7 @@ async function insertUserMetadataEvent(event: VerifiedEvent, store?: Store, grap
 }
 
 async function getGraphFromDBAllAuthors(runtimeContext: RuntimeContext): Promise<void> {
-  const {graph, store, kinds, authors, contexts, abortController} = runtimeContext;
+  const { graph, store, kinds, authors, contexts, abortController } = runtimeContext;
 
   for await (const event of store!.allEvents(
     kinds,
@@ -194,6 +189,8 @@ async function getGraphFromDBAllAuthors(runtimeContext: RuntimeContext): Promise
     graph!.applyTrustEvent(trustEvent);
   }
 }
+
+
 async function getGraphFromDB(runtimeContext: RuntimeContext): Promise<void> {
   const visited: Set<string> = new Set<string>();
 

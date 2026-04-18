@@ -11,7 +11,7 @@ import { Machina } from '@nostrify/nostrify/utils';
 import { InsertResult, Kysely, type SelectQueryBuilder, sql } from 'kysely';
 import { getFilterLimit, sortEvents } from 'nostr-tools';
 import { Packr } from 'msgpackr';
-import { ExtendedNRelay } from './dbManager.js';
+import { ExtendedNRelay, InsertEventOptions } from './dbManager.js';
 
 const DENORMALIZED_TAGS = new Set(['d', 'c', 't']);
 const packr = new Packr({ structuredClone: false });
@@ -70,13 +70,10 @@ type SelectEventsQuery = SelectQueryBuilder<
 
 export class NPostgres implements ExtendedNRelay {
   db: Kysely<NPostgresSchema>;
-  /** Raw pg.Pool reference — set via `setPool()` after construction for LISTEN/NOTIFY. */
-  pgPool: import('pg').Pool | null = null;
   private indexTags: (event: NostrEvent) => string[][];
   private indexSearch: (event: NostrEvent) => string | undefined;
   private indexExtensions: (event: NostrEvent) => Record<string, string> | Promise<Record<string, string>>;
   private chunkSize: number;
-  private listenClient: import('pg').PoolClient | null = null;
 
   constructor(db: Kysely<any>, opts?: NPostgresOpts) {
     this.db = db as Kysely<NPostgresSchema>;
@@ -84,19 +81,6 @@ export class NPostgres implements ExtendedNRelay {
     this.indexSearch = opts?.indexSearch ?? NPostgres.indexSearch;
     this.indexExtensions = opts?.indexExtensions ?? (() => ({}));
     this.chunkSize = opts?.chunkSize ?? 20;
-  }
-
-  setPool(pool: import('pg').Pool): void {
-    this.pgPool = pool;
-  }
-
-  private deriveTrustKindFromD(dTagValue: string | null, fallback: string): string | null {
-    if (!dTagValue) return null;
-    // Future format: <trust_kind>|<hex(64)>[|context]
-    const m = dTagValue.match(/^(\d+)\|([a-fA-F0-9]{64})(\|.*)?$/);
-    if (m?.[1]) return m[1]!;
-    // d tag without kind prefix; use default kind.
-    return fallback;
   }
 
   /** Default tag index function. */
@@ -114,47 +98,40 @@ export class NPostgres implements ExtendedNRelay {
   }
 
   /** Insert an event (and its tags) into the database. */
-  async event(event: NostrEvent, opts: { signal?: AbortSignal; timeout?: number } = {}): Promise<void> {
+  async event(event: NostrEvent, opts: InsertEventOptions = {}): Promise<void> {
     if (NKinds.ephemeral(event.kind)) return;
 
     if (await this.isDeleted(event)) {
-      if (opts) {
-        (opts as any).isDeleted = true; // indicate that the event was deleted
-        (opts as any).isInserted = false; // indicate that the event was not inserted into the database
-      }
-      //throw new RelayError('invalid', 'the event has been deleted');
+      opts.isDeleted = true; // indicate that the event was deleted
+      opts.isInserted = false; // indicate that the event was not inserted into the database
       return;
     }
 
     try {
-      if (opts?.signal?.aborted) return;
-      let inserted = false;
+      if (opts.signal?.aborted) return;
       let result = await NPostgres.trx(this.db, (trx) => {
         return this.withTimeout(trx, opts.timeout, async (trx) => {
-          // deleteEvents (e.g. kind 5) must run before insert; the old Promise.all
-          // passed a non-invoked `async () => ...`, so insertEvent never ran.
-          await this.deleteEvents(trx, event);
-          inserted = await this.insertEvent(trx, event);
+          if (event.kind === 5) await this.handleKind5(trx, event);
+          opts.isInserted = await this.insertEvent(trx, event);
         });
       });
-
-      if (opts)
-        (opts as any).isInserted = inserted; // indicate that the event was inserted into the database
 
       return result;
     } catch (e) {
       if (e instanceof Error) {
+        opts.errorMessage = e.message;
+        opts.isError = true;
+
         switch (e.message) {
           case 'duplicate key value violates unique constraint "nostr_events_pkey"':
+            opts.isDublicate = true;
             return;
           case 'canceling statement due to statement timeout':
-            throw new RelayError('error', 'the event could not be added fast enough');
-          default:
-            throw e;
+            opts.isTimeout = true;
+            return;
         }
-      } else {
-        throw e;
       }
+      throw e;
     }
   }
 
@@ -181,52 +158,54 @@ export class NPostgres implements ExtendedNRelay {
   }
 
   /** Delete events referenced by kind 5. */
-  protected async deleteEvents(db: Kysely<NPostgresSchema>, event: NostrEvent): Promise<void> {
-    if (event.kind === 5) {
-      const ids = new Set(event.tags.filter(([name]) => name === 'e').map(([_name, value]) => value));
-      const addrs: Set<string> = new Set(event.tags.filter(([name]) => name === 'a').map(([_name, value]) => value));
+  protected async handleKind5(db: Kysely<NPostgresSchema>, event: NostrEvent): Promise<void> {
+    const ids = new Set(event.tags.filter(([name]) => name === 'e').map(([_name, value]) => value));
+    const addrs: Set<string> = new Set(event.tags.filter(([name]) => name === 'a').map(([_name, value]) => value));
 
-      const filters: NostrFilter[] = [];
+    const filters: NostrFilter[] = [];
 
-      if (ids.size) {
-        filters.push({ ids: [...ids], authors: [event.pubkey] });
-      }
-
-      for (const addr of addrs) {
-        const [k, pubkey, d] = addr.split(':');
-        const kind = Number(k);
-
-        if (pubkey !== event.pubkey) continue;
-        if (!(Number.isInteger(kind) && kind >= 0)) continue;
-        if (d === undefined) continue;
-
-        const filter: NostrFilter = {
-          kinds: [kind],
-          authors: [event.pubkey],
-          until: event.created_at,
-        };
-
-        if (d) {
-          filter['#d'] = [d];
-        }
-
-        filters.push(filter);
-      }
-
-      if (filters.length) {
-        await this.removeEvents(db, filters);
-      }
+    if (ids.size) {
+      filters.push({ ids: [...ids], authors: [event.pubkey] });
     }
+
+    for (const addr of addrs) {
+      const [k, pubkey, d] = addr.split(':');
+      const kind = Number(k);
+
+      if (pubkey !== event.pubkey) continue;
+      if (!(Number.isInteger(kind) && kind >= 0)) continue;
+      if (d === undefined) continue;
+
+      const filter: NostrFilter = {
+        kinds: [kind],
+        authors: [event.pubkey],
+        until: event.created_at,
+      };
+
+      if (d) {
+        filter['#d'] = [d];
+      }
+
+      filters.push(filter);
+    }
+
+    if (filters.length) {
+      await this.removeEvents(db, filters);
+    }
+
+    // TODO: Add the event to the DB
   }
 
   /** Insert the event into the database. */
   protected async insertEvent(trx: Kysely<NPostgresSchema>, event: NostrEvent): Promise<boolean> {
-    const d = event.tags.find(([name]) => name === 'd')?.[1];
-    const tTag = event.tags.find(([name]) => name === 't')?.[1] ?? null;
-    const c = event.tags.find(([name]) => name === 'c')?.[1] ?? null;
 
     const replaceable = NKinds.replaceable(event.kind);
     const parameterized = NKinds.addressable(event.kind);
+
+    const d = parameterized ? event.tags.find(([name]) => name === 'd')?.[1] ?? null : null;
+    const t = event.tags.find(([name]) => name === 't')?.[1] ?? null;
+    const c = event.tags.find(([name]) => name === 'c')?.[1] ?? null;
+
 
     const tagsIndex = this.indexTags(event).reduce((result, [name, value]) => {
       if (!result[name]) {
@@ -254,7 +233,7 @@ export class NPostgres implements ExtendedNRelay {
       search_ext,
       search: searchText ? sql`to_tsvector(${searchText})` : null,
       d: parameterized ? d ?? '' : null,
-      t: tTag,
+      t,
       c,
     };
 
@@ -398,11 +377,13 @@ export class NPostgres implements ExtendedNRelay {
       }
     }
 
+    let isAddressable = filter.kinds?.some((kind) => NKinds.addressable(kind));
+
     for (const [key, values] of Object.entries(filter)) {
       if (key.startsWith('#') && Array.isArray(values)) {
         const name = key.replace(/^#/, '');
 
-        if (name === 'd' && filter.kinds?.every((kind) => NKinds.addressable(kind))) {
+        if (name === 'd' && isAddressable) {
           query = query.where('d', '=', ({ fn, val }) => fn.any(val(values)));
         } else if (name === 't') {
           query = query.where('t', '=', ({ fn, val }) => fn.any(val(values)));
@@ -435,24 +416,24 @@ export class NPostgres implements ExtendedNRelay {
 
   async *allEvents(kinds: number[], authors: string[], contexts: string[], signal?: AbortSignal): AsyncIterable<NostrEvent> {
     let query = this.db.selectFrom('nostr_events').selectAll('nostr_events');
-    if(kinds.length === 1) {
+    if (kinds.length === 1) {
       query = query.where('kind', '=', kinds[0]);
-    } 
-    if(kinds.length > 1) {
+    }
+    if (kinds.length > 1) {
       query = query.where('kind', 'in', kinds);
     }
 
-    if(authors.length === 1) {
+    if (authors.length === 1) {
       query = query.where('pubkey', '=', authors[0]);
     }
-    if(authors.length > 1) {
+    if (authors.length > 1) {
       query = query.where('pubkey', 'in', authors);
     }
 
-    if(contexts.length === 1) {
+    if (contexts.length === 1) {
       query = query.where('c', '=', contexts[0]);
     }
-    if(contexts.length > 1) {
+    if (contexts.length > 1) {
       query = query.where('c', 'in', contexts);
     }
 
@@ -692,45 +673,7 @@ export class NPostgres implements ExtendedNRelay {
     }
   }
 
-  /**
-   * Subscribe to Postgres LISTEN/NOTIFY for graph changes.
-   * The trigger sends a JSON payload: { op, event_id, kind, c, raw_event? }.
-   * For INSERT, the callback can use `kind` to filter before fetching from nostr_events.
-   * For DELETE, the payload includes the base64-encoded raw_event for graph removal.
-   */
-  async listenForGraphChanges(
-    onNotify: (payload: {
-      op: 'INSERT' | 'DELETE';
-      event_id: string;
-      kind: number;
-      /** Trust context tag (denormalized `c`); null when absent. */
-      c: string | null;
-      raw_event?: string;
-    }) => void,
-  ): Promise<void> {
-    if (!this.pgPool) throw new Error('pgPool not set — call setPool() first');
-    if (this.listenClient) return;
-    this.listenClient = await this.pgPool.connect();
-    this.listenClient.on('notification', (msg) => {
-      if (msg.channel === 'trust_graph_change' && msg.payload) {
-        try {
-          onNotify(JSON.parse(msg.payload));
-        } catch { /* malformed payload — skip */ }
-      }
-    });
-    await this.listenClient.query('LISTEN trust_graph_change');
-  }
-
-  async stopListening(): Promise<void> {
-    if (this.listenClient) {
-      try { await this.listenClient.query('UNLISTEN trust_graph_change'); } catch { /* closing */ }
-      this.listenClient.release();
-      this.listenClient = null;
-    }
-  }
-
   async close(): Promise<void> {
-    await this.stopListening();
     await this.db.destroy();
   }
 
@@ -835,44 +778,10 @@ export class NPostgres implements ExtendedNRelay {
       .ifNotExists()
       .execute();
 
-    await this.installGraphNotifyTriggers();
-  }
-
-  /**
-   * Install triggers that fire pg_notify directly with a JSON payload.
-   * No intermediate table — the LISTEN/NOTIFY channel IS the transport.
-   */
-  private async installGraphNotifyTriggers(): Promise<void> {
-    await sql.raw(`CREATE OR REPLACE FUNCTION trust_pg_notify_insert_fn() RETURNS trigger AS $$
-BEGIN
-  PERFORM pg_notify('trust_graph_change',
-    json_build_object('op', 'INSERT', 'event_id', NEW.id, 'kind', NEW.kind, 'c', NEW.c)::text
-  );
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql`).execute(this.db);
-
-    await sql.raw(`CREATE OR REPLACE FUNCTION trust_pg_notify_delete_fn() RETURNS trigger AS $$
-BEGIN
-  PERFORM pg_notify('trust_graph_change',
-    json_build_object('op', 'DELETE', 'event_id', OLD.id, 'kind', OLD.kind, 'c', OLD.c, 'raw_event', encode(OLD.raw_event, 'base64'))::text
-  );
-  RETURN OLD;
-END;
-$$ LANGUAGE plpgsql`).execute(this.db);
-
+    // Remove legacy graph LISTEN/NOTIFY triggers (graph updates follow the relay WebSocket instead).
     await sql.raw(`DROP TRIGGER IF EXISTS trg_nostr_events_ai_graph ON nostr_events`).execute(this.db);
-    await sql.raw(`
-CREATE TRIGGER trg_nostr_events_ai_graph
-AFTER INSERT ON nostr_events
-FOR EACH ROW EXECUTE PROCEDURE trust_pg_notify_insert_fn()
-`).execute(this.db);
-
     await sql.raw(`DROP TRIGGER IF EXISTS trg_nostr_events_ad_graph ON nostr_events`).execute(this.db);
-    await sql.raw(`
-CREATE TRIGGER trg_nostr_events_ad_graph
-AFTER DELETE ON nostr_events
-FOR EACH ROW EXECUTE PROCEDURE trust_pg_notify_delete_fn()
-`).execute(this.db);
+    await sql.raw(`DROP FUNCTION IF EXISTS trust_pg_notify_insert_fn()`).execute(this.db);
+    await sql.raw(`DROP FUNCTION IF EXISTS trust_pg_notify_delete_fn()`).execute(this.db);
   }
 }

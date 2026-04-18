@@ -18,7 +18,7 @@ import { signEvent } from './lib/signer.js';
 import { getAvailableRelays, getRelays, publishEventWithReport, type PublishReport } from './lib/nostr/pool.js';
 import { Score } from './lib/trust/resolvers/Score.js';
 import standardResolver from './lib/trust/resolvers/trustResolver.js';
-import { loadGraph, insertEvent as graphInsertEvent } from './lib/trust/graphManager.js';
+import { loadGraph } from './lib/trust/graphManager.js';
 import { getRuntimeContext, setupStore, type RuntimeContext } from './lib/runtimeContext.js';
 import { createApp, type ServerService } from './server/app.js';
 import type { ResolveFormat } from './lib/trust/resolvers/IResolveStrategy.js';

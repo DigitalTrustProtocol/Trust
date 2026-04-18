@@ -5,21 +5,14 @@ import { loadSecretKey, loadKeyPair } from '../../lib/keys.js';
 import { getPublicKey } from 'nostr-tools/pure';
 import type { VerifiedEvent } from 'nostr-tools';
 import { Score } from '../../lib/trust/resolvers/Score.js';
-import {
-  applyTrustEventToGraph,
-  getLoadedGraph,
-  loadGraph,
-  removeTrustEventFromGraphPacked,
-} from '../../lib/trust/graphManager.js';
+import { getLoadedGraph, loadGraph } from '../../lib/trust/graphManager.js';
 import standardResolver from '../../lib/trust/resolvers/trustResolver.js';
-import { NPostgres } from '../../lib/db/NPostgres.js';
-import { NSQLite } from '../../lib/db/NSQLite.js';
 import { RuntimeContext } from '../../lib/runtimeContext.js';
 import { ok, sendError, ErrorCode } from '../errors.js';
 import { getRuntimeConfig, PATHS, type UserConfig } from '../../config.js';
-import { kvGet, kvSet } from '../../lib/db/kv.js';
 import { logger } from '../../lib/logger.js';
-import { KIND_TRUST, KIND_TRUST_MAX, KIND_TRUST_MIN } from '../../lib/nostr/nip32010.js';
+import { KIND_TRUST } from '../../lib/nostr/nip32010.js';
+import { startGraphRelayListener } from '../graph-relay-listener.js';
 import { getLatestSyncTime, SYNC_TIME_NS_SYNC } from '../../lib/syncTime.js';
 import prettyBytes from 'pretty-bytes';
 
@@ -58,7 +51,6 @@ function resolveAuthor(author?: string): { author: string | null; error?: string
 }
 
 const startTime = Date.now();
-const KV_GRAPH_LAST_CREATED_AT = 'graph_last_created_at';
 
 export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) {
   const isSplitApi = runtimeContext.service === 'api';
@@ -82,76 +74,14 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
 
     if (!isSplitApi) return;
 
-    const store = runtimeContext.store;
-    if (!store) throw new Error('Store not loaded');
-    const graph = runtimeContext.graph; 
+    const graph = runtimeContext.graph;
     if (!graph) throw new Error('Graph not loaded');
 
-    // ── Postgres: direct LISTEN/NOTIFY from DB triggers ──────────
-    if (store instanceof NPostgres && store.pgPool) {
-      logger.info('Graph: Subscribing to Postgres LISTEN/NOTIFY for graph changes');
-      await store.listenForGraphChanges((payload) => {
-        void (async () => {
-          if (payload.kind < KIND_TRUST_MIN || payload.kind > KIND_TRUST_MAX) return;
-          if (payload.c && runtimeContext.contextSet && !runtimeContext.contextSet.has(payload.c!)) return;
-
-          try {
-            if (payload.op === 'INSERT') {
-              const ev = await store.getEvent(payload.event_id);
-              if (ev) {
-                applyTrustEventToGraph(ev as VerifiedEvent, graph);
-                logger.debug({ op: 'INSERT', eventId: payload.event_id }, 'Graph updated via NOTIFY');
-              }
-            } else if (payload.op === 'DELETE' && payload.raw_event) {
-              const raw = Buffer.from(payload.raw_event, 'base64');
-              removeTrustEventFromGraphPacked(new Uint8Array(raw), graph);
-              logger.debug({ op: 'DELETE', eventId: payload.event_id }, 'Graph edge removed via NOTIFY');
-            }
-          } catch (err) {
-            logger.error({ err, eventId: payload.event_id, op: payload.op }, 'Failed to apply NOTIFY payload to graph');
-          }
-        })();
-      });
-
-      app.addHook('onClose', async () => {
-        logger.info('Graph: Stopping Postgres LISTEN/NOTIFY');
-        await store.stopListening();
-      });
-      return;
-    }
-
-    // ── SQLite: poll nostr_events by created_at ──────────────────
-    if (store instanceof NSQLite) {
-      const savedTs = await kvGet(KV_GRAPH_LAST_CREATED_AT);
-      let lastCreatedAt = savedTs ? Number(savedTs) : 0;
-
-      const pollMs = Math.max(1000, Number(process.env.TRUST_GRAPH_NOTIFY_POLL_MS ?? 5000));
-      logger.info({ pollMs }, 'Graph: Starting SQLite graph poll');
-      const timer = setInterval(() => {
-        void (async () => {
-          try {
-            const events = await store.getEventsSince(lastCreatedAt, [KIND_TRUST], 500);
-            for (const ev of events) {
-              applyTrustEventToGraph(ev as VerifiedEvent, graph);
-              if (ev.created_at > lastCreatedAt) {
-                lastCreatedAt = ev.created_at;
-              }
-            }
-            if (events.length > 0) {
-              logger.debug({ count: events.length }, 'Graph: SQLite poll applied new events to graph');
-              await kvSet(KV_GRAPH_LAST_CREATED_AT, String(lastCreatedAt));
-            }
-          } catch (err) {
-            logger.error({ err }, 'Graph: SQLite graph poll failed');
-          }
-        })();
-      }, pollMs);
-
-      app.addHook('onClose', async () => {
-        logger.info('Graph: Stopping SQLite graph poll');
-        clearInterval(timer);
-      });
-    }
+    const graphRelay = startGraphRelayListener(runtimeContext, graph);
+    app.addHook('onClose', async () => {
+      logger.info('Graph: Closing relay WebSocket subscription');
+      graphRelay.close();
+    });
   });
 
   // ── Health & Ping ──────────────────────────────────────────────────

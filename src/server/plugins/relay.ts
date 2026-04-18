@@ -1,14 +1,16 @@
 import fp from 'fastify-plugin';
 import websocket from '@fastify/websocket';
 import { matchFilters, verifyEvent } from 'nostr-tools';
-import type { NostrEvent, Filter, VerifiedEvent } from 'nostr-tools';
+import type { NostrEvent, Filter } from 'nostr-tools';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { insertEvent } from '../../lib/trust/graphManager.js';
-import type { NostrClientMsg, NostrClientREQ } from '@nostrify/types';
+import type { NostrClientREQ } from '@nostrify/types';
 import type WebSocket from 'ws';
 import type { RawData } from 'ws';
 import { RuntimeContext } from '../../lib/runtimeContext.js';
 import { logger } from '../../lib/logger.js';
+import { parseClientMessage } from '../../lib/nostr/relayManager.js';
+import { asTrustEvent, isTrustEventValid, KIND_TRUST } from '../../lib/nostr/nip32010.js';
+import { InsertEventOptions } from '../../lib/db/dbManager.js';
 
 
 interface ActiveSubscription {
@@ -98,6 +100,7 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
         message: 'Connect via WebSocket, or send Accept: application/nostr+json for relay info.',
       });
     },
+
     wsHandler: (socket, _request) => {
     const client: RelayClient = {
       socket,
@@ -116,18 +119,21 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
 
       const msg = result.msg;
       const type = msg[0];
-
+      
       try {
         switch (type) {
           case 'REQ':
             await handleReq(client, msg, runtimeContext);
             break;
           case 'CLOSE':
-            handleClose(client, msg[1]);
+            const subscriptionId: string = msg[1];
+            handleClose(client, subscriptionId);
             break;
           case 'EVENT':
-            await handleEvent(msg[1], socket, runtimeContext);
-            await fanOutEvent(msg[1], clients);
+            const event: NostrEvent = msg[1];
+            const accepted = await handleEvent(event, socket, runtimeContext);
+            if (accepted) 
+              await fanOutEvent(event, clients);            
             break;
           default:
             logger.warn({ type }, 'Relay: Unknown client message type');
@@ -248,36 +254,58 @@ async function pollSubscription(client: RelayClient, sub: ActiveSubscription, ru
   }
 }
 
-async function handleEvent(event: NostrEvent, socket: WebSocket, runtimeContext: RuntimeContext): Promise<void> {
+async function handleEvent(event: NostrEvent, socket: WebSocket, runtimeContext: RuntimeContext): Promise<boolean> {
+  const store = runtimeContext.store;
+  
   if (!verifyEvent(event)) {
     logger.debug({ eventId: event.id }, 'Relay: Event rejected: invalid signature');
     sendRelayMessage(socket, ['OK', event.id, false, 'invalid: failed event signature verification']);
-    return;
+    return false;
   }
 
-  const accepted = await insertEvent(event as VerifiedEvent, runtimeContext);
-  if (accepted) {
-    logger.debug({ eventId: event.id, kind: event.kind }, 'Relay: Event accepted');
-  }
-  sendRelayMessage(socket, ['OK', event.id, accepted, accepted ? '' : 'duplicate: filtered or rejected']);
-}
-
-function parseClientMessage(raw: RawData):
-  | { ok: true; msg: NostrClientMsg }
-  | { ok: false; error: string } {
-  const text = typeof raw === 'string' ? raw : raw.toString();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return { ok: false, error: 'message is not valid JSON' };
+  if (event.kind === KIND_TRUST) {
+    const trustEvent = asTrustEvent(event);
+    if (!isTrustEventValid(trustEvent)) {
+      logger.debug({ eventId: event.id }, 'invalid: invalid trust event');
+      sendRelayMessage(socket, ['OK', event.id, false, 'invalid: invalid trust event']);
+      return false; // reject the event if it is not a valid trust event
+    }
   }
 
-  if (!Array.isArray(parsed) || parsed.length === 0 || typeof parsed[0] !== 'string') {
-    return { ok: false, error: 'message must be a JSON array with a message type' };
+  const opt: InsertEventOptions = {};
+  await store?.event(event, opt); // add the event to the database
+
+  if (opt.isInserted) {
+    //logger.debug({ eventId: event.id }, 'Relay: Event accepted');
+    sendRelayMessage(socket, ['OK', event.id, true, '']);
+    return true;
+  } 
+
+  if (opt.isDeleted) {
+    //logger.debug({ eventId: event.id }, 'Relay: Event rejected: deleted');
+    sendRelayMessage(socket, ['OK', event.id, false, 'deleted: Event was deleted by another event (Kind 5)']);
+    return false;
   }
 
-  return { ok: true, msg: parsed as NostrClientMsg };
+  if (opt.isDublicate) {
+    //logger.debug({ eventId: event.id }, 'Relay: Event rejected: duplicate');
+    sendRelayMessage(socket, ['OK', event.id, false, 'duplicate: Event already exists in the database']);
+    return false;
+  }
+
+  if (opt.isTimeout) {
+    //logger.debug({ eventId: event.id }, 'Relay: Event rejected: timeout');
+    sendRelayMessage(socket, ['OK', event.id, false, 'timeout: Timeout while adding event to the database']);
+    return false;
+  }
+
+  if (opt.isError) {
+    //logger.debug({ eventId: event.id }, 'Relay: Event rejected: error');
+    sendRelayMessage(socket, ['OK', event.id, false, opt.errorMessage ?? 'error: filtered or rejected']);
+    return false;
+  }
+  
+  return false;
 }
 
 function sendRelayMessage(socket: WebSocket, msg: unknown[]): void {

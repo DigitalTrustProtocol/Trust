@@ -16,6 +16,19 @@ export type DbDriver = 'sqlite' | 'postgres';
 
 export type Store = NSQLite | NPostgres;
 
+
+export type InsertEventOptions = {
+  signal?: AbortSignal;
+  timeout?: number;
+  isInserted?: boolean;
+  isDeleted?: boolean;
+  isDublicate?: boolean;
+  isTimeout?: boolean;
+  isError?: boolean;
+  errorMessage?: string;
+};
+
+
 export interface ExtendedNRelay extends NRelay {
   getEvent(id: string): Promise<NostrEvent | null>;
   allEvents(kinds: number[], authors: string[], contexts: string[], signal?: AbortSignal): AsyncIterable<NostrEvent>;
@@ -53,7 +66,6 @@ export async function createNPostgresStore(url: string): Promise<NPostgres> {
     dialect: new PostgresDialect({ pool, cursor: Cursor }),
   });
   const store = new NPostgres(db);
-  store.setPool(pool);
   await store.migrate();
   return store;
 }

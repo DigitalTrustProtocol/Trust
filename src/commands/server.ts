@@ -116,7 +116,7 @@ async function initRuntimeContext(resolved: ResolvedRuntimeConfig): Promise<Runt
     //await setupRelayPool(runtimeContext);
   }
   if (runtimeContext.service === 'all' || runtimeContext.service === 'api') {
-
+    
     //await setupApi(runtimeContext);
   }
   if (runtimeContext.service === 'all' || runtimeContext.service === 'web') {
