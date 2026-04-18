@@ -53,12 +53,13 @@ function resolveAuthor(author?: string): { author: string | null; error?: string
 const startTime = Date.now();
 
 export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) {
-  const isSplitApi = runtimeContext.service === 'api';
+  /** Set after `onListen` — local relay WS is not reachable during `onReady` (bind happens later). */
+  let graphRelay: { close: () => void } | null = null;
 
   app.addHook('onReady', async () => {
     const prettyInt = (value: number): string => value.toLocaleString();
     const beforeMem = process.memoryUsage();
-    logger.info('Graph: Loading trust into memory');
+    logger.info('Graph: Loading trust into memory _ 2');
     logger.flush();
 
     await loadGraph(runtimeContext);
@@ -69,19 +70,22 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     logger.info(`Graph: Loaded with ${prettyInt(nodeCount)} nodes and ${prettyInt(edgeCount)} edges`);
     logger.info(`Graph: Memory usage delta: ${prettyBytes(afterMem.rss - beforeMem.rss, { locale: true, minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
     logger.info(`API: http://${runtimeContext.host}:${runtimeContext.port}/v1/resolve`);
+  });
 
-    logger.flush();
-
-    if (!isSplitApi) return;
-
+  app.addHook('onListen', async () => {
     const graph = runtimeContext.graph;
     if (!graph) throw new Error('Graph not loaded');
 
-    const graphRelay = startGraphRelayListener(runtimeContext, graph);
-    app.addHook('onClose', async () => {
-      logger.info('Graph: Closing relay WebSocket subscription');
-      graphRelay.close();
-    });
+    graphRelay = startGraphRelayListener(runtimeContext, graph);
+    logger.info('Graph: Relay WebSocket subscription started (after listen)');
+    logger.flush();
+  });
+
+  app.addHook('onClose', async () => {
+    if (!graphRelay) return;
+    logger.info('Graph: Closing relay WebSocket subscription');
+    graphRelay.close();
+    graphRelay = null;
   });
 
   // ── Health & Ping ──────────────────────────────────────────────────

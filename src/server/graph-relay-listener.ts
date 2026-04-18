@@ -17,6 +17,19 @@ function connectHost(host: string): string {
 }
 
 /**
+ * Optional extra wait (ms) before the first WebSocket connect, after the API plugin starts the listener.
+ * Useful when the relay process binds slightly later than the API (`TRUST_GRAPH_RELAY_WS` to another host).
+ * Reconnects after a dropped connection are unaffected. Clamped to 0–60_000.
+ */
+function initialConnectDelayMs(): number {
+  const raw = process.env.TRUST_GRAPH_RELAY_CONNECT_DELAY_MS?.trim();
+  if (!raw) return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(60_000, Math.floor(n));
+}
+
+/**
  * WebSocket URL of the Trust relay to follow for in-memory graph updates (split `api` process).
  * Set `TRUST_GRAPH_RELAY_WS` when the relay is not reachable at the default local URL.
  */
@@ -34,6 +47,7 @@ export function startGraphRelayListener(runtimeContext: RuntimeContext, graph: G
 
   let ws: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let initialTimer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
   let subId = `g${randomBytes(6).toString('hex')}`;
 
@@ -81,6 +95,13 @@ export function startGraphRelayListener(runtimeContext: RuntimeContext, graph: G
     }
   };
 
+  const clearInitialTimer = (): void => {
+    if (initialTimer) {
+      clearTimeout(initialTimer);
+      initialTimer = null;
+    }
+  };
+
   const connect = (): void => {
     if (closed) return;
     const url = resolveGraphRelayWsUrl(runtimeContext);
@@ -103,11 +124,21 @@ export function startGraphRelayListener(runtimeContext: RuntimeContext, graph: G
     });
   };
 
-  connect();
+  const delayMs = initialConnectDelayMs();
+  if (delayMs > 0) {
+    logger.info({ delayMs }, 'Graph relay listener: delaying first connect');
+    initialTimer = setTimeout(() => {
+      initialTimer = null;
+      connect();
+    }, delayMs);
+  } else {
+    connect();
+  }
 
   return {
     close: (): void => {
       closed = true;
+      clearInitialTimer();
       clearReconnect();
       if (ws && ws.readyState === WebSocket.OPEN) {
         try {

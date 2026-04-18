@@ -55,7 +55,7 @@ function buildRelayNip11Document(limitation: RelayLimitation): Record<string, un
     ].join('\n\n'),
     icon: TRUST_RELAY_ICON_URL,
     contact: TRUST_PUBLIC_ORIGIN,
-    supported_nips: [1, 9, 11, 13, 33, 50, 32010],
+    supported_nips: [1, 9, 11, 50, 32010],
     software: 'https://github.com/DigitalTrustProtocol/Trust',
     version: process.env.npm_package_version ?? '0.1.0',
     terms_of_service: TRUST_TERMS_OF_SERVICE_URL,
