@@ -21,6 +21,8 @@ export interface NSQLiteSchema {
     kind: number;
     pubkey: string;
     created_at: number;
+    /** Unix seconds when this row was first inserted; not changed on replaceable updates. */
+    firstseen: number;
     raw_event: Uint8Array;
     d: string | null;
     t: string | null;
@@ -187,6 +189,7 @@ export class NSQLite implements ExtendedNRelay {
     const tagsIndex = this.indexTags(event);
     const searchText = this.indexSearch(event) ?? null;
     const searchExt = await this.indexExtensions(event);
+    const firstseen = Math.floor(Date.now() / 1000);
 
     await trx
       .insertInto('nostr_events')
@@ -195,6 +198,7 @@ export class NSQLite implements ExtendedNRelay {
         kind: event.kind,
         pubkey: event.pubkey,
         created_at: event.created_at,
+        firstseen,
         raw_event: packr.pack(event),
         d: dTag,
         t,
@@ -472,6 +476,7 @@ export class NSQLite implements ExtendedNRelay {
       .addColumn('t', 'text')
       .addColumn('c', 'text')
       .addColumn('created_at', 'integer', (col) => col.notNull())
+      .addColumn('firstseen', 'integer', (col) => col.notNull())
       .addColumn('raw_event', 'blob', (col) => col.notNull())
       .addColumn('search_text', 'text')
       .addColumn('search_ext', 'text', (col) => col.notNull())
@@ -546,5 +551,10 @@ export class NSQLite implements ExtendedNRelay {
       .ifNotExists()
       .execute();
 
+    const tableInfo = await sql<{ name: string }>`pragma table_info(nostr_events)`.execute(this.db);
+    if (!tableInfo.rows.some((c) => c.name === 'firstseen')) {
+      await this.db.schema.alterTable('nostr_events').addColumn('firstseen', 'integer').execute();
+      await sql`update nostr_events set firstseen = created_at where firstseen is null`.execute(this.db);
+    }
   }
 }

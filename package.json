@@ -33,7 +33,8 @@
     "seed-deg45": "tsx scripts/seed-trust-network-deg45.ts",
     "heavy": "tsx scripts/heavy-load-test.ts",
     "verify": "tsx scripts/verify-trust-graph.ts",
-    "load-test-keys": "tsx scripts/load-test-keys.ts"
+    "load-test-keys": "tsx scripts/load-test-keys.ts",
+    "test-sab-large": "tsx scripts/test-large-shared-array-buffer.ts"
   },
   "keywords": [
     "nostr",

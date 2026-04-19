@@ -29,6 +29,8 @@ export interface NPostgresSchema {
     kind: number;
     pubkey: string;
     created_at: number | bigint;
+    /** Unix seconds when this row was first inserted; not changed on replaceable upsert. */
+    firstseen: number | bigint;
     raw_event: Uint8Array;
     tags: string[][];
     tags_index: Record<string, string[]>;
@@ -217,6 +219,7 @@ export class NPostgres implements ExtendedNRelay {
 
     const searchText = this.indexSearch(event);
     const searchExt = await this.indexExtensions(event);
+    const firstseen = Math.floor(Date.now() / 1000);
 
     let tags = jsonb(event.tags) as unknown as NPostgresSchema['nostr_events']['tags'];
     let tags_index = jsonb(tagsIndex) as unknown as NPostgresSchema['nostr_events']['tags_index'];
@@ -227,6 +230,7 @@ export class NPostgres implements ExtendedNRelay {
       kind: event.kind,
       pubkey: event.pubkey,
       created_at: event.created_at,
+      firstseen,
       raw_event: packr.pack(event),
       tags,
       tags_index,
@@ -691,6 +695,7 @@ export class NPostgres implements ExtendedNRelay {
       .addColumn('kind', 'integer', (col) => col.notNull())
       .addColumn('pubkey', 'char(64)', (col) => col.notNull())
       .addColumn('created_at', 'bigint', (col) => col.notNull())
+      .addColumn('firstseen', 'bigint', (col) => col.notNull())
       .addColumn('raw_event', 'bytea', (col) => col.notNull())
       .addColumn('tags', 'jsonb', (col) => col.notNull())
       .addColumn('tags_index', 'jsonb', (col) => col.notNull())
@@ -783,5 +788,9 @@ export class NPostgres implements ExtendedNRelay {
     await sql.raw(`DROP TRIGGER IF EXISTS trg_nostr_events_ad_graph ON nostr_events`).execute(this.db);
     await sql.raw(`DROP FUNCTION IF EXISTS trust_pg_notify_insert_fn()`).execute(this.db);
     await sql.raw(`DROP FUNCTION IF EXISTS trust_pg_notify_delete_fn()`).execute(this.db);
+
+    await sql`alter table nostr_events add column if not exists firstseen bigint`.execute(this.db);
+    await sql`update nostr_events set firstseen = created_at where firstseen is null`.execute(this.db);
+    await sql`alter table nostr_events alter column firstseen set not null`.execute(this.db);
   }
 }
