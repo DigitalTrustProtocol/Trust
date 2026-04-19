@@ -59,19 +59,42 @@ export function startGraphRelayListener(runtimeContext: RuntimeContext, graph: G
   };
 
   const handleMessage = (data: WebSocket.RawData): void => {
-    const result = parseClientMessage(data);
-    if (!result.ok) {
-      logger.debug({ error: result.error }, 'Graph relay listener: Invalid client message');
-      return;
-    }
-    const msg = result.msg;
-    const type = msg[0];
-    if (type !== 'EVENT') return;
-    const event: NostrEvent = msg[1] as NostrEvent;
-    if (event.kind < KIND_TRUST_MIN || event.kind > KIND_TRUST_MAX) return; // only process trust events
-    if (!verifyEvent(event)) return;
+    try {
+      const result = parseClientMessage(data);
+      if (!result.ok) {
+        logger.debug({ error: result.error }, 'Graph relay listener: Invalid client message');
+        return;
+      }
+      const msg = result.msg as unknown as unknown[];
+      const type = msg[0];
+      if (type !== 'EVENT') return;
+      // NIP-01 relay→client: ["EVENT", <subscription_id>, <event>] (not ["EVENT", <event>]).
+      const payload =
+        msg.length >= 3 && typeof msg[2] === 'object' && msg[2] !== null
+          ? msg[2]
+          : typeof msg[1] === 'object' && msg[1] !== null
+            ? msg[1]
+            : null;
+      if (!payload) {
+        logger.debug('Graph relay listener: EVENT without event object');
+        return;
+      }
+      const event = payload as NostrEvent;
+      if (typeof event.kind !== 'number' || event.kind < KIND_TRUST_MIN || event.kind > KIND_TRUST_MAX) return;
 
-    applyTrustEventToGraph(event, graph);
+      let ok: boolean;
+      try {
+        ok = verifyEvent(event);
+      } catch (err) {
+        logger.debug({ err }, 'Graph relay listener: verifyEvent threw (malformed event)');
+        return;
+      }
+      if (!ok) return;
+
+      applyTrustEventToGraph(event as VerifiedEvent, graph);
+    } catch (err) {
+      logger.warn({ err }, 'Graph relay listener: failed to handle message (ignored)');
+    }
   };
 
   const clearReconnect = (): void => {
@@ -94,9 +117,13 @@ export function startGraphRelayListener(runtimeContext: RuntimeContext, graph: G
     logger.info({ url }, 'Graph: Subscribing to relay WebSocket for trust event updates');
     ws = new WebSocket(url);
     ws.on('open', () => {
-      subId = `g${randomBytes(6).toString('hex')}`;
-      const filters = buildFilters();
-      ws?.send(JSON.stringify(['REQ', subId, ...filters]));
+      try {
+        subId = `g${randomBytes(6).toString('hex')}`;
+        const filters = buildFilters();
+        ws?.send(JSON.stringify(['REQ', subId, ...filters]));
+      } catch (err) {
+        logger.warn({ err }, 'Graph relay listener: failed to send REQ after connect (ignored)');
+      }
     });
     ws.on('message', handleMessage);
     ws.on('error', (err) => {

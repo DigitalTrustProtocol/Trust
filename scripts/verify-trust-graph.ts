@@ -3,12 +3,12 @@
  * Verify Trust Graph
  *
  * Sends signed trust events from test/fixtures/trust-graph.json to a local
- * relay websocket server, then calls /resolve and validates each expected case.
+ * relay websocket server, then calls POST /v1/resolve and validates each expected case.
  *
  * Usage:
  *   npx tsx scripts/verify-trust-graph.ts
  *   TRUST_GRAPH_FILE=path/to/graph.json TRUST_RELAY_URL=ws://localhost:3417/relay npx tsx scripts/verify-trust-graph.ts
- *   TRUST_RESOLVE_URL=http://localhost:3417/resolve npx tsx scripts/verify-trust-graph.ts
+ *   TRUST_RESOLVE_URL=http://localhost:3417/v1/resolve npx tsx scripts/verify-trust-graph.ts
  *   TRUST_RELAY_CONNECT_TIMEOUT_MS=20000 npx tsx scripts/verify-trust-graph.ts
  *
  * Note: `localhost` in the default URL is normalized to 127.0.0.1 to avoid IPv6 hang.
@@ -112,7 +112,7 @@ async function main() {
   const byPubkey = new Map(keys.map((key) => [key.pubkey, key]));
 
   const httpOrigin = deriveHttpOriginFromRelay(RELAY_URL);
-  console.log(`Checking Trust HTTP API (${httpOrigin}/health)…`);
+  console.log(`Checking Trust HTTP API (${httpOrigin}/v1/ping)…`);
   await preflightHttpServer(httpOrigin);
 
   console.log(`Connecting to relay WebSocket (timeout ${RELAY_CONNECT_TIMEOUT_MS}ms)…`);
@@ -204,10 +204,10 @@ function deriveResolveUrl(relayUrl: string): string {
   const url = new URL(relayUrl);
   const protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
   const host = url.host;
-  return `${protocol}//${host}/resolve`;
+  return `${protocol}//${host}/v1/resolve`;
 }
 
-/** Same host as relay URL, for GET /health before opening WebSocket. */
+/** Same host as relay URL, for GET /v1/ping before opening WebSocket. */
 function deriveHttpOriginFromRelay(relayUrl: string): string {
   const url = new URL(relayUrl);
   const protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
@@ -220,12 +220,23 @@ function deriveHttpOriginFromRelay(relayUrl: string): string {
  */
 async function preflightHttpServer(httpOrigin: string): Promise<void> {
   const base = httpOrigin.replace(/\/$/, '');
-  const healthUrl = `${base}/health`;
+  const pingUrl = `${base}/v1/ping`;
   const ms = Math.min(8_000, RELAY_CONNECT_TIMEOUT_MS);
   try {
-    const res = await fetch(healthUrl, { signal: AbortSignal.timeout(ms) });
+    const res = await fetch(pingUrl, { signal: AbortSignal.timeout(ms) });
     if (!res.ok) {
       throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    }
+    const ct = res.headers.get('content-type') ?? '';
+    if (!ct.includes('application/json')) {
+      const text = (await res.text()).slice(0, 300);
+      throw new Error(
+        `Expected JSON from ${pingUrl}, got content-type ${ct || '(none)'} body: ${text}`,
+      );
+    }
+    const body = (await res.json()) as { ok?: boolean };
+    if (body.ok !== true) {
+      throw new Error(`Ping response not ok: ${JSON.stringify(body)}`);
     }
   } catch (err) {
     const e = err instanceof Error ? err : new Error(String(err));
@@ -239,17 +250,17 @@ async function preflightHttpServer(httpOrigin: string): Promise<void> {
 
     if (timedOut || refused) {
       throw new Error(
-        `Cannot reach Trust at ${healthUrl}\n` +
+        `Cannot reach Trust at ${pingUrl}\n` +
           `  (${e.message}${cause ? ` — ${cause}` : ''})\n\n` +
           `  Start the server in another terminal, then run this script again:\n` +
           `    npx . server\n\n` +
           `  Default listen URL is http://127.0.0.1:3417 (relay: ws://127.0.0.1:3417/relay).\n` +
           `  If you use another host/port, set both:\n` +
           `    TRUST_RELAY_URL=ws://127.0.0.1:<port>/relay\n` +
-          `    TRUST_RESOLVE_URL=http://127.0.0.1:<port>/resolve`,
+          `    TRUST_RESOLVE_URL=http://127.0.0.1:<port>/v1/resolve`,
       );
     }
-    throw new Error(`Preflight GET ${healthUrl} failed: ${e.message}`);
+    throw new Error(`Preflight GET ${pingUrl} failed: ${e.message}`);
   }
 }
 
@@ -340,10 +351,10 @@ async function openRelay(
           new Error(
             `Relay WebSocket timed out after ${timeoutMs}ms: ${url}\n` +
               (opts?.httpHealthOk
-                ? '  HTTP /health succeeded, so the process is up — the WebSocket upgrade is stuck.\n' +
+                ? '  HTTP GET /v1/ping succeeded, so the process is up — the WebSocket upgrade is stuck.\n' +
                   '  Rebuild and restart the server (npm run build), and ensure src/server/api.ts /relay uses connection.socket.\n'
                 : '  Ensure the Trust server is running on the same host:port as RELAY_URL.\n') +
-              '  TRUST_RELAY_URL=ws://127.0.0.1:3417/relay  TRUST_RESOLVE_URL=http://127.0.0.1:3417/resolve',
+              '  TRUST_RELAY_URL=ws://127.0.0.1:3417/relay  TRUST_RESOLVE_URL=http://127.0.0.1:3417/v1/resolve',
           ),
         );
       });
@@ -493,6 +504,14 @@ async function resolveFromServer(params: {
     throw new Error(`Resolve request failed (${response.status}): ${text}`);
   }
 
+  const ct = response.headers.get('content-type') ?? '';
+  if (!ct.includes('application/json')) {
+    const text = await response.text();
+    throw new Error(
+      `Resolve expected JSON (${params.resolveUrl}) but got ${ct || 'unknown content-type'}: ${text.slice(0, 400)}`,
+    );
+  }
+
   const payload = (await response.json()) as unknown;
   return extractResolveResult(payload);
 }
@@ -502,17 +521,28 @@ function extractResolveResult(payload: unknown): Partial<ResolveResult> {
     throw new Error('Resolve response is not a JSON object');
   }
 
-  const envelope = payload as ApiEnvelope<Partial<ResolveResult>>;
+  const envelope = payload as ApiEnvelope<Partial<ResolveResult> | Partial<ResolveResult>[]>;
   if (typeof envelope.ok === 'boolean') {
     if (!envelope.ok) {
       const code = envelope.error?.code ? `${envelope.error.code}: ` : '';
       const message = envelope.error?.message ?? 'Unknown API error';
       throw new Error(`Resolve API error: ${code}${message}`);
     }
-    if (!envelope.data || typeof envelope.data !== 'object') {
-      throw new Error('Resolve API response missing data object');
+    const raw = envelope.data;
+    if (raw === undefined || raw === null) {
+      throw new Error('Resolve API response missing data');
     }
-    return envelope.data;
+    // POST /v1/resolve returns `{ ok, data: Score[] }` (one score per request for default format).
+    if (Array.isArray(raw)) {
+      if (raw.length === 0) {
+        throw new Error('Resolve API returned empty score array');
+      }
+      return raw[0] as Partial<ResolveResult>;
+    }
+    if (typeof raw !== 'object') {
+      throw new Error('Resolve API data is not an object or array');
+    }
+    return raw as Partial<ResolveResult>;
   }
 
   // Backward compatibility for older servers that returned raw score JSON.
