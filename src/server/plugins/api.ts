@@ -11,8 +11,8 @@ import { RuntimeContext } from '../../lib/runtimeContext.js';
 import { ok, sendError, ErrorCode } from '../errors.js';
 import { getRuntimeConfig, PATHS, type UserConfig } from '../../config.js';
 import { logger } from '../../lib/logger.js';
-import { KIND_TRUST } from '../../lib/nostr/nip32010.js';
 import { validateNip98Auth } from '../../lib/nostr/nip98.js';
+import { validateNip62Event } from '../../lib/nostr/nip62.js';
 import { startGraphRelayListener } from '../graph-relay-listener.js';
 import { getLatestSyncTime, SYNC_TIME_NS_SYNC } from '../../lib/syncTime.js';
 import prettyBytes from 'pretty-bytes';
@@ -33,6 +33,8 @@ type ResolveBatchBody = {
   maxDepth?: number;
   format?: 'number' | 'default' | 'path';
 };
+
+type PrivacyVanishBody = VerifiedEvent | { event: VerifiedEvent };
 
 function normalizeContext(context: string | undefined): string | undefined {
   if (context === undefined) return '';
@@ -91,26 +93,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
   });
 
   // ── Health & Ping ──────────────────────────────────────────────────
-  /*
-  app.get('/health', async (_request: FastifyRequest, reply: FastifyReply) => {
-    const graph = runtimeContext.graph;
-    if (!graph) {
-      return sendError(reply, 500, ErrorCode.GRAPH_NOT_FOUND, 'Graph not loaded');
-    }
-    const lastSeenRaw = await getLatestSyncTime(SYNC_TIME_NS_SYNC);
-    return ok({
-      status: 'ok',
-      graph: {
-        nodes: graph?.nodes.size ?? 0,
-        edges: graph?.edges.size ?? 0,
-      },
-      sync: {
-        lastSeen: lastSeenRaw ? Number(lastSeenRaw) : null,
-      },
-      uptime: Math.floor((Date.now() - startTime) / 1000),
-    });
-  });
-  */
+
   app.get(
     '/v1/ping',
     {
@@ -140,6 +123,40 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
 
       const payload = await buildPrivacyAccessPayload(auth.pubkey, runtimeContext);
       return ok(payload);
+    },
+  );
+
+  app.post<{ Body: PrivacyVanishBody }>(
+    '/v1/privacy/vanish',
+    {
+      schema: {
+        tags: ['privacy'],
+      },
+    },
+    async (request: FastifyRequest<{ Body: PrivacyVanishBody }>, reply: FastifyReply) => {
+      const rawBody = request.body as PrivacyVanishBody;
+      const event = ((rawBody as VerifiedEvent)?.kind !== undefined
+        ? (rawBody as VerifiedEvent)
+        : (rawBody as { event?: VerifiedEvent })?.event);
+      if (!event) {
+        return sendError(reply, 400, ErrorCode.INVALID_SUBJECT, 'Missing event in request body');
+      }
+
+      const nip62 = validateNip62Event(runtimeContext.host, event);
+      if (!nip62.ok) {
+        return sendError(reply, 400, ErrorCode.INVALID_SUBJECT, `Invalid NIP-62 event: ${nip62.reason}`);
+      }
+
+      const graph = runtimeContext.graph;
+      if (!graph) {
+        return sendError(reply, 500, ErrorCode.GRAPH_NOT_FOUND, 'Graph not loaded');
+      }
+
+      const removed = graph.removePubkey(nip62.pubkey, event.created_at);
+      return ok({
+        removed,
+        pubkey: nip62.pubkey,
+      });
     },
   );
 

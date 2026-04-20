@@ -5,10 +5,12 @@ import type { NostrEvent, VerifiedEvent } from 'nostr-tools';
 import { createTrustFilters } from './graph-sync.js';
 import { applyTrustEventToGraph } from '../lib/trust/graphManager.js';
 import { KIND_TRUST, KIND_TRUST_MAX, KIND_TRUST_MIN } from '../lib/nostr/nip32010.js';
+import { isNip62TargetingRelay, KIND_VANISH_REQUEST, validateNip62Event } from '../lib/nostr/nip62.js';
 import type { RuntimeContext } from '../lib/runtimeContext.js';
 import type { Graph } from '../lib/trust/graph/Graph.js';
 import { logger } from '../lib/logger.js';
 import { parseClientMessage } from '../lib/nostr/relayManager.js';
+import { run } from 'node:test';
 
 function connectHost(host: string): string {
   if (host === '0.0.0.0' || host === '::' || host === '::0') return '127.0.0.1';
@@ -44,6 +46,7 @@ export function resolveGraphRelayWsUrl(runtime: RuntimeContext): string {
 export function startGraphRelayListener(runtimeContext: RuntimeContext, graph: Graph): { close: () => void } {
   const fromCfg = runtimeContext.kinds?.filter((k) => k >= KIND_TRUST_MIN && k <= KIND_TRUST_MAX) ?? [];
   const effectiveKinds = fromCfg.length ? fromCfg : [KIND_TRUST];
+  const relayKinds = [...new Set([...effectiveKinds, KIND_VANISH_REQUEST])];
 
   let ws: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -55,7 +58,7 @@ export function startGraphRelayListener(runtimeContext: RuntimeContext, graph: G
     const sinceSec = Math.max(0, Math.floor(Date.now() / 1000) - 120);
     //const authors = runtimeContext.graphLoadMode === 'author' ? runtimeContext.authors : undefined;
     const authors = undefined; // load all authors trust events
-    return createTrustFilters(effectiveKinds, authors, sinceSec, runtimeContext.contexts);
+    return createTrustFilters(relayKinds, authors, sinceSec, runtimeContext.contexts);
   };
 
   const handleMessage = (data: WebSocket.RawData): void => {
@@ -80,7 +83,7 @@ export function startGraphRelayListener(runtimeContext: RuntimeContext, graph: G
         return;
       }
       const event = payload as NostrEvent;
-      if (typeof event.kind !== 'number' || event.kind < KIND_TRUST_MIN || event.kind > KIND_TRUST_MAX) return;
+      if (typeof event.kind !== 'number') return;
 
       let ok: boolean;
       try {
@@ -91,7 +94,19 @@ export function startGraphRelayListener(runtimeContext: RuntimeContext, graph: G
       }
       if (!ok) return;
 
-      applyTrustEventToGraph(event as VerifiedEvent, graph);
+      if (event.kind >= KIND_TRUST_MIN && event.kind <= KIND_TRUST_MAX) {
+        applyTrustEventToGraph(event as VerifiedEvent, graph);
+        return;
+      }
+
+      if (event.kind === KIND_VANISH_REQUEST) {
+        const nip62 = validateNip62Event(runtimeContext.host, event);
+        if (!nip62.ok) {
+          return;
+        };
+
+        graph.removePubkey(nip62.pubkey, event.created_at);
+      }
     } catch (err) {
       logger.warn({ err }, 'Graph relay listener: failed to handle message (ignored)');
     }

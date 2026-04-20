@@ -10,6 +10,7 @@ import { RuntimeContext } from '../../lib/runtimeContext.js';
 import { logger } from '../../lib/logger.js';
 import { parseClientMessage } from '../../lib/nostr/relayManager.js';
 import { asTrustEvent, isTrustEventValid, KIND_TRUST } from '../../lib/nostr/nip32010.js';
+import { validateNip62Event, KIND_VANISH_REQUEST, isNip62TargetingRelay } from '../../lib/nostr/nip62.js';
 import { InsertEventOptions } from '../../lib/db/dbManager.js';
 import type { RelayLimitation } from '../../config.js';
 import {
@@ -59,7 +60,7 @@ function buildRelayNip11Document(limitation: RelayLimitation): Record<string, un
     ].join('\n\n'),
     icon: TRUST_RELAY_ICON_URL,
     contact: TRUST_PUBLIC_ORIGIN,
-    supported_nips: [1, 9, 11, 50, 32010],
+    supported_nips: [1, 9, 11, 50, 62, 32010],
     software: 'https://github.com/DigitalTrustProtocol/Trust',
     version: process.env.npm_package_version ?? '0.1.0',
     terms_of_service: TRUST_TERMS_OF_SERVICE_URL,
@@ -400,6 +401,18 @@ async function handleEvent(
       sendRelayMessage(socket, ['OK', event.id, false, 'invalid: invalid trust event']);
       return false; // reject the event if it is not a valid trust event
     }
+  }
+
+  if (event.kind === KIND_VANISH_REQUEST) {
+    const nip62 = validateNip62Event(runtimeContext.host, event);
+    if (!nip62.ok) {
+      sendRelayMessage(socket, ['OK', event.id, false, `invalid: ${nip62.reason}`]);
+      return false;
+    }
+
+    await store?.remove([{ authors: [nip62.pubkey], until: event.created_at }]);
+    sendRelayMessage(socket, ['OK', event.id, true, '']);
+    return true;
   }
 
   const opt: InsertEventOptions = {};

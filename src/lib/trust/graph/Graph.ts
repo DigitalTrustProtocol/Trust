@@ -138,6 +138,59 @@ export class Graph {
     return true;
   }
 
+  removePubkey(pubkey: string, until?: number): boolean {
+    const key = pubkey.toLowerCase();
+    const node = this.nodes.get(key);
+    if (!node) return false;
+    const shouldRemoveEdge = (createdAt: number): boolean =>
+      until === undefined ? true : createdAt <= until;
+
+    const outgoing = [...node.outgoing.entries()];
+    for (const [edgeKey, contextMap] of outgoing) {
+      for (const [context, subjectMap] of [...contextMap.entries()]) {
+        for (const [subjectId, edge] of [...subjectMap.entries()]) {
+          if (!shouldRemoveEdge(edge.createdAt)) continue;
+          const subjectNode = this.nodes.get(subjectId);
+          if (subjectNode) {
+            edge.removeNodes(node, subjectNode);
+          } else {
+            node.outgoing.remove(edgeKey, context, subjectId);
+          }
+          this.edges.delete(edge.parameterizedId);
+          this.eventRemovedSinceLastSave++;
+        }
+      }
+    }
+
+    // This is from other nodes targeting this node, therefore we cannot remove this
+    // The incoming are not created by the pubkey, so we cannot remove them
+    /*
+    const incoming = [...node.incoming.entries()];
+    for (const [edgeKey, contextMap] of incoming) {
+      for (const [context, authorMap] of [...contextMap.entries()]) {
+        for (const [authorId, edge] of [...authorMap.entries()]) {
+          const authorNode = this.nodes.get(authorId);
+          if (authorNode) {
+            edge.removeNodes(authorNode, node);
+          } else {
+            node.incoming.remove(edgeKey, context, authorId);
+          }
+          this.edges.delete(edge.parameterizedId);
+          this.eventRemovedSinceLastSave++;
+        }
+      }
+    }
+
+    */
+    
+    // If the node has no incoming or outgoing edges, remove it
+    if (node.incoming.size === 0 && node.outgoing.size === 0) {
+      this.nodes.delete(key);
+    }
+
+    return true;
+  }
+
 
   trustedSubjects(authorId: string, context?: string, includeEmptyContext: boolean = true): string[] {
 
