@@ -93,12 +93,7 @@ export function TermsPage() {
       </section>
 
       <p className={styles.note}>
-        This page was drafted using the structure of the Nostr.land terms as inspiration and adapted for trust.dance.
-        For privacy and GDPR processing details, see the <a href="/privacy">Privacy Policy</a>. Source reference:{' '}
-        <a href="https://nostr.land/terms" target="_blank" rel="noopener noreferrer">
-          nostr.land/terms
-        </a>
-        .
+        For privacy and GDPR processing details, see the <a href="/privacy">Privacy Policy</a>.
       </p>
     </div>
   );

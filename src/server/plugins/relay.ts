@@ -133,12 +133,20 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
   }
 
   // Preflight for NIP-11 CORS on the same URI as the websocket.
-  app.options('/relay', async (_request, reply) => {
+  app.options('/relay', {
+    schema: {
+      hide: true,
+    },
+  }, async (_request, reply) => {
     addNip11CorsHeaders(reply);
     return reply.status(204).send();
   });
 
-  app.options('/relay/privacy/access', async (_request, reply) => {
+  app.options('/relay/privacy/access', {
+    schema: {
+      hide: true,
+    },
+  }, async (_request, reply) => {
     addRelayPrivacyCorsHeaders(reply);
     return reply.status(204).send();
   });
