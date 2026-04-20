@@ -17,6 +17,10 @@ import {
   enforceRelayEventWritePolicy,
   websocketInboundByteLength,
 } from '../../lib/nostr/relayPolicy.js';
+import { recordPrivacyIpForPubkey } from '../privacy/privacyAccess.js';
+import { validateNip98Auth } from '../../lib/nostr/nip98.js';
+import { buildPrivacyAccessPayload } from '../privacy/privacyAccess.js';
+import { ok, sendError, ErrorCode } from '../errors.js';
 
 /** Public site and default NIP-11 URLs (production relay: wss://relay.trust.dance/relay). */
 const TRUST_PUBLIC_ORIGIN = 'https://trust.dance';
@@ -28,8 +32,8 @@ const TRUST_RELAY_ICON_URL = `${TRUST_PUBLIC_ORIGIN}/trust-relay-icon.svg`;
  * Shared terms URL for Trust services (web, API, relay).
  * Override with `TRUST_TERMS_OF_SERVICE_URL` if your deployment uses a different path.
  */
-const TRUST_TERMS_OF_SERVICE_URL =
-  process.env.TRUST_TERMS_OF_SERVICE_URL?.trim() || `${TRUST_PUBLIC_ORIGIN}/terms`;
+const TRUST_TERMS_OF_SERVICE_URL = process.env.TRUST_TERMS_OF_SERVICE_URL?.trim() || `${TRUST_PUBLIC_ORIGIN}/terms`;
+const TRUST_PRIVACY_POLICY_URL = process.env.TRUST_PRIVACY_POLICY_URL?.trim() || `${TRUST_PUBLIC_ORIGIN}/privacy`;
 
 const HEX64 = /^[0-9a-f]{64}$/i;
 
@@ -59,6 +63,7 @@ function buildRelayNip11Document(limitation: RelayLimitation): Record<string, un
     software: 'https://github.com/DigitalTrustProtocol/Trust',
     version: process.env.npm_package_version ?? '0.1.0',
     terms_of_service: TRUST_TERMS_OF_SERVICE_URL,
+    privacy_policy: TRUST_PRIVACY_POLICY_URL,
     limitation: { ...limitation },
   };
 
@@ -111,6 +116,12 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
     reply.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
   }
 
+  function addRelayPrivacyCorsHeaders(reply: FastifyReply): void {
+    reply.header('Access-Control-Allow-Origin', '*');
+    reply.header('Access-Control-Allow-Headers', 'Accept, Content-Type, Authorization');
+    reply.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  }
+
   function wantsNip11Json(request: FastifyRequest): boolean {
     const accept = request.headers?.accept;
     if (typeof accept !== 'string') return false;
@@ -124,6 +135,31 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
   app.options('/relay', async (_request, reply) => {
     addNip11CorsHeaders(reply);
     return reply.status(204).send();
+  });
+
+  app.options('/relay/privacy/access', async (_request, reply) => {
+    addRelayPrivacyCorsHeaders(reply);
+    return reply.status(204).send();
+  });
+
+  app.get('/relay/privacy/access', {
+    schema: {
+      hide: true,
+    },
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    addRelayPrivacyCorsHeaders(reply);
+
+    const auth = validateNip98Auth(request);
+    if (!auth.ok) {
+      return sendError(reply, 401, ErrorCode.UNAUTHORIZED, `NIP-98 auth failed: ${auth.reason}`);
+    }
+
+    if (!runtimeContext.store) {
+      return sendError(reply, 503, ErrorCode.STORE_UNAVAILABLE, 'Store not loaded');
+    }
+
+    const payload = await buildPrivacyAccessPayload(auth.pubkey, runtimeContext);
+    return ok(payload);
   });
 
 
@@ -151,7 +187,7 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
       });
     },
 
-    wsHandler: (socket, _request) => {
+    wsHandler: (socket, request) => {
     const client: RelayClient = {
       socket,
       subscriptions: new Map<string, ActiveSubscription>(),
@@ -192,7 +228,7 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
             break;
           case 'EVENT':
             const event: NostrEvent = msg[1];
-            const accepted = await handleEvent(event, socket, runtimeContext);
+            const accepted = await handleEvent(event, socket, runtimeContext, request.ip);
             if (accepted) 
               await fanOutEvent(event, clients);            
             break;
@@ -335,7 +371,12 @@ async function pollSubscription(client: RelayClient, sub: ActiveSubscription, ru
   }
 }
 
-async function handleEvent(event: NostrEvent, socket: WebSocket, runtimeContext: RuntimeContext): Promise<boolean> {
+async function handleEvent(
+  event: NostrEvent,
+  socket: WebSocket,
+  runtimeContext: RuntimeContext,
+  clientIp?: string,
+): Promise<boolean> {
   const store = runtimeContext.store;
   const lim = runtimeContext.relay.limitation;
 
@@ -365,6 +406,9 @@ async function handleEvent(event: NostrEvent, socket: WebSocket, runtimeContext:
   await store?.event(event, opt); // add the event to the database
 
   if (opt.isInserted) {
+    if (clientIp) {
+      recordPrivacyIpForPubkey(event.pubkey, clientIp, 'relay_write');
+    }
     //logger.debug({ eventId: event.id }, 'Relay: Event accepted');
     sendRelayMessage(socket, ['OK', event.id, true, '']);
     return true;

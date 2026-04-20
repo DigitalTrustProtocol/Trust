@@ -48,6 +48,7 @@ export async function createApp(service: ServerService = 'all', runtimeContext: 
           { name: 'resolve', description: 'Trust resolution' },
           { name: 'graph', description: 'Graph queries' },
           { name: 'identity', description: 'Identity management' },
+          { name: 'privacy', description: 'Privacy access and data rights' },
         ],
       },
     });

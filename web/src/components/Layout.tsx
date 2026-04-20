@@ -14,6 +14,8 @@ export function Layout() {
           <nav className={styles.nav}>
             <Link to="/graph">Graph</Link>
             <Link to="/nip-32010">NIP-32010</Link>
+            <Link to="/terms">Terms</Link>
+            <Link to="/privacy">Privacy</Link>
             <a href="https://github.com/DigitalTrustProtocol/Trust" target="_blank" rel="noopener noreferrer">
               GitHub
             </a>
@@ -39,6 +41,10 @@ export function Layout() {
             <a href="https://trust.dance" target="_blank" rel="noopener noreferrer">
               trust.dance
             </a>
+            <span className={styles.sep}>&middot;</span>
+            <Link to="/terms">Terms</Link>
+            <span className={styles.sep}>&middot;</span>
+            <Link to="/privacy">Privacy</Link>
           </span>
         </div>
       </footer>

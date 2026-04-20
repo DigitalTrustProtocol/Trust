@@ -12,9 +12,11 @@ import { ok, sendError, ErrorCode } from '../errors.js';
 import { getRuntimeConfig, PATHS, type UserConfig } from '../../config.js';
 import { logger } from '../../lib/logger.js';
 import { KIND_TRUST } from '../../lib/nostr/nip32010.js';
+import { validateNip98Auth } from '../../lib/nostr/nip98.js';
 import { startGraphRelayListener } from '../graph-relay-listener.js';
 import { getLatestSyncTime, SYNC_TIME_NS_SYNC } from '../../lib/syncTime.js';
 import prettyBytes from 'pretty-bytes';
+import { buildPrivacyAccessPayload } from '../privacy/privacyAccess.js';
 
 type ResolveBody = {
   subject: string;
@@ -117,6 +119,28 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       },
     },
     async () => ok({ status: 'ok' }),
+  );
+
+  app.get(
+    '/v1/privacy/access',
+    {
+      schema: {
+        tags: ['privacy'],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const auth = validateNip98Auth(request);
+      if (!auth.ok) {
+        return sendError(reply, 401, ErrorCode.UNAUTHORIZED, `NIP-98 auth failed: ${auth.reason}`);
+      }
+
+      if (!runtimeContext.store) {
+        return sendError(reply, 503, ErrorCode.STORE_UNAVAILABLE, 'Store not loaded');
+      }
+
+      const payload = await buildPrivacyAccessPayload(auth.pubkey, runtimeContext);
+      return ok(payload);
+    },
   );
 
   // ── Identity ───────────────────────────────────────────────────────

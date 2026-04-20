@@ -13,6 +13,8 @@ export const ErrorCode = {
   NO_IDENTITY: 'NO_IDENTITY',
   INTERNAL_SERVER_ERROR: 'INTERNAL_SERVER_ERROR',
   GRAPH_NOT_FOUND: 'GRAPH_NOT_FOUND',
+  UNAUTHORIZED: 'UNAUTHORIZED',
+  STORE_UNAVAILABLE: 'STORE_UNAVAILABLE',
 } as const;
 
 export type ErrorCodeType = (typeof ErrorCode)[keyof typeof ErrorCode];
