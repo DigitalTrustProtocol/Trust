@@ -23,19 +23,6 @@ import { validateNip98Auth } from '../../lib/nostr/nip98.js';
 import { buildPrivacyAccessPayload } from '../privacy/privacyAccess.js';
 import { ok, sendError, ErrorCode } from '../errors.js';
 
-/** Public site and default NIP-11 URLs (production relay: wss://relay.trust.dance/relay). */
-const TRUST_PUBLIC_ORIGIN = 'https://trust.dance';
-
-/** NIP-11 `icon` — static file from the trust.dance web build (`web/public/` → site root). */
-const TRUST_RELAY_ICON_URL = `${TRUST_PUBLIC_ORIGIN}/trust-relay-icon.svg`;
-
-/**
- * Shared terms URL for Trust services (web, API, relay).
- * Override with `TRUST_TERMS_OF_SERVICE_URL` if your deployment uses a different path.
- */
-const TRUST_TERMS_OF_SERVICE_URL = process.env.TRUST_TERMS_OF_SERVICE_URL?.trim() || `${TRUST_PUBLIC_ORIGIN}/terms`;
-const TRUST_PRIVACY_POLICY_URL = process.env.TRUST_PRIVACY_POLICY_URL?.trim() || `${TRUST_PUBLIC_ORIGIN}/privacy`;
-
 const HEX64 = /^[0-9a-f]{64}$/i;
 
 function optionalRelayHexPubkey(raw: string | undefined): string | undefined {
@@ -50,7 +37,9 @@ function optionalRelayHexPubkey(raw: string | undefined): string | undefined {
  * Set `TRUST_RELAY_NIP11_PUBKEY` and `TRUST_RELAY_NIP11_SELF` (64-char hex) when you have
  * administrative and relay identity keys.
  */
-function buildRelayNip11Document(limitation: RelayLimitation): Record<string, unknown> {
+function buildRelayNip11Document(
+  runtimeContext: RuntimeContext
+): Record<string, unknown> {
   const doc: Record<string, unknown> = {
     name: 'Trust Relay (DWoTR)',
     description: [
@@ -58,14 +47,14 @@ function buildRelayNip11Document(limitation: RelayLimitation): Record<string, un
       'The public community relay is wss://relay.trust.dance on the same path as this software. Subscribe with REQ/CLOSE (NIP-01); the server answers with EVENT, EOSE, OK, and NOTICE.',
       'Use HTTP GET on this URL with Accept: application/nostr+json to retrieve this document (NIP-11).',
     ].join('\n\n'),
-    icon: TRUST_RELAY_ICON_URL,
-    contact: TRUST_PUBLIC_ORIGIN,
+    icon: runtimeContext.relayIconUrl,
+    contact: runtimeContext.publicOrigin,
     supported_nips: [1, 9, 11, 50, 62, 32010],
     software: 'https://github.com/DigitalTrustProtocol/Trust',
     version: process.env.npm_package_version ?? '0.1.0',
-    terms_of_service: TRUST_TERMS_OF_SERVICE_URL,
-    privacy_policy: TRUST_PRIVACY_POLICY_URL,
-    limitation: { ...limitation },
+    terms_of_service: runtimeContext.termsOfServiceUrl,
+    privacy_policy: runtimeContext.privacyPolicyUrl,
+    limitation: { ...runtimeContext.relay.limitation },
   };
 
   const pubkey = optionalRelayHexPubkey(process.env.TRUST_RELAY_NIP11_PUBKEY);
@@ -107,7 +96,7 @@ export default fp(async function relayPlugin(app, runtimeContext: RuntimeContext
     `Relay: Info (NIP-11): http://${runtimeContext.host}:${runtimeContext.port}/relay (Accept: application/nostr+json)`,
   );
 
-  const relayInfo = buildRelayNip11Document(runtimeContext.relay.limitation);
+  const relayInfo = buildRelayNip11Document(runtimeContext);
 
   function addNip11CorsHeaders(reply: FastifyReply): void {
     // NIP-11: "Relays MUST accept CORS requests by sending

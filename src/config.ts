@@ -160,6 +160,19 @@ export interface UserConfig {
   json?: boolean;
   /** Remote API base URL used when no local server is available (default: https://trust.dance). */
   remoteApiUrl?: string;
+  /**
+   * Public metadata domain. If omitted, runtime host is used.
+   * The effective origin is always `protocol://(domain || host)`.
+   */
+  publicDomain?: string;
+  /** Public metadata protocol (default `https`). */
+  publicProtocol?: 'http' | 'https';
+  /** Optional custom NIP-11 icon URL. */
+  relayIconUrl?: string;
+  /** Optional custom terms URL. */
+  termsOfServiceUrl?: string;
+  /** Optional custom privacy URL. */
+  privacyPolicyUrl?: string;
   /** Relay websocket policy and NIP-11 `limitation` advertisement. */
   relay?: {
     limitation?: Partial<RelayLimitation>;
@@ -193,6 +206,14 @@ export const DEFAULT_CONFIG: UserConfig = {
 export type ResolvedRuntimeConfig = UserConfig & {
   /** Effective relay limits (merged defaults + `config.json` `relay.limitation`). */
   relay: { limitation: RelayLimitation };
+  /** Public origin for relay metadata, always `protocol://domain-or-host` (no path). */
+  publicOrigin: string;
+  /** NIP-11 icon URL. */
+  relayIconUrl: string;
+  /** NIP-11 terms of service URL. */
+  termsOfServiceUrl: string;
+  /** NIP-11 privacy policy URL. */
+  privacyPolicyUrl: string;
   primaryPubkey: string;
   /**
    * Hex pubkeys to retain in graph/sync filters, or `undefined` = no author filter (all authors).
@@ -618,6 +639,48 @@ function mergeEffectiveHostPort(cli: Record<string, unknown>, base: UserConfig):
   return { host, port };
 }
 
+function normalizePublicProtocol(raw: string | undefined): 'http' | 'https' {
+  return raw?.trim().toLowerCase() === 'http' ? 'http' : 'https';
+}
+
+function stripOriginParts(raw: string): string {
+  return raw.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').trim();
+}
+
+function resolveRelayRuntimeInfo(host: string, base: UserConfig): {
+  publicOrigin: string;
+  iconUrl: string;
+  termsOfServiceUrl: string;
+  privacyPolicyUrl: string;
+} {
+  const protocol = normalizePublicProtocol(
+    process.env.TRUST_PUBLIC_PROTOCOL ?? base.publicProtocol,
+  );
+  const domain = (
+    process.env.TRUST_PUBLIC_DOMAIN?.trim()
+    || base.publicDomain?.trim()
+    || ''
+  );
+  const originFromEnv = process.env.TRUST_PUBLIC_ORIGIN?.trim();
+  const originHost = originFromEnv ? stripOriginParts(originFromEnv) : (domain || host);
+  const publicOrigin = `${protocol}://${originHost}`;
+  return {
+    publicOrigin,
+    iconUrl:
+      process.env.TRUST_RELAY_ICON_URL?.trim()
+      || base.relayIconUrl?.trim()
+      || `${publicOrigin}/trust-relay-icon.svg`,
+    termsOfServiceUrl:
+      process.env.TRUST_TERMS_OF_SERVICE_URL?.trim()
+      || base.termsOfServiceUrl?.trim()
+      || `${publicOrigin}/terms`,
+    privacyPolicyUrl:
+      process.env.TRUST_PRIVACY_POLICY_URL?.trim()
+      || base.privacyPolicyUrl?.trim()
+      || `${publicOrigin}/privacy`,
+  };
+}
+
 /**
  * Merge `config.json`, defaults, CLI, env, and identity into one runtime object.
  * Pass a plain object (e.g. Commander `options`); only **present** keys override lower layers.
@@ -698,6 +761,7 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
   const remoteApiUrl = (process.env.TRUST_REMOTE_API_URL?.trim() || base.remoteApiUrl || DEFAULT_REMOTE_API_URL);
 
   const relayLimitation = mergeRelayLimitation(base.relay?.limitation);
+  const relayInfo = resolveRelayRuntimeInfo(host, base);
 
   return {
     ...base,
@@ -717,6 +781,10 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
     database,
     connectionString,
     remoteApiUrl,
+    publicOrigin: relayInfo.publicOrigin,
+    relayIconUrl: relayInfo.iconUrl,
+    termsOfServiceUrl: relayInfo.termsOfServiceUrl,
+    privacyPolicyUrl: relayInfo.privacyPolicyUrl,
     relay: { limitation: relayLimitation },
   } as ResolvedRuntimeConfig;
 }
