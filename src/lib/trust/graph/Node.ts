@@ -1,7 +1,11 @@
 import type { VerifiedEvent } from 'nostr-tools';
 import type { SubjectType, Identity } from '../../nostr/nip32010.js';
 import { parseIdentityFromKind0, mergeIdentity } from '../identity.js';
-import { EdgeMap, OutTrust } from './EdgeMap.js';
+import { EdgeContext, EdgeMap, EdgeSubject, OutTrust } from './EdgeMap.js';
+import { IEdge } from './Edge.js';
+
+
+
 
 export class Node {
   index: number = 0;
@@ -16,7 +20,13 @@ export class Node {
   outgoing: EdgeMap = new EdgeMap();
   incoming: EdgeMap = new EdgeMap();
 
-  out: OutTrust = new OutTrust();
+
+  directOutgoing: EdgeSubject = new EdgeSubject();
+  contextOutgoing: EdgeContext = new EdgeContext();
+
+
+
+  //out: OutTrust = new OutTrust();
 
   // Not implemented yet
   attributes?: Map<string, any>; //  context is the key, value is the attribute
@@ -25,6 +35,8 @@ export class Node {
     this.id = id;
     this.type = type;
   }
+
+
 
   /** Update identity from a kind 0 user metadata event. */
   updateUserMetadata(event: VerifiedEvent): this {

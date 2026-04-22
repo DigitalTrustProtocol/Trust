@@ -11,7 +11,19 @@ import { EdgeSubject } from './EdgeMap.js';
 
 const packr = new Packr({ structuredClone: true });
 
-export class Graph {
+
+export interface IGraph {
+  getContextIndexes(context: string, subjectType?: SubjectType | ''): Array<number>;
+  applyTrustEvent(trust: ITrustEvent): boolean;
+  removeTrustEvent(trust: ITrustEvent): boolean;
+  applyUserMetadataEvent(event: VerifiedEvent): boolean;
+  removePubkey(pubkey: string, until?: number): boolean;
+  trustedSubjects(authorId: string, context?: string, includeEmptyContext?: boolean): string[];
+  toObject(): any;
+}
+
+
+export class Graph implements IGraph {
   nodes: Map<string, Node> = new Map();
   edges: Map<string, IEdge> = new Map();
 
@@ -22,6 +34,16 @@ export class Graph {
   eventAddedSinceLastSave: number = 0;
   eventRemovedSinceLastSave: number = 0;
 
+  toObject(): any {
+    return {
+      nodes: this.nodes.size,
+      edges: this.edges.size,
+    };
+  }
+
+  getContextIndexes(context: string, subjectType: SubjectType | '' = ''): Array<number> {
+    return [];
+  }
 
   getContextIndex(context: string): number {
     let index = this.contextMap.get(context?.toLowerCase() ?? '');
@@ -65,15 +87,15 @@ export class Graph {
     return edge;
   }
 
-
-  isEventNewer(event: ITrustEvent): boolean {
-    //if (!event.d_tag) return true; // if the d_tag is not found, the event is invalid
-    const edge = this.edges.get(event.parameterizedId);
-    if (!edge) return true; // if the edge is not found, the event is new
-    if (edge.createdAt >= event.created_at) return false; // If the edge is older than the new event, return undefined
-    return true;
-  }
-
+  /*
+    isEventNewer(event: ITrustEvent): boolean {
+      //if (!event.d_tag) return true; // if the d_tag is not found, the event is invalid
+      const edge = this.edges.get(event.parameterizedId);
+      if (!edge) return true; // if the edge is not found, the event is new
+      if (edge.createdAt >= event.created_at) return false; // If the edge is older than the new event, return undefined
+      return true;
+    }
+  */
 
   applyTrustEvent(trust: ITrustEvent): boolean {
     let edge = this.edges.get(trust.parameterizedId);
@@ -182,7 +204,7 @@ export class Graph {
     }
 
     */
-    
+
     // If the node has no incoming or outgoing edges, remove it
     if (node.incoming.size === 0 && node.outgoing.size === 0) {
       this.nodes.delete(key);
@@ -232,35 +254,35 @@ export class Graph {
   }
 
 
-  static async loadFromFile(filePath ?: string): Promise < Graph | null > {
-  filePath = filePath ?? PATHS.graphCache;
+  static async loadFromFile(filePath?: string): Promise<IGraph | null> {
+    filePath = filePath ?? PATHS.graphCache;
 
-  if(!existsSync(filePath)) return Promise.resolve(null);
-let graph: Graph | null = null;
+    if (!existsSync(filePath)) return Promise.resolve(null);
+    let graph: IGraph | null = null;
 
-try {
-  const buf = readFileSync(filePath);
-  graph = packr.unpack(buf) as Graph;
-} catch {
-  return Promise.resolve(null);
-}
+    try {
+      const buf = readFileSync(filePath);
+      graph = packr.unpack(buf) as IGraph;
+    } catch {
+      return Promise.resolve(null);
+    }
 
-return Promise.resolve(graph);
+    return Promise.resolve(graph);
   }
 
-  async saveToFile(filePath ?: string): Promise < boolean > {
-  filePath = filePath ?? PATHS.graphCache;
-  try {
-    const dir = dirname(filePath);
-    if(!existsSync(dir)) {
-  mkdirSync(dir, { recursive: true });
-}
-this.eventAddedSinceLastSave = 0;
-writeFileSync(filePath, packr.pack(this));
+  async saveToFile(filePath?: string): Promise<boolean> {
+    filePath = filePath ?? PATHS.graphCache;
+    try {
+      const dir = dirname(filePath);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      this.eventAddedSinceLastSave = 0;
+      writeFileSync(filePath, packr.pack(this));
     } catch {
-  return Promise.resolve(false);
-}
-return Promise.resolve(true);
+      return Promise.resolve(false);
+    }
+    return Promise.resolve(true);
   }
 
 }

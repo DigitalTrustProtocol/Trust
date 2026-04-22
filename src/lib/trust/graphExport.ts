@@ -1,5 +1,4 @@
 import type { Identity, SubjectType } from '../nostr/nip32010.js';
-import type { Graph } from './graph/Graph.js';
 
 export type GraphVizNode = {
   id: string;
@@ -26,6 +25,7 @@ function identityToRecord(identity: Identity): Record<string, string> {
  * Export the in-memory trust graph for browser visualization (nodes + directed trust edges).
  * Caps output size so public endpoints stay bounded.
  */
+/*
 export function exportGraphForViz(
   graph: Graph,
   options: { maxEdges?: number } = {},
@@ -66,3 +66,4 @@ export function exportGraphForViz(
 
   return { nodes, links, truncated: links.length >= maxEdges };
 }
+*/

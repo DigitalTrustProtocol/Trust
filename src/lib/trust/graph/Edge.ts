@@ -15,6 +15,7 @@ import { EdgeMap } from "./EdgeMap.js";
 
 
 export interface IEdge {
+  index?: number;
   parameterizedId: string;
   author: string;
   kind: number;
@@ -25,6 +26,7 @@ export interface IEdge {
   activate?: number;
   /** Expire (y) — valid only when current time <= this. Undefined = no expiry. */
   expire?: number;
+  content: string | undefined;
   update(event: ITrustEvent): this;
   updateNodes(author: Node, subject: Node): this;
   removeNodes(author: Node, subject: Node): this;

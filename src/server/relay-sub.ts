@@ -1,12 +1,10 @@
 import { type VerifiedEvent, type Filter, verifyEvent } from 'nostr-tools';
 import { getPool } from '../lib/nostr/pool.js';
-import { KIND_TRUST } from '../lib/nostr/nip32010.js';
 import { NostrRelayMsg, NPool } from '@nostrify/nostrify';
-import { Graph } from '../lib/trust/graph/Graph.js';
 
-let eventIDSet = new Set<string>();
+//let eventIDSet = new Set<string>();
 
-const MAX_AUTHOR_CHUNK_SIZE = 100;
+//const MAX_AUTHOR_CHUNK_SIZE = 100;
 
 export type SubscriptionStatus = {
   eventsReceived: number;
@@ -366,7 +364,7 @@ export async function subscribeToGraph(
 
 */
 
-
+/*
 function getAuthorsByDegree(baseAuthor: string, depth: number, graph: Graph): string[] {
   return [];
 }
@@ -382,3 +380,4 @@ function createTrustFilter(authors: string[], options: AuthorGraphSubscriptionOp
   return [filter];
 }
 
+*/

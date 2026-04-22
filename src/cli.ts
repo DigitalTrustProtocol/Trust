@@ -62,14 +62,12 @@ program
 const ADD_SUBJECT_HELP = `
 NIP-32010 subjects (one or more positional args):
   p — identity (pubkey): npub, nprofile, or 64-char hex
-  e — event: note, nevent, or 64-char hex event id
-  a — addressable: naddr or kind:pubkey:d_identifier
-  h — content hash: h:<64-char hex> (SHA-256 digest)
-  r — URL: https://... (normalized; fragment stripped)
-  i — external id (NIP-73): isbn:, doi:, https://..., etc.
+  i — typed subject id (normalized):
+      nevent:<event-hex>, node:<event-hex>, naddressable:<kind>:<pubkey>:<d>,
+      hash:<64-char hex>, url:<normalized-url>, ext:<nip73-id>
 
-Force a tag when parsing would be wrong (e.g. 64-char hex is pubkey vs event id):
-  p:<value>  e:<value>  a:<value>  h:<64 hex>  r:<url>  i:<nip73-id>
+Input shortcuts still accepted and normalized to i:
+  e:<value>  a:<value>  h:<64 hex>  r:<url>  i:<nip73-id>
 `.trim();
 
 program

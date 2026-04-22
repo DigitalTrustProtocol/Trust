@@ -1,9 +1,8 @@
-import { NPool, NostrRelayMsg } from '@nostrify/nostrify';
+import { NostrRelayMsg } from '@nostrify/nostrify';
 import type { Filter, VerifiedEvent } from 'nostr-tools';
-import { Graph } from '../lib/trust/graph/Graph.js';
+import { IGraph } from '../lib/trust/graph/Graph.js';
 import { insertEvent } from '../lib/trust/graphManager.js';
 import { KIND_TRUST } from '../lib/nostr/nip32010.js';
-import { Store } from '../lib/db/dbManager.js';
 import { RuntimeContext } from '../lib/runtimeContext.js';
 
 export const AUTHOR_CHUNK_SIZE = 100;
@@ -31,7 +30,7 @@ export async function runTrustedGraphSync(runtimeContext: RuntimeContext): Promi
     const bfsSeeds = bfsSeedsFromAuthor(runtimeContext.authors ?? []);
     const chunk = getUnseenTrustedAuthors(
       visitedAuthors,
-      runtimeContext.graph as Graph,
+      runtimeContext.graph as IGraph,
       bfsSeeds,
       maxDepth,
       runtimeContext.contexts,
@@ -99,7 +98,7 @@ function bfsSeedsFromAuthor(authors: string[]): string[] {
 
 function getUnseenTrustedAuthors(
   seen: Set<string>,
-  graph: Graph,
+  graph: IGraph,
   rootAuthors: string[],
   maxDepth: number,
   contexts?: string[],

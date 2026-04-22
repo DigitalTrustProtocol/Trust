@@ -1,4 +1,4 @@
-import { Graph } from '../graph/Graph.js';
+import { IGraph } from '../graph/Graph.js';
 import { Score } from './Score.js';
 
 /** Output format for resolve: number (trust−distrust), default (counts + degree), or path (includes paths). */
@@ -6,7 +6,7 @@ export type ResolveFormat = 'number' | 'default' | 'path';
 
 export interface IResolveStrategyOptions {
   /** Graph to use for resolution */
-  graph?: Graph;
+  graph?: IGraph;
   /** Max depth to traverse. Limited by each strategy's own max; can be smaller. */
   maxDepth?: number;
   /** Stop as soon as subject is found; if false, explore full maxDepth (default: true) */

@@ -7,7 +7,7 @@ import { applyTrustEventToGraph } from '../lib/trust/graphManager.js';
 import { KIND_TRUST, KIND_TRUST_MAX, KIND_TRUST_MIN } from '../lib/nostr/nip32010.js';
 import { isNip62TargetingRelay, KIND_VANISH_REQUEST, validateNip62Event } from '../lib/nostr/nip62.js';
 import type { RuntimeContext } from '../lib/runtimeContext.js';
-import type { Graph } from '../lib/trust/graph/Graph.js';
+import type { IGraph } from '../lib/trust/graph/Graph.js';
 import { logger } from '../lib/logger.js';
 import { parseClientMessage } from '../lib/nostr/relayManager.js';
 import { run } from 'node:test';
@@ -43,7 +43,8 @@ export function resolveGraphRelayWsUrl(runtime: RuntimeContext): string {
 }
 
 /** Subscribe to the relay; apply matching trust `EVENT` messages to the graph. */
-export function startGraphRelayListener(runtimeContext: RuntimeContext, graph: Graph): { close: () => void } {
+export function startGraphRelayListener(runtimeContext: RuntimeContext): { close: () => void } {
+  const graph = runtimeContext.graph as IGraph;
   const fromCfg = runtimeContext.kinds?.filter((k) => k >= KIND_TRUST_MIN && k <= KIND_TRUST_MAX) ?? [];
   const effectiveKinds = fromCfg.length ? fromCfg : [KIND_TRUST];
   const relayKinds = [...new Set([...effectiveKinds, KIND_VANISH_REQUEST])];

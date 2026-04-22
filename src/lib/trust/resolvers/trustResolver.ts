@@ -1,4 +1,4 @@
-import { Graph } from "../graph/Graph.js";
+import { Graph, IGraph } from "../graph/Graph.js";
 import { KIND_TRUST } from "../../nostr/nip32010.js";
 import { IResolveStrategy, IResolveStrategyOptions } from "./IResolveStrategy.js";
 import { Score, ScoreMap } from "./Score.js";
@@ -45,7 +45,7 @@ function getIncomingFromGraph(
     return result.size > 0 ? result : undefined;
   }
 */
-
+  
   const result = node.incoming.getSubjects({ kind: KIND_TRUST, context, subjectType: node.type }) ?? new Map<string, IEdge>();
   if (context && context.length > 0) {
     const contextMap = node.incoming.getSubjects({ kind: KIND_TRUST, context, subjectType: node.type });
@@ -93,7 +93,7 @@ class StandardResolver implements IResolveStrategy {
     }
 
     const subjectScore = scores.getSubject(subject, 0);
-    const subjectIncoming = getIncomingFromGraph(graph, subject, context, time);
+    const subjectIncoming = getIncomingFromGraph(graph as Graph, subject, context, time);
     if (!subjectIncoming) {
       return [subjectScore];
     }
@@ -126,11 +126,11 @@ class StandardResolver implements IResolveStrategy {
         if (!score) continue;
         if (score.trustValue < followTrustThreshold) continue;
 
-        const outgoing = getOutgoingFromGraph(graph, nodeId, context, 'p');
+        const outgoing = getOutgoingFromGraph(graph as Graph, nodeId, context, 'p');
         this.processTrusts(nodeId, degree, outgoing, scores, subjectScore, queue, time);
 
         if (context !== '' && context.length > 0) {
-          const outgoingGeneric = getOutgoingFromGraph(graph, nodeId, '', 'p');
+          const outgoingGeneric = getOutgoingFromGraph(graph as Graph, nodeId, '', 'p');
           this.processTrusts(nodeId, degree, outgoingGeneric, scores, subjectScore, queue, time);
         }
       }

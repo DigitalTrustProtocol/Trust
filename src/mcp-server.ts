@@ -140,10 +140,7 @@ export function createMcpServer(): McpServer {
         case 'trust_graph_stats': {
           const { getLoadedGraph } = await import('./lib/trust/graphManager.js');
           const graph = getLoadedGraph();
-          const stats = {
-            nodes: graph?.nodes.size ?? 0,
-            edges: graph?.edges.size ?? 0,
-          };
+          const stats = graph?.toObject() ?? {};
           return { content: [{ type: 'text', text: JSON.stringify(stats, null, 2) }] };
         }
 

@@ -69,9 +69,8 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     await loadGraph(runtimeContext);
 
     const afterMem = process.memoryUsage();
-    const nodeCount = runtimeContext.graph?.nodes.size ?? 0;
-    const edgeCount = runtimeContext.graph?.edges.size ?? 0;
-    logger.info(`Graph: Loaded with ${prettyInt(nodeCount)} nodes and ${prettyInt(edgeCount)} edges`);
+    const stats = runtimeContext.graph?.toObject() ?? {};
+    logger.info(`Graph: Loaded with ${prettyInt(stats.nodes)} nodes and ${prettyInt(stats.edges)} edges`);
     logger.info(`Graph: Memory usage delta: ${prettyBytes(afterMem.rss - beforeMem.rss, { locale: true, minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
     logger.info(`API: http://${runtimeContext.host}:${runtimeContext.port}/v1/resolve`);
   });
@@ -80,7 +79,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     const graph = runtimeContext.graph;
     if (!graph) throw new Error('Graph not loaded');
 
-    graphRelay = startGraphRelayListener(runtimeContext, graph);
+    graphRelay = startGraphRelayListener(runtimeContext);
     logger.info('Graph: Relay WebSocket subscription started (after listen)');
     logger.flush();
   });
@@ -341,9 +340,9 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     async () => {
     const graph = getLoadedGraph();
     const lastSeenRaw = await getLatestSyncTime(SYNC_TIME_NS_SYNC);
+    const stats = graph?.toObject() ?? {};
     return ok({
-      nodes: graph?.nodes.size ?? 0,
-      edges: graph?.edges.size ?? 0,
+      ...stats,
       lastSync: lastSeenRaw ? Number(lastSeenRaw) : null,
       uptime: Math.floor((Date.now() - startTime) / 1000),
     });

@@ -1,7 +1,7 @@
 import { VerifiedEvent } from 'nostr-tools';
 import { Packr } from 'msgpackr';
 import os from 'node:os';
-import { Graph } from './graph/Graph.js';
+import { Graph, IGraph } from './graph/Graph.js';
 import { getStore, InsertEventOptions, Store } from '../db/dbManager.js';
 import { asTrustEvent, isTrustEventValid, KIND_TRUST } from '../nostr/nip32010.js';
 import { KIND_DELETE_REQUEST_EVENT as KIND_DELETE_REQUEST } from '../nostr/nip09.js';
@@ -14,7 +14,7 @@ const packr = new Packr({ structuredClone: false });
 const BYTES_PER_MILLION_NODES = 1024 * 1024 * 1024;
 const NODES_PER_MEMORY_GB = 1_000_000;
 
-let graph: Graph | null = null;
+let graph: IGraph | null = null;
 
 
 export interface GraphLoadPreflight {
@@ -33,7 +33,7 @@ export interface GraphLoadPreflight {
   hasEnoughMemoryForAllAuthors: boolean;
 }
 
-export function getLoadedGraph(): Graph | null {
+export function getLoadedGraph(): IGraph | null {
   return graph;
 }
 
@@ -41,7 +41,7 @@ export function clearGraphMemory(): void {
   graph = null;
 }
 
-export async function getGraph(): Promise<Graph | null> {
+export async function getGraph(): Promise<IGraph | null> {
   return graph;
 }
 
@@ -88,11 +88,13 @@ export async function preflightGraphLoad(runtimeContext: RuntimeContext): Promis
   };
 }
 
-export async function loadGraph(runtimeContext: RuntimeContext): Promise<Graph> {
+
+
+export async function loadGraph(runtimeContext: RuntimeContext): Promise<IGraph> {
   if (graph) return graph;
 
   graph = new Graph();
-  runtimeContext.graph = graph;
+  runtimeContext.graph = graph as IGraph;
 
   const preflight = await preflightGraphLoad(runtimeContext);
 
@@ -120,7 +122,7 @@ export async function insertEvent(event: VerifiedEvent, runtimeContext: RuntimeC
     return await insertUserMetadataEvent(event, store!, graph!);
   }
   if (event.kind === KIND_DELETE_REQUEST) {
-    return await insertDeletionRequestEvent(event, store!, graph!);
+    return await insertDeletionRequestEvent(event, store!);
   }
 
   return await insertGenericEvent(event, store!);
@@ -134,16 +136,16 @@ async function insertGenericEvent(event: VerifiedEvent, store?: Store): Promise<
 
 async function insertDeletionRequestEvent(
   event: VerifiedEvent,
-  store?: Store,
-  graphInst?: Graph,
+  store?: Store
+  
 ): Promise<boolean> {
   const opt: Record<string, unknown> = {};
   await store?.event(event, opt);
-  void graphInst;
+  //void graph;
   return (opt as { isInserted?: boolean }).isInserted ?? false;
 }
 
-async function insertTrustEvent(event: VerifiedEvent, store?: Store, graphInst?: Graph): Promise<boolean> {
+async function insertTrustEvent(event: VerifiedEvent, store?: Store, graph?: IGraph): Promise<boolean> {
   const trustEvent = asTrustEvent(event);
   if (!isTrustEventValid(trustEvent)) return false;
 
@@ -151,25 +153,25 @@ async function insertTrustEvent(event: VerifiedEvent, store?: Store, graphInst?:
   await store?.event(trustEvent, opt);
 
 
-  if (graphInst && opt.isInserted) {
-    return graphInst.applyTrustEvent(trustEvent);
+  if (graph && opt.isInserted) {
+    return graph.applyTrustEvent(trustEvent);
   }
 
-  if (graphInst && opt.isDeleted) {
-    graphInst.removeTrustEvent(trustEvent);
+  if (graph && opt.isDeleted) {
+    graph.removeTrustEvent(trustEvent);
   }
 
   return opt.isInserted ?? false;
 }
 
-async function insertUserMetadataEvent(event: VerifiedEvent, store?: Store, graphInst?: Graph): Promise<boolean> {
+async function insertUserMetadataEvent(event: VerifiedEvent, store?: Store, graph?: IGraph): Promise<boolean> {
   const opt: Record<string, unknown> = {};
   await store?.event(event, opt);
 
   const inserted = (opt as { isInserted?: boolean }).isInserted ?? false;
 
-  if (graphInst && inserted) {
-    graphInst.applyUserMetadataEvent(event);
+  if (graph && inserted) {
+    graph.applyUserMetadataEvent(event);
   }
 
   return inserted;
@@ -226,16 +228,16 @@ async function getGraphFromDB(runtimeContext: RuntimeContext): Promise<void> {
 }
 
 /** Apply a trust event already in the DB to an in-memory graph (no DB write). */
-export function applyTrustEventToGraph(event: VerifiedEvent, graphInst: Graph): boolean {
+export function applyTrustEventToGraph(event: VerifiedEvent, graph: IGraph): boolean {
   const trustEvent = asTrustEvent(event);
   if (!isTrustEventValid(trustEvent)) return false;
-  return graphInst.applyTrustEvent(trustEvent);
+  return graph.applyTrustEvent(trustEvent);
 }
 
 /** Remove a trust event from the graph (e.g. after DB delete) using packed raw row. */
-export function removeTrustEventFromGraphPacked(rawEvent: Uint8Array, graphInst: Graph): boolean {
+export function removeTrustEventFromGraphPacked(rawEvent: Uint8Array, graph: IGraph): boolean {
   const ev = packr.unpack(rawEvent) as VerifiedEvent;
   const trustEvent = asTrustEvent(ev);
   if (!isTrustEventValid(trustEvent)) return false;
-  return graphInst.removeTrustEvent(trustEvent);
+  return graph.removeTrustEvent(trustEvent);
 }

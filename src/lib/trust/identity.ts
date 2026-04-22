@@ -110,6 +110,7 @@ export function parseIdentityFromKind0(event: VerifiedEvent): Identity | null {
 /**
  * Format a human-readable label for non-pubkey identities.
  */
+/*
 export function formatIdentityLabel(id: string, type: SubjectType): string {
   switch (type) {
     case 'e':
@@ -134,7 +135,7 @@ export function formatIdentityLabel(id: string, type: SubjectType): string {
       return id.slice(0, 8) + '…';
   }
 }
-
+*/
 /**
  * Merge identity metadata; later values override earlier.
  * Useful when combining kind 0 with trust event content.

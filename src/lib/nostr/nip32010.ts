@@ -19,9 +19,13 @@ export const MAX_CONTENT_LENGTH = 1024;
 export const HEX_64 = /^[a-fA-F0-9]{64}$/;
 
 export const NPUB_TAG = 'p';
-export const SUBJECT_TAGS = ['p', 'e', 'a', 'h', 'r', 'i'] as const;
+export const SUBJECT_TAGS = ['p', 'i'] as const;
+export const LEGACY_SUBJECT_TAGS = ['e', 'a', 'h', 'r'] as const;
+export const NOSTR_I_TYPES = ['event', 'profile', 'pubkey', 'note', 'addr'] as const;
 
-export type SubjectType = 'p' | 'e' | 'a' | 'h' | 'r' | 'i';
+export type SubjectType = 'p' | 'i';
+export type LegacySubjectType = (typeof LEGACY_SUBJECT_TAGS)[number];
+export type NostrIType = (typeof NOSTR_I_TYPES)[number];
 
 export type Identity ={
   type: string;
@@ -92,26 +96,113 @@ export function getExpireFromTags(event: Event): number | undefined {
   return isNaN(n) ? undefined : n;
 }
 
+export function canonicalizePubkeyValue(value: string): string {
+  return value.trim().toLowerCase();
+}
 
-/** Extract subject tags (p, e, a, h, r, i) from event. */
+export function canonicalizeNostrIValue(type: string, value: string): string {
+  const normalizedType = type.trim().toLowerCase();
+  const normalizedValue = value.trim().toLowerCase();
+  return `nostr:${normalizedType}:${normalizedValue}`;
+}
+
+export function canonicalizeHashIValue(value: string): string {
+  return `hash:${value.trim().toLowerCase()}`;
+}
+
+export function canonicalizeWebIValue(value: string): string {
+  const normalized = value.trim();
+  if (normalized === '') return 'web:';
+  try {
+    const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(normalized);
+    const withScheme = hasScheme ? normalized : `https://${normalized}`;
+    const u = new URL(withScheme);
+    return `web:${(u.origin + u.pathname + u.search).toLowerCase()}`;
+  } catch {
+    return `web:${normalized.toLowerCase()}`;
+  }
+}
+
+export function canonicalizeExtIValue(value: string): string {
+  return `ext:${value.trim().toLowerCase()}`;
+}
+
+export function canonicalizeEmailIValue(value: string): string {
+  return `email:${value.trim().toLowerCase()}`;
+}
+
+export function canonicalizeTypedSubjectIValue(value: string): string {
+  const raw = value.trim();
+  const iMatch = raw.match(/^([^:]+):(.*)$/s);
+  if (!iMatch) return raw.toLowerCase();
+
+  const kind = iMatch[1]!.toLowerCase();
+  const rest = iMatch[2] ?? '';
+
+  if (kind === 'nostr') {
+    const nostrMatch = rest.match(/^([^:]+):(.*)$/s);
+    if (!nostrMatch) return `nostr:${rest.toLowerCase()}`;
+    return canonicalizeNostrIValue(nostrMatch[1]!, nostrMatch[2] ?? '');
+  }
+  if (kind === 'hash') return canonicalizeHashIValue(rest);
+  if (kind === 'web') return canonicalizeWebIValue(rest);
+  if (kind === 'ext') return canonicalizeExtIValue(rest);
+  if (kind === 'email') return canonicalizeEmailIValue(rest);
+
+  return `${kind}:${rest.toLowerCase()}`;
+}
+
+export function canonicalizeLegacySubjectToI(tagName: LegacySubjectType, value: string): string {
+  const normalized = value.trim();
+  switch (tagName) {
+    case 'e':
+      return canonicalizeNostrIValue('event', normalized);
+    case 'a':
+      return canonicalizeNostrIValue('addr', normalized);
+    case 'h':
+      return canonicalizeHashIValue(normalized);
+    case 'r':
+      return canonicalizeWebIValue(normalized);
+    default:
+      return normalized.toLowerCase();
+  }
+}
+
+export function canonicalizeSubjectValue(tagName: string, value: string): string {
+  if (tagName === 'p') return canonicalizePubkeyValue(value);
+  if (tagName === 'i') return canonicalizeTypedSubjectIValue(value);
+  if (LEGACY_SUBJECT_TAGS.includes(tagName as LegacySubjectType)) {
+    return canonicalizeLegacySubjectToI(tagName as LegacySubjectType, value);
+  }
+  return value.trim().toLowerCase();
+}
+
+/** Extract subject tags (p, i) from event. */
 export function extractSubjects(event: Event): Identity[] {
   const tags = event.tags;
   const subjects: Identity[] = [];
-  const kTags = tags.filter((t) => t[0] === 'k').map((t) => t[1]);
-  let kTagIndex = 0;
 
   for (const tag of tags) {
     const [tagName, value, urlHint, nameHint] = tag; // Case sensitive tag name
     if (!tagName || !value) continue;
-    if (!SUBJECT_TAGS.includes(tagName as (typeof SUBJECT_TAGS)[number])) continue;
+    const isSubject = SUBJECT_TAGS.includes(tagName as (typeof SUBJECT_TAGS)[number]);
+    const isLegacySubject = LEGACY_SUBJECT_TAGS.includes(tagName as LegacySubjectType);
+    if (!isSubject && !isLegacySubject) continue;
 
-    const canonical = value.trim().toLowerCase();
+    const canonical = canonicalizeSubjectValue(tagName, value);
     switch (tagName) {
+      case 'p':
+        subjects.push({ type: 'p', tag: 'p', value: canonical, urlHint, name: nameHint, source: 'tags' });
+        break;
       case 'i':
-        subjects.push({ tag: 'i', value: canonical, urlHint, name: nameHint, type: kTags[kTagIndex++] ?? '', source: 'tags' });
+      case 'e':
+      case 'a':
+      case 'h':
+      case 'r':
+        // Legacy subject tags are normalized into typed i-subjects for compatibility.
+        subjects.push({ type: 'i', tag: 'i', value: canonical, urlHint, name: nameHint, source: 'tags' });
         break;
       default:
-        subjects.push({ type: tagName, tag: tagName as SubjectType, value: canonical, urlHint, name: nameHint, source: 'tags' });
         break;
     }
   }
@@ -139,31 +230,17 @@ export function asTrustEvent(event: Event): ITrustEvent {
   return e;
 }
 
-/** NIP-33 / subject `a` value: kind:pubkey:identifier (identifier may contain `:`) */
-const ADDR_TAG_REGEX = /^(\d+):([a-fA-F0-9]{64}):([\s\S]+)$/;
-
 /**
  * Canonical UTF-8 string for d-tag derivation (before hex-vs-hash decision).
- * - `p` / `e` / `h`: lowercase 64-char hex (tag value)
- * - `a`: `<kind>:<lowercase_pubkey>:<identifier>` when parseable; else lowercase raw value
- * - `r`: normalized URL string (as in ParsedSubject.value)
- * - `i`: `<k>:<value>` when `k` is set; else `value` alone
+ * - `p`: lowercase 64-char hex (tag value)
+ * - `i`: normalized typed subject id (e.g. `nostr:event:<value>`, `nostr:note:<value>`, `nostr:addr:<value>`, `hash:<hex>`, `web:<url>`, `ext:<id>`)
  */
 export function canonicalStringForDTagPreimage(sub: ParsedSubject): string {
   switch (sub.tag) {
     case 'p':
-    case 'e':
-    case 'h':
       return sub.value.toLowerCase();
-    case 'a': {
-      const m = sub.value.match(ADDR_TAG_REGEX);
-      if (!m) return sub.value.toLowerCase();
-      return `${m[1]}:${m[2]!.toLowerCase()}:${m[3]!}`;
-    }
-    case 'r':
-      return sub.value;
     case 'i':
-      return sub.k != null && sub.k !== '' ? `${sub.k}:${sub.value}` : sub.value;
+      return sub.value.toLowerCase();
     default:
       return sub.value;
   }
@@ -268,12 +345,9 @@ export function buildTrustEventTemplate(params: BuildTrustEventParams): EventTem
     tags.push(['c', context]);
   }
 
-  // Subject tags: p, e, a, h, r, i — optional `k` immediately after each `e` (asserted Nostr kind) or `i` (NIP-73 scheme)
+  // Subject tags: p, i
   for (const subj of subjects) {
     tags.push([subj.tag, subj.value]);
-    if (subj.k != null && subj.k !== '' && (subj.tag === 'e' || subj.tag === 'i')) {
-      tags.push(['k', subj.k]);
-    }
   }
 
   return {
