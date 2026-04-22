@@ -5,6 +5,7 @@ import { Score, ScoreMap } from "./Score.js";
 import { type EdgeSubject } from "../graph/EdgeMap.js";
 import { IEdge } from "../graph/Edge.js";
 import pathStrategyJson from "./pathStrategyJson.js";
+import { IndexResolver } from "./IndexResolver.js";
 
 const MAX_DEPTH = 4;
 
@@ -167,5 +168,6 @@ class StandardResolver implements IResolveStrategy {
   }
 }
 
-const standardResolver = new StandardResolver();
+//const standardResolver = new StandardResolver();
+const standardResolver = new IndexResolver();
 export default standardResolver;

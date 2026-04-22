@@ -13,7 +13,7 @@ import indexPathStrategyJson from "./indexPathStrategyJson.js";
 const MAX_DEPTH = 4;
 
 
-class IndexResolver implements IResolveStrategy {
+export class IndexResolver implements IResolveStrategy {
     readonly name = 'graph';
 
     resolve(

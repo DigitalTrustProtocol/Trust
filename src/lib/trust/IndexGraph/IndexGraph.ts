@@ -149,7 +149,7 @@ export class IndexGraph implements IGraph {
     for (const context of contexts) {
 
       let index = this.contextIndex.get(key);
-      if (!index) result.push(index!);
+      if (index !== undefined) result.push(index!);
 
       key += key.length > 0 ? ':' + context : context; // Build the key for the next context
     }
@@ -170,20 +170,21 @@ export class IndexGraph implements IGraph {
     let result: string[] = [];
     const authorNode = this.getNode(authorId);
     if (!authorNode) return result;
+    let time = Math.floor(Date.now() / 1000); // Current time in seconds 
 
 
-    let pContextIndex = this.getContextIndex(context ?? '', 'p');
-    let pContextEmptyIndex = this.getContextIndex('', 'p');
-
-    if (pContextIndex !== undefined) {
-      for (const [subjectIndex, value] of authorNode.out.get(pContextIndex)!.entries()) {
-        if (value > 0) result.push(this.nodesList[subjectIndex]!.id);
-      }
-    }
-
-    if (pContextEmptyIndex !== undefined) {
-      for (const [subjectIndex, value] of authorNode.out.get(pContextEmptyIndex)!.entries()) {
-        if (value > 0) result.push(this.nodesList[subjectIndex]!.id);
+    let pContextIndex = this.getContextIndexes(context ?? '', 'p');
+ 
+    for (const contextIndex of pContextIndex) {
+      for (const [subjectIndex, edgeIndex] of authorNode.out.get(contextIndex)!.entries()) {
+        let edge = this.edgesList[edgeIndex];
+        if (!edge) continue;
+        if (!edge.isValidAt(time)) continue;
+        if (edge.value > 0) {
+          let subjectNode = this.nodesList[subjectIndex];
+          if (!subjectNode) continue;
+          result.push(subjectNode.id);
+        }
       }
     }
 
@@ -194,7 +195,7 @@ export class IndexGraph implements IGraph {
   addNode(id: string, type: SubjectType): IndexNode  {
     let node: IndexNode | null = null;
     let index = this.nodesIndex.get(id);
-    if (index) node = this.nodesList[index]; // ! is used to tell the compiler that the node is not null
+    if (index !== undefined) node = this.nodesList[index]; // ! is used to tell the compiler that the node is not null
     if (node) return node;
     node = this.createNode(id, type);
     
@@ -204,7 +205,7 @@ export class IndexGraph implements IGraph {
 
   getNode(id: string): IndexNode | null {
     let index = this.nodesIndex.get(id);
-    if (!index) return null;
+    if (index === undefined) return null;
     let node = this.nodesList[index];
     if (!node) return null;
     return node;
@@ -213,14 +214,14 @@ export class IndexGraph implements IGraph {
   createNode(id: string, type: SubjectType): IndexNode {
     let node = new IndexNode(id, type);
     let index = this.nodesList.push(node);
-    node.index = index; // Avoid internal object reference tracking (a design principle)
-    this.nodesIndex.set(id, index);
+    node.index = index-1; // Avoid internal object reference tracking (a design principle)
+    this.nodesIndex.set(id, node.index);
     return node;
   }
 
   removeNode(id: string): IndexNode | null {
     let index = this.nodesIndex.get(id);
-    if (!index) return null;
+    if (index === undefined) return null;
     let node = this.nodesList[index];
     if (!node) return null;
     this.nodesList[index] = null;
@@ -231,7 +232,7 @@ export class IndexGraph implements IGraph {
   addEdge(trust: ITrustEvent): IEdge | null {
     let edge: IEdge | null = null;
     let index = this.edgesIndex.get(trust.parameterizedId); // Avoid internal object reference tracking (a design principle) 
-    if (index) edge = this.edgesList[index]!; // ! is used to tell the compiler that the edge is not null
+    if (index !== undefined) edge = this.edgesList[index]!; // ! is used to tell the compiler that the edge is not null
     if (edge) {
       if (edge.createdAt > trust.created_at) return null; // If the edge is older than the new event, return null
       if (edge.createdAt < trust.created_at) edge.update(trust); // update the edge from memory with the new event
@@ -260,8 +261,8 @@ export class IndexGraph implements IGraph {
   createEdge(trust: ITrustEvent): IEdge {
     let edge = new EdgeT1(trust);
     let index = this.edgesList.push(edge);
-    edge.index = index;
-    this.edgesIndex.set(trust.parameterizedId, index); // Avoid internal object reference tracking (a design principle)
+    edge.index = index-1; // Avoid internal object reference tracking (a design principle)
+    this.edgesIndex.set(trust.parameterizedId, edge.index!); // Avoid internal object reference tracking (a design principle)
     return edge;
   }
 
@@ -279,7 +280,7 @@ export class IndexGraph implements IGraph {
 
   addContext(context: string): number {
     let index = this.contextIndex.get(context);
-    if (index) return index;
+    if (index !== undefined) return index;
     index = this.contextList.push(context);
     this.contextIndex.set(context, index);
     return index;
