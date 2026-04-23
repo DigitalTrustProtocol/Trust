@@ -1,252 +1,201 @@
+import { VerifiedEvent } from 'nostr-tools';
+import { extractSubjects, ITrustEvent, SubjectType } from '../../nostr/nip32010.js';
+
 import { EdgeT1, IEdge } from './Edge.js';
 import { Node } from './Node.js';
-import { PATHS } from '../../../config.js';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { dirname } from 'node:path';
-import { Packr } from 'msgpackr';
-import { extractSubjects, ITrustEvent, KIND_TRUST, SubjectType } from '../../nostr/nip32010.js';
-import { VerifiedEvent } from 'nostr-tools';
-import { EdgeSubject } from './EdgeMap.js';
-
-
-const packr = new Packr({ structuredClone: true });
-
 
 export interface IGraph {
-  getContextIndexes(context: string, subjectType?: SubjectType | ''): Array<number>;
   applyTrustEvent(trust: ITrustEvent): boolean;
   removeTrustEvent(trust: ITrustEvent): boolean;
+  removePubkey(pubkey: string, until: number): boolean;
+  getContextIndexes(context: string, subjectType: SubjectType | ''): Array<number>;
   applyUserMetadataEvent(event: VerifiedEvent): boolean;
-  removePubkey(pubkey: string, until?: number): boolean;
   trustedSubjects(authorId: string, context?: string, includeEmptyContext?: boolean): string[];
+  addNode(id: string, type: SubjectType): Node;
+  getNode(id: string): Node | null;
+  createNode(id: string, type: SubjectType): Node;
   toObject(): any;
 }
 
 
-export class Graph implements IGraph {
-  nodes: Map<string, Node> = new Map();
-  edges: Map<string, IEdge> = new Map();
+export class IndexGraph implements IGraph {
 
-  nodesIndex: Array<Node> = new Array<Node>();
-  contextMap: Map<string, number> = new Map();
-  contextIndex: Array<string> = new Array<string>();
+  nodesIndex: Map<string, number> = new Map();
+  nodesList: Array<Node | null> = new Array<Node | null>();
+
+  contextIndex: Map<string, number> = new Map();
+  contextList: Array<string | null> = new Array<string | null>();
+
+  edgesIndex: Map<string, number> = new Map();
+  edgesList: Array<IEdge | null> = new Array<IEdge | null>();
+
 
   eventAddedSinceLastSave: number = 0;
   eventRemovedSinceLastSave: number = 0;
 
+
   toObject(): any {
     return {
-      nodes: this.nodes.size,
-      edges: this.edges.size,
+      nodes: this.nodesList.length,
+      edges: this.edgesList.length,
     };
   }
 
-  getContextIndexes(context: string, subjectType: SubjectType | '' = ''): Array<number> {
-    return [];
-  }
-
-  getContextIndex(context: string): number {
-    let index = this.contextMap.get(context?.toLowerCase() ?? '');
-    if (!index) {
-      index = this.contextIndex.length;
-      this.contextMap.set(context, index);
-      this.contextIndex.push(context);
-    }
-    return index;
-  }
-
-  getOrCreateNode(id: string, type: SubjectType): Node {
-    let node = this.nodes.get(id);
-    if (!node) {
-      node = new Node(id, type);
-      this.nodes.set(id, node);
-      //node.index = this.nodesIndex.length;
-      //this.nodesIndex.push(node);
-    }
-    return node;
-  }
-
-  getOrCreateEdge(event: ITrustEvent): IEdge {
-    let edge = this.edges.get(event.parameterizedId);
-    if (!edge) {
-      edge = this.createTrustEdge(event);
-    }
-    return edge;
-  }
-
-  createTrustEdge(event: ITrustEvent): IEdge {
-    let edge: IEdge;
-
-    if (event.kind === KIND_TRUST) {
-      edge = new EdgeT1(event);
-    } else {
-      throw new Error(`Unknown kind: ${event.kind}`);
-    }
-
-    this.edges.set(event.parameterizedId, edge);
-    return edge;
-  }
-
-  /*
-    isEventNewer(event: ITrustEvent): boolean {
-      //if (!event.d_tag) return true; // if the d_tag is not found, the event is invalid
-      const edge = this.edges.get(event.parameterizedId);
-      if (!edge) return true; // if the edge is not found, the event is new
-      if (edge.createdAt >= event.created_at) return false; // If the edge is older than the new event, return undefined
-      return true;
-    }
-  */
-
   applyTrustEvent(trust: ITrustEvent): boolean {
-    let edge = this.edges.get(trust.parameterizedId);
-    if (edge) {
-      if (edge.createdAt >= trust.created_at) return false; // If the edge is older than the new event, return false
-      if (edge.createdAt < trust.created_at) {
-        edge.update(trust); // update the edge from memory with the new event
-      }
-    } else {
-      edge = this.createTrustEdge(trust);
-    }
+
+    let edge = this.addEdge(trust);
+    if (!edge) return false; // If the edge is not valid or too old, return false
 
     const authorId = trust.pubkey.toLowerCase();
-    const authorNode = this.getOrCreateNode(authorId, 'p'); // author is a pubkey, so type is 'p'
+    const authorNode = this.addNode(authorId, 'p'); // author is a pubkey, so type is 'p'
+
+    const pContextIndex = this.applyContext(trust.c_tag ?? '', 'p');//this.addContext(trust);
+    const iContextIndex = this.applyContext(trust.c_tag ?? '', 'i');//this.addContext(trust);
 
     const subjects = extractSubjects(trust);
     if (subjects.length === 0) return false;
+    let value = edge.value;
+    let createdAt = edge.createdAt;
 
-    for (const identity of subjects) {
-      const subjectId = identity.value;
-      const subjectType: SubjectType = identity.tag;
-      const subjectNode = this.getOrCreateNode(subjectId, subjectType);
+    for (const subject of subjects) {
+      const subjectId = subject.value;
+      const subjectType: SubjectType = subject.tag;
+      const subjectNode = this.addNode(subjectId, subjectType);
+      const contextIndex = subjectType === 'p' ? pContextIndex : iContextIndex;
 
-      edge.updateNodes(authorNode, subjectNode);
+      if(value !== 0) {
+        authorNode.addOut(contextIndex, subjectNode.index, edge.index!);
+        subjectNode.addIn(contextIndex, authorNode.index, edge.index!);
+      } else {
+        authorNode.removeOut(this, contextIndex, subjectNode.index, createdAt);
+        subjectNode.removeIn(this, contextIndex, authorNode.index, createdAt);
+      }
+
       // Update the subject node identity with the ExstractedSubject
-      subjectNode.updateIdentity(identity);
+      //subjectNode.updateIdentity(subject);
     }
     this.eventAddedSinceLastSave++;
     return true;
+
   }
 
   removeTrustEvent(trust: ITrustEvent): boolean {
-    let edge = this.edges.get(trust.parameterizedId);
+    let edgeIndex = this.edgesIndex.get(trust.parameterizedId);
+    if (!edgeIndex) return false; // No edge found for the parameterizedId
+    let edge = this.edgesList[edgeIndex];
+    if (!edge) {
+      console.trace('Edge not found for parameterizedId: ' + trust.parameterizedId + ' in removeTrustEvent - Failsafe check, as this should never happen');
+      return false; // Failsafe check, as this should never happen
+    } 
+    
+    const authorId = trust.pubkey.toLowerCase();
+    const authorNode = this.getNode(authorId);
+    if (!authorNode) return false; // Author node not found for the pubkey
 
-    if (!edge) return false;
-    if (edge.createdAt > trust.created_at) return false; // If the trust is older than the new edges, return false
-
-    const authorId = trust.pubkey;
-    const authorNode = this.nodes.get(authorId); // author is a pubkey, so type is 'p'
-    if (!authorNode) return false;
-
+    const pContextIndex = this.getContextIndex(trust.c_tag ?? '', 'p');//this.addContext(trust);
+    const iContextIndex = this.getContextIndex(trust.c_tag ?? '', 'i');//this.addContext(trust);
+    
     const subjects = extractSubjects(trust);
     if (subjects.length === 0) return false;
 
-    for (const identity of subjects) {
-      const subjectId = identity.value;
-      const subjectType: SubjectType = identity.tag;
-      const subjectNode = this.getOrCreateNode(subjectId, subjectType);
+    for (const subject of subjects) {
+      const subjectId = subject.value;
 
-      edge.removeNodes(authorNode, subjectNode);
+      let subjectNodeIndex = this.nodesIndex.get(subjectId);
+      if (!subjectNodeIndex) continue;
+
+      const subjectNode = this.nodesList[subjectNodeIndex];
+      if (!subjectNode) continue;
+
+      const contextIndex = subject.tag === 'p' ? pContextIndex : iContextIndex;
+      
+      if (contextIndex !== undefined) {
+        authorNode.removeOut(this, contextIndex, subjectNode.index, edge.createdAt);
+        subjectNode.removeIn(this, contextIndex, authorNode.index, edge.createdAt);
+      }
     }
-    this.eventRemovedSinceLastSave++;
     return true;
   }
 
+
+  removePubkey(pubkey: string, until: number = 0): boolean {
+    const authorNode = this.getNode(pubkey);
+    if (!authorNode) return false;
+
+   
+    for (const [contextIndex, subjectMap] of authorNode.out.entries()) {
+      for (const [subjectIndex, value] of [...subjectMap.entries()]) {
+        let subjectNode = this.nodesList[subjectIndex];
+        if (!subjectNode) continue;
+        authorNode.removeOut(this, contextIndex, subjectNode.index, until);
+        subjectNode.removeIn(this, contextIndex, authorNode.index, until);
+      }
+    }
+    
+    for (const edgeIndex of authorNode.edges) {
+      let edge = this.edgesList[edgeIndex];
+      if (!edge) continue;
+      if (edge.createdAt > until) continue;
+      this.removeEdge(edge.parameterizedId);
+    }
+
+
+    if (authorNode.out.size === 0 && authorNode.in.size === 0) {
+      // If the node has no incoming or outgoing edges, remove it
+      // However, there may be other nodes pointing to this node, so we cannot remove it
+      this.removeNode(pubkey);
+    }
+
+    return true;
+  }
+
+  getContextIndexes(context: string, subjectType: SubjectType | '' = ''): Array<number>{
+    let result: Array<number> = [];
+    
+    // Split the context into an array of contexts
+    let contexts = context.split(':');
+    if (contexts.length === 0) return result;
+
+    let key = subjectType;
+    for (const context of contexts) {
+
+      let index = this.contextIndex.get(key);
+      if (index !== undefined) result.push(index!);
+
+      key += key.length > 0 ? ':' + context : context; // Build the key for the next context
+    }
+    return result.reverse(); // Return the result in the order of the contexts
+  }
+
+
   applyUserMetadataEvent(event: VerifiedEvent): boolean {
     // Get the node for the author
-    const authorNode = this.nodes.get(event.pubkey); // author is a pubkey, so type is 'p'
+    const authorNode = this.getNode(event.pubkey); // author is a pubkey, so type is 'p'
     if (!authorNode) return false; // update only if the node exists
     // Update the node with the user metadata
     authorNode.updateUserMetadata(event);
     return true;
   }
 
-  removePubkey(pubkey: string, until?: number): boolean {
-    const key = pubkey.toLowerCase();
-    const node = this.nodes.get(key);
-    if (!node) return false;
-    const shouldRemoveEdge = (createdAt: number): boolean =>
-      until === undefined ? true : createdAt <= until;
-
-    const outgoing = [...node.outgoing.entries()];
-    for (const [edgeKey, contextMap] of outgoing) {
-      for (const [context, subjectMap] of [...contextMap.entries()]) {
-        for (const [subjectId, edge] of [...subjectMap.entries()]) {
-          if (!shouldRemoveEdge(edge.createdAt)) continue;
-          const subjectNode = this.nodes.get(subjectId);
-          if (subjectNode) {
-            edge.removeNodes(node, subjectNode);
-          } else {
-            node.outgoing.remove(edgeKey, context, subjectId);
-          }
-          this.edges.delete(edge.parameterizedId);
-          this.eventRemovedSinceLastSave++;
-        }
-      }
-    }
-
-    // This is from other nodes targeting this node, therefore we cannot remove this
-    // The incoming are not created by the pubkey, so we cannot remove them
-    /*
-    const incoming = [...node.incoming.entries()];
-    for (const [edgeKey, contextMap] of incoming) {
-      for (const [context, authorMap] of [...contextMap.entries()]) {
-        for (const [authorId, edge] of [...authorMap.entries()]) {
-          const authorNode = this.nodes.get(authorId);
-          if (authorNode) {
-            edge.removeNodes(authorNode, node);
-          } else {
-            node.incoming.remove(edgeKey, context, authorId);
-          }
-          this.edges.delete(edge.parameterizedId);
-          this.eventRemovedSinceLastSave++;
-        }
-      }
-    }
-
-    */
-
-    // If the node has no incoming or outgoing edges, remove it
-    if (node.incoming.size === 0 && node.outgoing.size === 0) {
-      this.nodes.delete(key);
-    }
-
-    return true;
-  }
-
-
   trustedSubjects(authorId: string, context?: string, includeEmptyContext: boolean = true): string[] {
-
     let result: string[] = [];
-    const authorNode = this.nodes.get(authorId);
+    const authorNode = this.getNode(authorId);
     if (!authorNode) return result;
+    let time = Math.floor(Date.now() / 1000); // Current time in seconds 
 
-    let contexts = authorNode.outgoing.getContexts({ kind: KIND_TRUST, subjectType: 'p' });
-    if (!contexts) return result;
 
-    if (context) {
-      if (context.length > 0) {
-        const subjectEdge = contexts.get(context);
-        if (subjectEdge) {
-          addSubjects(subjectEdge);
+    let pContextIndex = this.getContextIndexes(context ?? '', 'p');
+ 
+    for (const contextIndex of pContextIndex) {
+      for (const [subjectIndex, edgeIndex] of authorNode.out.get(contextIndex)!.entries()) {
+        let edge = this.edgesList[edgeIndex];
+        if (!edge) continue;
+        if (!edge.isValidAt(time)) continue;
+        if (edge.value > 0) {
+          let subjectNode = this.nodesList[subjectIndex];
+          if (!subjectNode) continue;
+          result.push(subjectNode.id);
         }
-      }
-
-      if (includeEmptyContext) {
-        const subjectEdge = contexts.get('');
-        if (subjectEdge) {
-          addSubjects(subjectEdge);
-        }
-      }
-    } else {
-      for (const [_, subjectMap] of contexts.entries()) { // All contexts
-        addSubjects(subjectMap);
-      }
-    }
-
-    function addSubjects(subjectMap: EdgeSubject): void {
-      for (const [subjectId, edge] of subjectMap.entries()) {
-        if (edge.value > 0)
-          result.push(subjectId);
       }
     }
 
@@ -254,35 +203,107 @@ export class Graph implements IGraph {
   }
 
 
-  static async loadFromFile(filePath?: string): Promise<IGraph | null> {
-    filePath = filePath ?? PATHS.graphCache;
-
-    if (!existsSync(filePath)) return Promise.resolve(null);
-    let graph: IGraph | null = null;
-
-    try {
-      const buf = readFileSync(filePath);
-      graph = packr.unpack(buf) as IGraph;
-    } catch {
-      return Promise.resolve(null);
-    }
-
-    return Promise.resolve(graph);
+  addNode(id: string, type: SubjectType): Node  {
+    let node: Node | null = null;
+    let index = this.nodesIndex.get(id);
+    if (index !== undefined) node = this.nodesList[index]; // ! is used to tell the compiler that the node is not null
+    if (node) return node;
+    node = this.createNode(id, type);
+    
+    this.eventAddedSinceLastSave++;
+    return node;
   }
 
-  async saveToFile(filePath?: string): Promise<boolean> {
-    filePath = filePath ?? PATHS.graphCache;
-    try {
-      const dir = dirname(filePath);
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-      }
-      this.eventAddedSinceLastSave = 0;
-      writeFileSync(filePath, packr.pack(this));
-    } catch {
-      return Promise.resolve(false);
-    }
-    return Promise.resolve(true);
+  getNode(id: string): Node | null {
+    let index = this.nodesIndex.get(id);
+    if (index === undefined) return null;
+    let node = this.nodesList[index];
+    if (!node) return null;
+    return node;
   }
 
+  createNode(id: string, type: SubjectType): Node {
+    let node = new Node(id, type);
+    let index = this.nodesList.push(node);
+    node.index = index-1; // Avoid internal object reference tracking (a design principle)
+    this.nodesIndex.set(id, node.index);
+    return node;
+  }
+
+  removeNode(id: string): Node | null {
+    let index = this.nodesIndex.get(id);
+    if (index === undefined) return null;
+    let node = this.nodesList[index];
+    if (!node) return null;
+    this.nodesList[index] = null;
+    this.nodesIndex.delete(id);
+    return node;
+  }
+
+  addEdge(trust: ITrustEvent): IEdge | null {
+    let edge: IEdge | null = null;
+    let index = this.edgesIndex.get(trust.parameterizedId); // Avoid internal object reference tracking (a design principle) 
+    if (index !== undefined) edge = this.edgesList[index]!; // ! is used to tell the compiler that the edge is not null
+    if (edge) {
+      if (edge.createdAt > trust.created_at) return null; // If the edge is older than the new event, return null
+      if (edge.createdAt < trust.created_at) edge.update(trust); // update the edge from memory with the new event
+    } else {
+      edge = this.createEdge(trust);
+      let node = this.addNode(trust.pubkey, 'p');
+      node.edges.add(edge.index!);
+    }
+
+    this.eventAddedSinceLastSave++;
+    return edge;
+  }
+
+  removeEdge(parameterizedId: string): IEdge | null {
+    let index = this.edgesIndex.get(parameterizedId);
+    if (!index) return null;
+    let edge = this.edgesList[index];
+    if (!edge) return null;
+    this.edgesList[index] = null;
+    this.edgesIndex.delete(parameterizedId);
+    let node = this.getNode(edge.author);
+    if (node && edge.index) node.edges.delete(edge.index);
+    return edge;
+  }
+
+  createEdge(trust: ITrustEvent): IEdge {
+    let edge = new EdgeT1(trust);
+    let index = this.edgesList.push(edge);
+    edge.index = index-1; // Avoid internal object reference tracking (a design principle)
+    this.edgesIndex.set(trust.parameterizedId, edge.index!); // Avoid internal object reference tracking (a design principle)
+    return edge;
+  }
+
+
+  applyContext(context: string, subjectType: SubjectType): number {
+    let key = subjectType + ':' + context;
+    let index = this.addContext(key);
+    return index;
+  }
+
+  getContextIndex(context: string, subjectType: SubjectType): number | undefined{
+    let key = subjectType + ':' + context;
+    return this.contextIndex.get(key);
+  }
+
+  addContext(context: string): number {
+    let index = this.contextIndex.get(context);
+    if (index !== undefined) return index;
+    index = this.contextList.push(context);
+    this.contextIndex.set(context, index);
+    return index;
+  }
+
+  removeContext(context: string): number {
+    let index = this.contextIndex.get(context);
+    if (!index) return 0;
+    let contextItem = this.contextList[index];
+    if (!contextItem) return 0;
+    this.contextList[index] = null;
+    this.contextIndex.delete(context);
+    return index;
+  }
 }

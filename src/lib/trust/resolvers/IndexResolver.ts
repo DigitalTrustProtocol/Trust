@@ -1,7 +1,7 @@
 import { IResolveStrategy, IResolveStrategyOptions } from "./IResolveStrategy.js";
-import { IndexGraph } from "../IndexGraph/IndexGraph.js";
-import indexPathStrategyJson from "./indexPathStrategyJson.js";
-import { IndexScore, IndexScoreMap } from "./IndexScore.js";
+import { IndexGraph } from "../graph/Graph.js";
+import pathStrategyJson from "./PathStrategyJson.js";
+import { Score, IndexScoreMap } from "./Score.js";
 
 const MAX_DEPTH = 4;
 
@@ -94,7 +94,7 @@ export class IndexResolver implements IResolveStrategy {
         }
 
         if (options.format === 'path') {
-            return indexPathStrategyJson.resolve(authorIndex, subjectIndex, scores, graph);
+            return pathStrategyJson.resolve(authorIndex, subjectIndex, scores, graph);
         }
 
         subjectScore.connected = subjectScore.count > 0;
@@ -107,7 +107,7 @@ export class IndexResolver implements IResolveStrategy {
         degree: number,
         outgoing: Map<number, number>,
         scores: IndexScoreMap,
-        subjectScore: IndexScore,
+        subjectScore: Score,
         queue: number[],
         time: number
     ): void {

@@ -1,7 +1,6 @@
 import { VerifiedEvent } from 'nostr-tools';
 import { Packr } from 'msgpackr';
 import os from 'node:os';
-import { Graph, IGraph } from './graph/Graph.js';
 import { getStore, InsertEventOptions, Store } from '../db/dbManager.js';
 import { asTrustEvent, isTrustEventValid, KIND_TRUST } from '../nostr/nip32010.js';
 import { KIND_DELETE_REQUEST_EVENT as KIND_DELETE_REQUEST } from '../nostr/nip09.js';
@@ -9,7 +8,7 @@ import { KIND_USER_METADATA } from '../nostr/nip01.js';
 import { RuntimeContext } from '../runtimeContext.js';
 import { createTrustFilters } from '../../server/graph-sync.js';
 import { GraphLoadMode } from '../../config.js';
-import { IndexGraph } from './IndexGraph/IndexGraph.js';
+import { IGraph, IndexGraph } from './graph/Graph.js';
 
 const packr = new Packr({ structuredClone: false });
 const BYTES_PER_MILLION_NODES = 1024 * 1024 * 1024;

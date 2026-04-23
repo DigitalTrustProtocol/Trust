@@ -1,13 +1,13 @@
 import { parseAuthorPubkeyInput, resolveTargetForQuery } from '../lib/trust/subject.js';
 import { isServerAvailable, proxyResolve } from '../lib/client.js';
 import type { ResolveFormat } from '../lib/trust/resolvers/IResolveStrategy.js';
-import { Score } from '../lib/trust/resolvers/Score.js';
 import { loadGraph } from '../lib/trust/graphManager.js';
 import { getRuntimeConfig, type ResolvedRuntimeConfig } from '../config.js';
 import { getRuntimeContext, setupStore } from '../lib/runtimeContext.js';
 import { getPrimaryPublicKeyHex } from '../lib/identityStore.js';
 import { getServerBaseUrlFromState } from '../lib/server-state.js';
 import indexResolver from '../lib/trust/resolvers/IndexResolver.js';
+import { Score } from '../lib/trust/resolvers/Score.js';
 
 export type { ResolveFormat };
 

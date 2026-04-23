@@ -1,5 +1,5 @@
 import { IEdge } from "../graph/Edge.js";
-import { EdgeArray } from "./pathStrategyJson.js";
+
 
 export type ScoreTrustPathProfile = {
   subject: string;
@@ -18,15 +18,16 @@ export interface IScore {
   distrust: number;
   connected: boolean;
   visited: boolean;
+  authorIndex?: number; // Dynamics  index of the author of this score
 
-
-  edges?: EdgeArray;
+  edges?: Array<number>;
 
   addTrust(edge: IEdge, degree: number): void;
 }
 
 export class Score implements IScore {
   subject?: string; // The npub of the subject of this score
+  subjectIndex?: number; // The npub of the subject of this score
   count: number = 0;
   trustValue: number = 0;
   degree: number = 0;
@@ -34,10 +35,11 @@ export class Score implements IScore {
   distrust: number = 0;
   connected: boolean = false;
   visited: boolean = false;
+  authorIndex?: number; // Dynamics index of the author of this score
 
   kind?: number;
   context?: string;
-  edges?: EdgeArray | undefined;
+  edges?: Array<number> | undefined;
 
 
   constructor(count: number = 0, trustValue: number = 0, degree: number = 0, trust: number = 0, distrust: number = 0, connected: boolean = false, visited: boolean = false) {
@@ -64,21 +66,21 @@ export class Score implements IScore {
     this.degree = degree;
 
     if (!this.edges) this.edges = [];
-    this.edges.push(edge);
+    this.edges.push(edge.index!);
   }
 }
 
 
-export class ScoreMap extends Map<string, Score> {
+export class IndexScoreMap extends Map<number, Score> {
 
-  getSubject(subject: string, degree: number): Score {
-    let nodeScore = this.get(subject);
-    if (!nodeScore) {
-      nodeScore = new Score();
-      nodeScore.subject = subject;
-      nodeScore.degree = degree;
-      this.set(subject, nodeScore);
+  getSubject(subjectIndex: number, degree: number): Score {
+    let subjectScore = this.get(subjectIndex);
+    if (!subjectScore) {
+      subjectScore = new Score();
+      subjectScore.subjectIndex = subjectIndex;
+      subjectScore.degree = degree;
+      this.set(subjectIndex, subjectScore);
     }
-    return nodeScore;
+    return subjectScore;
   }
 }

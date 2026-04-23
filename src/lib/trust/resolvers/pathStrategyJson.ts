@@ -1,5 +1,6 @@
-import { Score } from './Score.js';
 import { IEdge } from '../graph/Edge.js';
+import { Score } from './Score.js';
+import { IndexGraph } from '../graph/Graph.js';
 
 
 export type EdgeArray = Array<IEdge>;
@@ -7,33 +8,36 @@ export type EdgeArray = Array<IEdge>;
 
 class PathStrategyJson {
   resolve(
-    authorId: string,
-    subjectId: string,
-    scores: Map<string, Score>
+    authorIndex: number,
+    subjectIndex: number,
+    scores: Map<number, Score>,
+    graph: IndexGraph
   ): Array<Score> {
     
     const result: Array<Score> = [];
     const visited = new Set<string>();
 
-    function traverse(subject: string): void {
+    function traverse(subject: number): void {
       const score = scores.get(subject);
       if (!score) return; // Should not happen, but just in case
 
       result.push(score);
-      if (authorId === score.subject) return; // Starting node, no need to traverse
+      if (authorIndex === score.subjectIndex) return; // Starting node, no need to traverse
       if (!score.edges) return; // May be the root node, no edges. Starting node is not in the scores map, so it will not have edges.
 
-      for (const edge of score.edges) {
+      for (const edgeIndex of score.edges) {
+        let edge = graph.edgesList[edgeIndex];
+        if (!edge) continue;
         const author = edge.author;
         if (visited.has(author)) continue;
         visited.add(author);
 
-        traverse(author);
+        traverse(authorIndex);
       }
 
     }
 
-    traverse(subjectId);
+    traverse(subjectIndex);
     return result;
   }
 }

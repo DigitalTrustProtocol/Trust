@@ -10,9 +10,6 @@ import {
   getValueFromTags,
   ITrustEvent
 } from "../../nostr/nip32010.js";
-import { Node } from "./Node.js";
-import { EdgeMap } from "./EdgeMap.js";
-
 
 export interface IEdge {
   index?: number;
@@ -28,11 +25,10 @@ export interface IEdge {
   expire?: number;
   content: string | undefined;
   update(event: ITrustEvent): this;
-  updateNodes(author: Node, subject: Node): this;
-  removeNodes(author: Node, subject: Node): this;
   /** True if edge is valid for resolution at given time (default: now). Edges with no activate/expire are always valid. */
   isValidAt(now?: number): boolean;
 }
+
 
 // Trust edge for kind 32010
 export class EdgeT1 implements IEdge {
@@ -48,7 +44,7 @@ export class EdgeT1 implements IEdge {
   content: string | undefined = undefined;
 
   constructor(event: ITrustEvent) {
-    this.kind = event.kind; 
+    this.kind = event.kind;
     this.author = event.pubkey;
     this.parameterizedId = event.parameterizedId;
     this.update(event);
@@ -71,33 +67,5 @@ export class EdgeT1 implements IEdge {
     return true;
   }
 
-  updateNodes(author: Node, subject: Node): this {
-    const edgeMapkey = EdgeMap.createKey(this.kind, subject.type); // kind and subject type are used to create the key for the edge map
-
-    author.outgoing.remove(edgeMapkey, this.context, subject.id);
-    subject.incoming.remove(edgeMapkey, this.context, author.id);
-
-    // Neutral (value 0) is cancelled trust—not stored on the graph
-    if (this.value !== 0) {
-      author.outgoing.add(edgeMapkey, this.context, subject.id, this);
-      subject.incoming.add(edgeMapkey, this.context, author.id, this);
-    }
-    return this;
-  }
-
-  removeNodes(author: Node, subject: Node): this {
-    const edgeMapkey = EdgeMap.createKey(this.kind, subject.type); // kind and subject type are used to create the key for the edge map
-    author.outgoing.remove(edgeMapkey, this.context, subject.id);
-    subject.incoming.remove(edgeMapkey, this.context, author.id);
-    return this;
-  }
 }
 
-
-    /** Edge key: author:d_tag so multiple authors can trust the same subject. */
-    /*
-export function EdgeKey(event: ITrustEvent): string {
-      return `${event.pubkey}:${event.d_tag!}`;
-    }
-
-*/

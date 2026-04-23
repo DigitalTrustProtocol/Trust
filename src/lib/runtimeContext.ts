@@ -1,10 +1,10 @@
 import { NPool } from "@nostrify/nostrify";
 import { getStore, Store } from "./db/dbManager.js";
-import { IGraph } from "./trust/graph/Graph.js";
 import { ResolvedRuntimeConfig } from "../config.js";
 import { getAvailableRelays, getPool } from "./nostr/pool.js";
 import { loadGraph } from "./trust/graphManager.js";
 import { logger } from "./logger.js";
+import { IGraph } from "./trust/graph/Graph.js";
 
 let runtimeContext: RuntimeContext | null = null;
 
