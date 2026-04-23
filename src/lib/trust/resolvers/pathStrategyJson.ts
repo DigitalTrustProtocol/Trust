@@ -1,6 +1,6 @@
 import { IEdge } from '../graph/Edge.js';
 import { Score } from './Score.js';
-import { IndexGraph } from '../graph/Graph.js';
+import { Graph } from '../graph/Graph.js';
 
 
 export type EdgeArray = Array<IEdge>;
@@ -11,7 +11,7 @@ class PathStrategyJson {
     authorIndex: number,
     subjectIndex: number,
     scores: Map<number, Score>,
-    graph: IndexGraph
+    graph: Graph
   ): Array<Score> {
     
     const result: Array<Score> = [];

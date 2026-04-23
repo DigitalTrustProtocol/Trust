@@ -1,7 +1,7 @@
 import type { VerifiedEvent } from 'nostr-tools';
 import type { SubjectType, Identity } from '../../nostr/nip32010.js';
 import { parseIdentityFromKind0, mergeIdentity } from '../identity.js';
-import { IndexGraph } from './Graph.js';
+import { Graph } from './Graph.js';
 
 export class Node {
     index: number = 0;
@@ -65,7 +65,7 @@ export class Node {
         inMap.set(subjectIndex, edgeIndex);
     }
 
-    removeOut(graph: IndexGraph, contextIndex: number, subjectIndex: number, createdAt: number): void {
+    removeOut(graph: Graph, contextIndex: number, subjectIndex: number, createdAt: number): void {
         let contextMap = this.out.get(contextIndex);
         if (!contextMap) return;
 
@@ -89,7 +89,7 @@ export class Node {
         }
     }
 
-    removeIn(graph: IndexGraph, contextIndex: number, subjectIndex: number, createdAt: number): void {
+    removeIn(graph: Graph, contextIndex: number, subjectIndex: number, createdAt: number): void {
         let inMap = this.in.get(contextIndex);
         if (!inMap) return;
 

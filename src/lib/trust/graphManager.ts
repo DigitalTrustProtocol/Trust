@@ -8,7 +8,7 @@ import { KIND_USER_METADATA } from '../nostr/nip01.js';
 import { RuntimeContext } from '../runtimeContext.js';
 import { createTrustFilters } from '../../server/graph-sync.js';
 import { GraphLoadMode } from '../../config.js';
-import { IGraph, IndexGraph } from './graph/Graph.js';
+import { IGraph, Graph } from './graph/Graph.js';
 
 const packr = new Packr({ structuredClone: false });
 const BYTES_PER_MILLION_NODES = 1024 * 1024 * 1024;
@@ -93,7 +93,7 @@ export async function preflightGraphLoad(runtimeContext: RuntimeContext): Promis
 export async function loadGraph(runtimeContext: RuntimeContext): Promise<IGraph> {
   if (graph) return graph;
 
-  graph = new IndexGraph();
+  graph = new Graph();
   runtimeContext.graph = graph as IGraph;
 
   const preflight = await preflightGraphLoad(runtimeContext);

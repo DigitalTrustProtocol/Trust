@@ -1,5 +1,5 @@
 import { IResolveStrategy, IResolveStrategyOptions } from "./IResolveStrategy.js";
-import { IndexGraph } from "../graph/Graph.js";
+import { Graph } from "../graph/Graph.js";
 import pathStrategyJson from "./PathStrategyJson.js";
 import { Score, IndexScoreMap } from "./Score.js";
 
@@ -14,7 +14,7 @@ export class IndexResolver implements IResolveStrategy {
         subjectId: string,
         options: IResolveStrategyOptions = {}
     ): Array<any> {
-        const graph = options.graph as IndexGraph;
+        const graph = options.graph as Graph;
         if (!graph) {
             throw new Error('Graph is required for trust resolution. Call loadGraph() before resolve.');
         }
@@ -102,7 +102,7 @@ export class IndexResolver implements IResolveStrategy {
     }
 
     private processTrusts(
-        graph: IndexGraph,
+        graph: Graph,
         authorIndex: number,
         degree: number,
         outgoing: Map<number, number>,

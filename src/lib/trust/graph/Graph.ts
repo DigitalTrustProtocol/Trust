@@ -18,7 +18,7 @@ export interface IGraph {
 }
 
 
-export class IndexGraph implements IGraph {
+export class Graph implements IGraph {
 
   nodesIndex: Map<string, number> = new Map();
   nodesList: Array<Node | null> = new Array<Node | null>();

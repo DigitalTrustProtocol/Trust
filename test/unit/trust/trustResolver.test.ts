@@ -7,7 +7,6 @@
 
 import { describe, expect, it } from 'vitest';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
-import { IndexGraph } from '../../../src/lib/trust/IndexGraph/IndexGraph.js';
 import indexResolver from '../../../src/lib/trust/resolvers/IndexResolver.js';
 import {
   asTrustEvent,
@@ -16,6 +15,7 @@ import {
 } from '../../../src/lib/nostr/nip32010.js';
 import type { ParsedSubject } from '../../../src/lib/trust/subject.js';
 import type { EventTemplate } from 'nostr-tools';
+import { Graph } from '../../../src/lib/trust/graph/Graph.js';
 
 /** Wire tags allowed on kind 32010 templates; `ParsedSubject` only covers parsed `p` / `i`. */
 type TrustWireSubject =
@@ -50,7 +50,7 @@ function signTrust(template: EventTemplate, secret: Uint8Array) {
   );
 }
 
-function edgeAuthorTrustsBridge(graph: IndexGraph, context?: string) {
+function edgeAuthorTrustsBridge(graph: Graph, context?: string) {
   const template = buildTrustEventTemplate({
     subjects: [{ tag: 'p', value: PUB_BRIDGE }],
     value: 1,
@@ -61,7 +61,7 @@ function edgeAuthorTrustsBridge(graph: IndexGraph, context?: string) {
 
 /** Bridge trusts `target`; graph: author → bridge → canonical subject node. */
 function buildTwoHopGraph(target: TrustWireSubject, context?: string) {
-  const graph = new IndexGraph();
+  const graph = new Graph();
   edgeAuthorTrustsBridge(graph, context);
 
   const template = buildTrustEventTemplate({
@@ -75,7 +75,7 @@ function buildTwoHopGraph(target: TrustWireSubject, context?: string) {
 
 /** Assert trust edges exist at the context buckets used by `IndexGraph.applyTrustEvent`. */
 function expectTwoHopTopology(
-  graph: IndexGraph,
+  graph: Graph,
   author: string,
   bridge: string,
   canonicalSubjectId: string,
@@ -158,7 +158,7 @@ describe('IndexGraph (trust topology)', () => {
   });
 
   it('stores two-hop edges with non-empty context on both hops', () => {
-    const graph = new IndexGraph();
+    const graph = new Graph();
     const ctx = 'development';
     edgeAuthorTrustsBridge(graph, ctx);
 
@@ -177,7 +177,7 @@ describe('IndexGraph (trust topology)', () => {
 
 describe('IndexResolver', () => {
   it('marks connected when author and subject are the same pubkey', () => {
-    const graph = new IndexGraph();
+    const graph = new Graph();
     const template = buildTrustEventTemplate({
       subjects: [{ tag: 'p', value: PUB_AUTHOR }],
       value: 1,
