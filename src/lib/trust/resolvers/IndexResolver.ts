@@ -55,6 +55,10 @@ export class IndexResolver implements IResolveStrategy {
         const scores = new IndexScoreMap();
         const authorScore = scores.getSubject(authorIndex, 0);
         authorScore.visited = true;
+        authorScore.trustValue = 1; // Self-trust or the graph logic dosen't include it
+        authorScore.count = 1;
+        authorScore.degree = 0;
+
 
         if (authorId === subjectId) {
             authorScore.connected = true;
@@ -81,7 +85,7 @@ export class IndexResolver implements IResolveStrategy {
             };
         }
 
-        const subjectIncoming = subjectNode.getIn(graph.getContextIndexes(context));
+        const subjectIncoming = subjectNode.getIn(graph.getContextIndexes(context, subjectNode.type));
         if (subjectIncoming.size === 0) return { ok: true, data: [subjectScore] };
 
         const contextIndexes = graph.getContextIndexes(context, 'p');
@@ -97,19 +101,19 @@ export class IndexResolver implements IResolveStrategy {
             for (let i = nodeCounter; i < degreeLength; i++) {
                 const aIndex = queue[i]!;
                 const edgeIndex = subjectIncoming.get(aIndex);
-                if (edgeIndex) {
-                    const authorScore = scores.get(aIndex);
-                    if (!authorScore) continue;
-                    if (authorScore.trustValue < followTrustThreshold) continue;
+                if (!edgeIndex) continue; // No edge found from the author to the subject
+                
+                const authorScore = scores.get(aIndex);
+                if (!authorScore) continue; // No author score found, should not happen
+                if (authorScore.trustValue < followTrustThreshold) continue; // Don't include distrusted nodes 
 
-                    let edge = graph.edgesList[edgeIndex];
-                    if (!edge) continue;
+                let edge = graph.edgesList[edgeIndex];
+                if (!edge) continue; // No edge found, should not happen
 
-                    subjectScore.addTrust(edge, degree);
-                }
+                subjectScore.addTrust(edge, degree); // Add the trust to the subject score
             }
+            if (subjectScore.count > 0) continue; // If the subject score has been updated, stop the loop
 
-            if (subjectScore.count > 0) continue;
 
             while (nodeCounter < degreeLength) {
                 const nodeIndex = queue[nodeCounter++];

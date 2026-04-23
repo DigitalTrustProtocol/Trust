@@ -100,7 +100,7 @@ async function main(): Promise<void> {
     console.log(`  npx . resolve ${l4.pubkey} ${author.pubkey} --max-depth 5`);
     console.log(`  npx . resolve ${l5.pubkey} ${author.pubkey} --max-depth 5`);
     console.log('');
-    console.log('Or start the server and use /resolve with maxDepth: 5 in the JSON body.');
+    console.log('Or start the server and use /v1/resolve with maxDepth: 5 in the JSON body.');
   } finally {
     await closeTrustDb(store);
   }

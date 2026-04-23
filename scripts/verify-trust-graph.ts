@@ -72,6 +72,8 @@ interface KeyFixture {
   npub: string;
 }
 
+type ExpectedEntry = TrustGraphFixture['expected'][number];
+
 interface RelayMessageOk {
   ok: true;
   eventId: string;
@@ -149,50 +151,64 @@ async function main() {
   for (const exp of fixture.expected) {
     const issuerPubkey = resolvePubkey(exp.issuer, keys);
     const subjectPubkey = resolvePubkey(exp.subject, keys);
-
-    const result = await resolveFromServer({
-      resolveUrl: RESOLVE_URL,
-      author: issuerPubkey,
-      subject: subjectPubkey,
-      context: exp.context,
-    });
-
-    const got: ResolveResult = {
-      connected: Boolean(result.connected),
-      degree: result.degree ?? 0,
-      trust: result.trust ?? 0,
-      distrust: result.distrust ?? 0,
-    };
-
-    const expConnected = exp.connected !== false;
-    const gotConnected = result.connected;
-
-    const expDegree = exp.connected === false ? 0 : (exp.degree ?? 0);
-    const expTrust = exp.trust ?? 0;
-    const expDistrust = exp.distrust ?? 0;
-
-    const ok =
-      got.connected === expConnected &&
-      got.degree === expDegree &&
-      got.trust === expTrust &&
-      got.distrust === expDistrust;
-
     const ctx = exp.context !== undefined ? ` (${exp.context || 'global'})` : '';
     const label = `issuer ${exp.issuer} -> subject ${exp.subject}${ctx}`;
 
-    if (ok) {
-      console.log(`✓ ${label}`);
-      console.log(
-        `  connected=${got.connected} degree=${got.degree} trust=${got.trust} distrust=${got.distrust}`,
-      );
-      passed++;
-    } else {
-      console.log(`✗ ${label}`);
-      console.log(`  expected: connected=${expConnected} degree=${expDegree} trust=${expTrust} distrust=${expDistrust}`);
-      console.log(
-        `  got:      connected=${got.connected} degree=${got.degree} trust=${got.trust} distrust=${got.distrust}`,
-      );
-      failed++;
+    try {
+      const result = await resolveFromServer({
+        resolveUrl: RESOLVE_URL,
+        author: issuerPubkey,
+        subject: subjectPubkey,
+        context: exp.context,
+      });
+
+      const got: ResolveResult = {
+        connected: Boolean(result.connected),
+        degree: result.degree ?? 0,
+        trust: result.trust ?? 0,
+        distrust: result.distrust ?? 0,
+      };
+
+      const expConnected = exp.connected !== false;
+      const expDegree = exp.connected === false ? 0 : (exp.degree ?? 0);
+      const expTrust = exp.trust ?? 0;
+      const expDistrust = exp.distrust ?? 0;
+
+      const ok =
+        got.connected === expConnected &&
+        got.degree === expDegree &&
+        got.trust === expTrust &&
+        got.distrust === expDistrust;
+
+      if (ok) {
+        console.log(`✓ ${label}`);
+        console.log(
+          `  connected=${got.connected} degree=${got.degree} trust=${got.trust} distrust=${got.distrust}`,
+        );
+        passed++;
+      } else {
+        console.log(`✗ ${label}`);
+        console.log(`  expected: connected=${expConnected} degree=${expDegree} trust=${expTrust} distrust=${expDistrust}`);
+        console.log(
+          `  got:      connected=${got.connected} degree=${got.degree} trust=${got.trust} distrust=${got.distrust}`,
+        );
+        failed++;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const canTreatMissingSubjectAsPass =
+        shouldExpectDisconnected(exp) &&
+        message.includes('SUBJECT_NOT_FOUND');
+
+      if (canTreatMissingSubjectAsPass) {
+        console.log(`✓ ${label}`);
+        console.log('  expected disconnected result; API returned SUBJECT_NOT_FOUND');
+        passed++;
+      } else {
+        console.log(`✗ ${label}`);
+        console.log(`  error: ${message}`);
+        failed++;
+      }
     }
   }
 
@@ -547,6 +563,14 @@ function extractResolveResult(payload: unknown): Partial<ResolveResult> {
 
   // Backward compatibility for older servers that returned raw score JSON.
   return payload as Partial<ResolveResult>;
+}
+
+function shouldExpectDisconnected(exp: ExpectedEntry): boolean {
+  const connected = exp.connected ?? false;
+  const degree = exp.degree ?? 0;
+  const trust = exp.trust ?? 0;
+  const distrust = exp.distrust ?? 0;
+  return connected === false && degree === 0 && trust === 0 && distrust === 0;
 }
 
 main().catch((err) => {

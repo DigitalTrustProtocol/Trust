@@ -3,7 +3,7 @@
  * Resolve Trust
  *
  * Resolves the trust score from an issuer (author) to a subject by calling
- * the server's POST /resolve endpoint.
+ * the server's POST /v1/resolve endpoint.
  *
  * Usage:
  *   npx tsx scripts/server/resolve-trust.ts [issuer] [subject] [context]
@@ -20,7 +20,7 @@
  *   # Run all expected resolutions from the fixture
  *   npx tsx scripts/server/resolve-trust.ts --all
  *
- *   TRUST_RESOLVE_URL=http://127.0.0.1:3417/resolve npx tsx scripts/server/resolve-trust.ts
+ *   TRUST_RESOLVE_URL=http://127.0.0.1:3417/v1/resolve npx tsx scripts/server/resolve-trust.ts
  *
  * Requires: server already running (`npx . server`) with events published.
  */
@@ -30,7 +30,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { nip19 } from 'nostr-tools';
 
 const BASE_URL = normalizeBaseUrl(process.env.TRUST_RESOLVE_URL ?? 'http://localhost:3417');
-const RESOLVE_URL = `${BASE_URL}/resolve`;
+const RESOLVE_URL = `${BASE_URL}/v1/resolve`;
 
 // Fixture defaults
 const PRIMARY   = 'b17501e4111503c741cd02aa3936b28b46fb1d69b9e9097e2721bef98b9c6857'; // primary
@@ -43,6 +43,12 @@ interface ResolveResult {
   trust?: number;
   distrust?: number;
   [key: string]: unknown;
+}
+
+interface ApiEnvelope<T = unknown> {
+  ok: boolean;
+  data?: T;
+  error?: { code?: string; message?: string };
 }
 
 interface Expected {
@@ -178,7 +184,44 @@ async function resolveFromServer(params: {
     throw new Error(`Resolve failed (${res.status}): ${text}`);
   }
 
-  return (await res.json()) as ResolveResult;
+  const payload = (await res.json()) as unknown;
+  return extractResolveResult(payload);
+}
+
+function extractResolveResult(payload: unknown): ResolveResult {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Resolve response is not a JSON object');
+  }
+
+  const envelope = payload as ApiEnvelope<ResolveResult | ResolveResult[]>;
+  if (typeof envelope.ok === 'boolean') {
+    if (!envelope.ok) {
+      const code = envelope.error?.code ? `${envelope.error.code}: ` : '';
+      const message = envelope.error?.message ?? 'Unknown API error';
+      throw new Error(`Resolve API error: ${code}${message}`);
+    }
+
+    const raw = envelope.data;
+    if (raw === undefined || raw === null) {
+      throw new Error('Resolve API response missing data');
+    }
+
+    if (Array.isArray(raw)) {
+      const first = raw[0];
+      if (!first || typeof first !== 'object') {
+        throw new Error('Resolve API returned empty score array');
+      }
+      return first as ResolveResult;
+    }
+
+    if (typeof raw !== 'object') {
+      throw new Error('Resolve API data is not an object or array');
+    }
+    return raw as ResolveResult;
+  }
+
+  // Backward compatibility for older servers that returned raw score JSON.
+  return payload as ResolveResult;
 }
 
 function resolvePubkeyFromFixture(value: string | number, keys: { pubkey: string }[]): string {
@@ -214,15 +257,15 @@ function resolveArg(arg: string | undefined): string | null {
 function normalizeBaseUrl(input: string): string {
   // If it looks like just a relay WebSocket URL, convert to HTTP
   const url = new URL(input.replace(/^ws(s?):/, 'http$1:'));
-  // Strip /resolve path if it ends with it (allow passing full resolve URL too)
+  // Strip optional resolve path to normalize origin.
   url.pathname = '/';
   if (url.hostname === 'localhost') url.hostname = '127.0.0.1';
   return url.toString().replace(/\/$/, '');
 }
 
 async function preflightHttp(origin: string): Promise<void> {
-  const healthUrl = `${origin}/health`;
-  console.log(`Checking server health (${healthUrl})…`);
+  const healthUrl = `${origin}/v1/ping`;
+  console.log(`Checking server health (${healthUrl})...`);
   try {
     const res = await fetch(healthUrl, { signal: AbortSignal.timeout(8_000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

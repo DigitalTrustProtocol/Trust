@@ -8,7 +8,7 @@ export interface IGraph {
   applyTrustEvent(trust: ITrustEvent): boolean;
   removeTrustEvent(trust: ITrustEvent): boolean;
   removePubkey(pubkey: string, until: number): boolean;
-  getContextIndexes(context: string, subjectType: SubjectType | ''): Array<number>;
+  getContextIndexes(context: string, subjectType: SubjectType): Array<number>;
   applyUserMetadataEvent(event: VerifiedEvent): boolean;
   trustedSubjects(authorId: string, context?: string, includeEmptyContext?: boolean): string[];
   addNode(id: string, type: SubjectType): Node;
@@ -49,8 +49,8 @@ export class Graph implements IGraph {
     const authorId = trust.pubkey.toLowerCase();
     const authorNode = this.addNode(authorId, 'p'); // author is a pubkey, so type is 'p'
 
-    const pContextIndex = this.applyContext(trust.c_tag ?? '', 'p');//this.addContext(trust);
-    const iContextIndex = this.applyContext(trust.c_tag ?? '', 'i');//this.addContext(trust);
+    let pContextIndex = undefined;
+    let iContextIndex = undefined;
 
     const subjects = extractSubjects(trust);
     if (subjects.length === 0) return false;
@@ -61,7 +61,14 @@ export class Graph implements IGraph {
       const subjectId = subject.value;
       const subjectType: SubjectType = subject.tag;
       const subjectNode = this.addNode(subjectId, subjectType);
-      const contextIndex = subjectType === 'p' ? pContextIndex : iContextIndex;
+
+      let contextIndex = undefined;
+      if (subjectType === 'p') {
+        contextIndex = pContextIndex ?? (pContextIndex = this.applyContext(trust.c_tag ?? '', 'p'));
+      } else {
+        contextIndex = iContextIndex ?? (iContextIndex = this.applyContext(trust.c_tag ?? '', 'i'));
+      }
+      
 
       if(value !== 0) {
         authorNode.addOut(contextIndex, subjectNode.index, edge.index!);
@@ -108,11 +115,10 @@ export class Graph implements IGraph {
       if (!subjectNode) continue;
 
       const contextIndex = subject.tag === 'p' ? pContextIndex : iContextIndex;
+      if (contextIndex === undefined) continue;
       
-      if (contextIndex !== undefined) {
-        authorNode.removeOut(this, contextIndex, subjectNode.index, edge.createdAt);
-        subjectNode.removeIn(this, contextIndex, authorNode.index, edge.createdAt);
-      }
+      authorNode.removeOut(this, contextIndex, subjectNode.index, edge.createdAt);
+      subjectNode.removeIn(this, contextIndex, authorNode.index, edge.createdAt);
     }
     return true;
   }
@@ -149,20 +155,19 @@ export class Graph implements IGraph {
     return true;
   }
 
-  getContextIndexes(context: string, subjectType: SubjectType | '' = ''): Array<number>{
+  getContextIndexes(context: string, subjectType: SubjectType): Array<number>{
     let result: Array<number> = [];
     
     // Split the context into an array of contexts
-    let contexts = context.split(':');
-    if (contexts.length === 0) return result;
-
-    let key = subjectType;
-    for (const context of contexts) {
+    let contexts = [subjectType, ...context.split(':')];
+    
+    let key = '';
+    for (const segment of contexts) {
+      key += key.length > 0 ? ':' + segment : segment; // Build the key for the next context
 
       let index = this.contextIndex.get(key);
       if (index !== undefined) result.push(index!);
 
-      key += key.length > 0 ? ':' + context : context; // Build the key for the next context
     }
     return result.reverse(); // Return the result in the order of the contexts
   }
@@ -224,8 +229,7 @@ export class Graph implements IGraph {
 
   createNode(id: string, type: SubjectType): Node {
     let node = new Node(id, type);
-    let index = this.nodesList.push(node);
-    node.index = index-1; // Avoid internal object reference tracking (a design principle)
+    node.index = this.nodesList.push(node) - 1;
     this.nodesIndex.set(id, node.index);
     return node;
   }
@@ -271,15 +275,14 @@ export class Graph implements IGraph {
 
   createEdge(trust: ITrustEvent): IEdge {
     let edge = new EdgeT1(trust);
-    let index = this.edgesList.push(edge);
-    edge.index = index-1; // Avoid internal object reference tracking (a design principle)
+    edge.index = this.edgesList.push(edge) - 1;
     this.edgesIndex.set(trust.parameterizedId, edge.index!); // Avoid internal object reference tracking (a design principle)
     return edge;
   }
 
 
   applyContext(context: string, subjectType: SubjectType): number {
-    let key = subjectType + ':' + context;
+    let key = subjectType + (context.length > 0 ? ':' : '') + context;
     let index = this.addContext(key);
     return index;
   }
@@ -292,7 +295,7 @@ export class Graph implements IGraph {
   addContext(context: string): number {
     let index = this.contextIndex.get(context);
     if (index !== undefined) return index;
-    index = this.contextList.push(context);
+    index = this.contextList.push(context) - 1;
     this.contextIndex.set(context, index);
     return index;
   }

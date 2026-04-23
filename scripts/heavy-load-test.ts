@@ -18,8 +18,8 @@ import {
 } from './load-test-keys.ts';
 
 const BASE_URL = (process.env.TRUST_LOAD_BASE_URL ?? 'http://127.0.0.1:3417').replace(/\/$/, '');
-const RESOLVE_URL = process.env.TRUST_LOAD_RESOLVE_URL ?? `${BASE_URL}/resolve`;
-const HEALTH_URL = process.env.TRUST_LOAD_HEALTH_URL ?? `${BASE_URL}/health`;
+const RESOLVE_URL = process.env.TRUST_LOAD_RESOLVE_URL ?? `${BASE_URL}/v1/resolve`;
+const HEALTH_URL = process.env.TRUST_LOAD_HEALTH_URL ?? `${BASE_URL}/v1/ping`;
 const CONCURRENT_RESOLVE_REQUESTS = Math.max(1, Number(process.env.TRUST_LOAD_CONCURRENT_REQUESTS ?? 1_000));
 
 /** One `Score` from `/resolve` (API returns `data: Score[]`; we use index 0 for the subject). */
@@ -28,6 +28,7 @@ type ResolveData = {
   degree?: number;
   trust?: number;
   distrust?: number;
+  subject?: string;
 };
 
 type ApiEnvelope<T = unknown> = {
@@ -171,7 +172,8 @@ function extractResolveData(payload: unknown): ResolveData {
   const envelope = payload as ApiEnvelope<ResolveData | ResolveData[]>;
   if (typeof envelope.ok === 'boolean') {
     if (!envelope.ok) {
-      throw new Error(envelope.error?.message ?? 'Resolve API returned error');
+      const code = envelope.error?.code ? `[${envelope.error.code}] ` : '';
+      throw new Error(`${code}${envelope.error?.message ?? 'Resolve API returned error'}`);
     }
     const data = envelope.data;
     if (data === undefined) {
