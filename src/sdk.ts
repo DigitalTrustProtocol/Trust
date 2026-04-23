@@ -10,19 +10,19 @@ import { getPublicKey } from 'nostr-tools/pure';
 import type { VerifiedEvent } from 'nostr-tools';
 import type { FastifyInstance } from 'fastify';
 
-import { PATHS, DEFAULT_CONFIG, type UserConfig, getRuntimeConfig, type ResolvedRuntimeConfig } from './config.js';
-import { loadKeyPair, getOrCreateKeyPair, loadSecretKey, type KeyPair } from './lib/keys.js';
+import { PATHS,  type UserConfig, getRuntimeConfig, type ResolvedRuntimeConfig } from './config.js';
+import { loadKeyPair, loadSecretKey, type KeyPair } from './lib/keys.js';
 import { parseAuthorPubkeyInput, parseSubjects, resolveTargetForQuery } from './lib/trust/subject.js';
 import { buildTrustEventTemplate } from './lib/nostr/nip32010.js';
 import { signEvent } from './lib/signer.js';
 import { getAvailableRelays, getRelays, publishEventWithReport, type PublishReport } from './lib/nostr/pool.js';
 import { Score } from './lib/trust/resolvers/Score.js';
-import standardResolver from './lib/trust/resolvers/trustResolver.js';
 import { loadGraph } from './lib/trust/graphManager.js';
 import { getRuntimeContext, setupStore, type RuntimeContext } from './lib/runtimeContext.js';
 import { createApp, type ServerService } from './server/app.js';
 import type { ResolveFormat } from './lib/trust/resolvers/IResolveStrategy.js';
 import type { GraphSyncResult } from './server/graph-sync.js';
+import indexResolver from './lib/trust/resolvers/IndexResolver.js';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -172,7 +172,7 @@ export async function resolve(subject: string, options?: ResolveOptions): Promis
   const ctx = await ensureRuntimeContext();
   const graph = await loadGraph(ctx); // TODO: This is super slow for large graphs
 
-  const scoreArray: Array<Score> = standardResolver.resolve(author, subjectId, {
+  const scoreArray: Array<Score> = indexResolver.resolve(author, subjectId, {
     graph,
     context,
     maxDepth: options?.maxDepth,
@@ -200,7 +200,7 @@ export async function resolveBatch(
   return subjects.map((subject) => {
     try {
       const { value: subjectId } = resolveTargetForQuery(subject);
-      const scores = standardResolver.resolve(author, subjectId, {
+      const scores = indexResolver.resolve(author, subjectId, {
         graph,
         context,
         maxDepth: options?.maxDepth,

@@ -6,10 +6,9 @@ import { getPublicKey } from 'nostr-tools/pure';
 import type { VerifiedEvent } from 'nostr-tools';
 import { Score } from '../../lib/trust/resolvers/Score.js';
 import { getLoadedGraph, loadGraph } from '../../lib/trust/graphManager.js';
-import standardResolver from '../../lib/trust/resolvers/trustResolver.js';
 import { RuntimeContext } from '../../lib/runtimeContext.js';
 import { ok, sendError, ErrorCode } from '../errors.js';
-import { getRuntimeConfig, PATHS, type UserConfig } from '../../config.js';
+import { getRuntimeConfig } from '../../config.js';
 import { logger } from '../../lib/logger.js';
 import { validateNip98Auth } from '../../lib/nostr/nip98.js';
 import { validateNip62Event } from '../../lib/nostr/nip62.js';
@@ -17,6 +16,7 @@ import { startGraphRelayListener } from '../graph-relay-listener.js';
 import { getLatestSyncTime, SYNC_TIME_NS_SYNC } from '../../lib/syncTime.js';
 import prettyBytes from 'pretty-bytes';
 import { buildPrivacyAccessPayload } from '../privacy/privacyAccess.js';
+import indexResolver from '../../lib/trust/resolvers/IndexResolver.js';
 
 type ResolveBody = {
   subject: string;
@@ -261,7 +261,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
         return sendError(reply, 500, ErrorCode.GRAPH_NOT_FOUND, 'Graph not loaded');
       }
 
-      const scoreArray: Array<Score> = standardResolver.resolve(author, subjectId, {
+      const scoreArray: Array<Score> = indexResolver.resolve(author, subjectId, {
         graph,
         context,
         maxDepth: body.maxDepth,
@@ -308,7 +308,7 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       const results = subjects.map((subject) => {
         try {
           const { value: subjectId } = resolveTargetForQuery(subject);
-          const scores = standardResolver.resolve(author, subjectId, {
+          const scores = indexResolver.resolve(author, subjectId, {
             graph,
             context,
             maxDepth: body.maxDepth,

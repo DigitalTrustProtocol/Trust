@@ -182,7 +182,7 @@ export interface UserConfig {
 const DEFAULT_SYNC_KINDS = [32010];
 
 export const DEFAULT_CONFIG: UserConfig = {
-  graphLoadMode: 'author',
+  graphLoadMode: 'all', //'author',
   version: 1,
   relays: DEFAULT_REMOTE_RELAYS,
   createdAt: new Date().toISOString(),

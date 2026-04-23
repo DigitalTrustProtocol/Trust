@@ -1,16 +1,13 @@
-import { existsSync } from 'node:fs';
 import { parseAuthorPubkeyInput, resolveTargetForQuery } from '../lib/trust/subject.js';
-import { loadSecretKey } from '../lib/keys.js';
-import { getPublicKey } from 'nostr-tools/pure';
 import { isServerAvailable, proxyResolve } from '../lib/client.js';
 import type { ResolveFormat } from '../lib/trust/resolvers/IResolveStrategy.js';
 import { Score } from '../lib/trust/resolvers/Score.js';
-import standardResolver from '../lib/trust/resolvers/trustResolver.js';
 import { loadGraph } from '../lib/trust/graphManager.js';
 import { getRuntimeConfig, type ResolvedRuntimeConfig } from '../config.js';
 import { getRuntimeContext, setupStore } from '../lib/runtimeContext.js';
 import { getPrimaryPublicKeyHex } from '../lib/identityStore.js';
 import { getServerBaseUrlFromState } from '../lib/server-state.js';
+import indexResolver from '../lib/trust/resolvers/IndexResolver.js';
 
 export type { ResolveFormat };
 
@@ -89,7 +86,7 @@ export async function resolveTrustCommand(options: {
   const { tag, value: subjectId } = resolveTargetForQuery(options.subject);
 
   const graph = await loadGraph(runtimeContext);
-  const scores = standardResolver.resolve(author, subjectId, {
+  const scores = indexResolver.resolve(author, subjectId, {
     graph,
     context: options.context,
     maxDepth: options.maxDepth,

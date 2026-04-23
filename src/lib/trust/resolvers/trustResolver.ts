@@ -168,6 +168,5 @@ class StandardResolver implements IResolveStrategy {
   }
 }
 
-//const standardResolver = new StandardResolver();
-const standardResolver = new IndexResolver();
+const standardResolver = new StandardResolver();
 export default standardResolver;
