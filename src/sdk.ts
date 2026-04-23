@@ -172,14 +172,16 @@ export async function resolve(subject: string, options?: ResolveOptions): Promis
   const ctx = await ensureRuntimeContext();
   const graph = await loadGraph(ctx); // TODO: This is super slow for large graphs
 
-  const scoreArray: Array<Score> = indexResolver.resolve(author, subjectId, {
+  const scoreResult = indexResolver.resolve(author, subjectId, {
     graph,
     context,
     maxDepth: options?.maxDepth,
     format,
   });
-  if (scoreArray.length === 0) return null;
-  return scoreArray[0];
+  if (!scoreResult.ok) {
+    throw new Error(`[${scoreResult.error.code}] ${scoreResult.error.message}`);
+  }
+  return scoreResult.data[0] ?? null;
 }
 
 /**
@@ -200,13 +202,20 @@ export async function resolveBatch(
   return subjects.map((subject) => {
     try {
       const { value: subjectId } = resolveTargetForQuery(subject);
-      const scores = indexResolver.resolve(author, subjectId, {
+      const scoreResult = indexResolver.resolve(author, subjectId, {
         graph,
         context,
         maxDepth: options?.maxDepth,
         format,
       });
-      return { subject, ok: true as const, score: scores };
+      if (!scoreResult.ok) {
+        return {
+          subject,
+          ok: false as const,
+          error: `[${scoreResult.error.code}] ${scoreResult.error.message}`,
+        };
+      }
+      return { subject, ok: true as const, score: scoreResult.data };
     } catch (err) {
       return { subject, ok: false as const, error: err instanceof Error ? err.message : String(err) };
     }

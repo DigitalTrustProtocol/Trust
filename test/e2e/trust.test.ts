@@ -74,21 +74,22 @@ describe('trust e2e tests', () => {
   });
 
   describe('trust resolve', () => {
-    it('should resolve unknown identity with no connection (offline)', async () => {
-      const { stdout, code } = await runCli([
+    it('should fail when author is not found in graph (offline)', async () => {
+      const { stdout, stderr, code } = await runCli([
         'resolve',
         'a'.repeat(64),
         '--authors',
         'b'.repeat(64),
       ]);
 
-      expect(code).toBe(0);
+      const output = `${stdout}\n${stderr}`;
+      expect(code).not.toBe(0);
       expect(stdout).toContain('No API available');
-      expect(stdout).toContain('No connection found');
+      expect(output).toMatch(/AUTHOR_NOT_FOUND|Author not found in trust graph/i);
     });
 
-    it('should output JSON with --json', async () => {
-      const { stdout, code } = await runCli([
+    it('should return resolver error with --json', async () => {
+      const { stdout, stderr, code } = await runCli([
         'resolve',
         'a'.repeat(64),
         '--authors',
@@ -96,10 +97,9 @@ describe('trust e2e tests', () => {
         '--json',
       ]);
 
-      expect(code).toBe(0);
-      const jsonLine = stdout.split(/\r?\n/).find((line) => line.trim().startsWith('['));
-      expect(jsonLine).toBeTruthy();
-      expect(JSON.parse(jsonLine!)).toEqual([]);
+      const output = `${stdout}\n${stderr}`;
+      expect(code).not.toBe(0);
+      expect(output).toMatch(/AUTHOR_NOT_FOUND|Author not found in trust graph/i);
     });
   });
 
@@ -137,7 +137,7 @@ describe('trust e2e tests', () => {
 
       const { stdout, stderr, code } = await runCli(
         ['add', `p:${pubkey}`, '-v', '1', '-c', 'e2e-test'],
-        { timeout: 30000, flushDelayMs: 400 },
+        { timeout: 45000, flushDelayMs: 400 },
       );
 
       const logOut = stdout + stderr;

@@ -1,7 +1,8 @@
-import { IResolveStrategy, IResolveStrategyOptions } from "./IResolveStrategy.js";
+import { IResolveStrategy, IResolveStrategyOptions, ResolveResult } from "./IResolveStrategy.js";
 import { Graph } from "../graph/Graph.js";
 import pathStrategyJson from "./PathStrategyJson.js";
 import { Score, IndexScoreMap } from "./Score.js";
+import { ErrorCode } from "../../../server/errors.js";
 
 const MAX_DEPTH = 4;
 
@@ -13,10 +14,16 @@ export class IndexResolver implements IResolveStrategy {
         authorId: string,
         subjectId: string,
         options: IResolveStrategyOptions = {}
-    ): Array<any> {
+    ): ResolveResult {
         const graph = options.graph as Graph;
         if (!graph) {
-            throw new Error('Graph is required for trust resolution. Call loadGraph() before resolve.');
+            return {
+                ok: false,
+                error: {
+                    code: ErrorCode.GRAPH_NOT_FOUND,
+                    message: 'Graph is required for trust resolution. Call loadGraph() before resolve.',
+                },
+            };
         }
 
         const time = Math.floor(Date.now() / 1000);
@@ -24,10 +31,26 @@ export class IndexResolver implements IResolveStrategy {
         subjectId = subjectId.toLowerCase().trim();
 
         const authorIndex = graph.nodesIndex.get(authorId);
-        if (authorIndex === undefined) return []; // No author node found, so no trust
+        if (authorIndex === undefined) {
+            return {
+                ok: false,
+                error: {
+                    code: ErrorCode.AUTHOR_NOT_FOUND,
+                    message: `Author not found in trust graph: ${authorId}`,
+                },
+            };
+        }
 
         const subjectIndex = graph.nodesIndex.get(subjectId);
-        if (subjectIndex === undefined) return []; // No subject node found, so no trust
+        if (subjectIndex === undefined) {
+            return {
+                ok: false,
+                error: {
+                    code: ErrorCode.SUBJECT_NOT_FOUND,
+                    message: `Subject not found in trust graph: ${subjectId}`,
+                },
+            };
+        }
 
         const scores = new IndexScoreMap();
         const authorScore = scores.getSubject(authorIndex, 0);
@@ -35,7 +58,8 @@ export class IndexResolver implements IResolveStrategy {
 
         if (authorId === subjectId) {
             authorScore.connected = true;
-            return [authorScore];
+            authorScore.subject = authorId;
+            return { ok: true, data: [authorScore] };
         }
 
 
@@ -45,11 +69,20 @@ export class IndexResolver implements IResolveStrategy {
 
 
         const subjectScore = scores.getSubject(subjectIndex, 0);
+        subjectScore.subject = subjectId;
         const subjectNode = graph.getNode(subjectId);
-        if (!subjectNode) return []; // No node found, so no trust
+        if (!subjectNode) {
+            return {
+                ok: false,
+                error: {
+                    code: ErrorCode.SUBJECT_NOT_FOUND,
+                    message: `Subject not found in trust graph: ${subjectId}`,
+                },
+            };
+        }
 
         const subjectIncoming = subjectNode.getIn(graph.getContextIndexes(context));
-        if (subjectIncoming.size === 0) return []; // No incoming edges, so no trust
+        if (subjectIncoming.size === 0) return { ok: true, data: [subjectScore] };
 
         const contextIndexes = graph.getContextIndexes(context, 'p');
 
@@ -94,11 +127,12 @@ export class IndexResolver implements IResolveStrategy {
         }
 
         if (options.format === 'path') {
-            return pathStrategyJson.resolve(authorIndex, subjectIndex, scores, graph);
+            const pathScores = pathStrategyJson.resolve(authorIndex, subjectIndex, scores, graph);
+            return { ok: true, data: pathScores.length > 0 ? pathScores : [subjectScore] };
         }
 
         subjectScore.connected = subjectScore.count > 0;
-        return [subjectScore];
+        return { ok: true, data: [subjectScore] };
     }
 
     private processTrusts(

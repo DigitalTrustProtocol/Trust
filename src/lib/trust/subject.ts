@@ -265,6 +265,10 @@ export function parseSubjects(inputs: string[]): ParsedSubject[] {
  * Resolve a trust **subject** for resolve/query APIs.
  */
 export function resolveTargetForQuery(target: string): { tag: SubjectTag; value: string } {
+  const trimmed = target.trim();
+  if (HEX_64.test(trimmed)) {
+    return { tag: 'p', value: trimmed.toLowerCase() };
+  }
   const parsed = parseSubject(target);
   return { tag: parsed.tag, value: parsed.value };
 }

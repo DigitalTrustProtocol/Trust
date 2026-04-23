@@ -4,7 +4,6 @@ import { parseAuthorPubkeyInput, resolveTargetForQuery } from '../../lib/trust/s
 import { loadSecretKey, loadKeyPair } from '../../lib/keys.js';
 import { getPublicKey } from 'nostr-tools/pure';
 import type { VerifiedEvent } from 'nostr-tools';
-import { Score } from '../../lib/trust/resolvers/Score.js';
 import { getLoadedGraph, loadGraph } from '../../lib/trust/graphManager.js';
 import { RuntimeContext } from '../../lib/runtimeContext.js';
 import { ok, sendError, ErrorCode } from '../errors.js';
@@ -261,14 +260,19 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
         return sendError(reply, 500, ErrorCode.GRAPH_NOT_FOUND, 'Graph not loaded');
       }
 
-      const scoreArray: Array<Score> = indexResolver.resolve(author, subjectId, {
+      const scoreResult = indexResolver.resolve(author, subjectId, {
         graph,
         context,
         maxDepth: body.maxDepth,
         format: body.format ?? 'default',
       });
 
-      return ok(scoreArray);
+      if (!scoreResult.ok) {
+        const status = scoreResult.error.code === ErrorCode.SUBJECT_NOT_FOUND || scoreResult.error.code === ErrorCode.AUTHOR_NOT_FOUND ? 404 : 500;
+        return sendError(reply, status, scoreResult.error.code, scoreResult.error.message);
+      }
+
+      return ok(scoreResult.data);
     },
   );
 
@@ -308,13 +312,20 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       const results = subjects.map((subject) => {
         try {
           const { value: subjectId } = resolveTargetForQuery(subject);
-          const scores = indexResolver.resolve(author, subjectId, {
+          const scoreResult = indexResolver.resolve(author, subjectId, {
             graph,
             context,
             maxDepth: body.maxDepth,
             format,
           });
-          return { subject, ok: true as const, score: scores };
+          if (!scoreResult.ok) {
+            return {
+              subject,
+              ok: false as const,
+              error: { code: scoreResult.error.code, message: scoreResult.error.message },
+            };
+          }
+          return { subject, ok: true as const, score: scoreResult.data };
         } catch (err) {
           return {
             subject,

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex } from '@noble/hashes/utils';
-import { computeDTag, buildTrustEventTemplate } from '../../../src/lib/nostr/nip32010.js';
+import {
+  computeDTag,
+  buildTrustEventTemplate,
+  canonicalizeHashIValue,
+  canonicalizeTypedSubjectIValue,
+  canonicalizeWebIValue,
+} from '../../../src/lib/nostr/nip32010.js';
 import type { ParsedSubject } from '../../../src/lib/trust/subject.js';
 
 describe('nip32010 computeDTag / buildTrustEventTemplate', () => {
@@ -105,6 +111,23 @@ describe('nip32010 computeDTag / buildTrustEventTemplate', () => {
         ['i', 'ext:doi:10.1/x'],
       ]);
       expect(t.tags.some((x) => x[0] === 'k')).toBe(false);
+    });
+  });
+
+  describe('canonicalization hardening', () => {
+    it('normalizes web urls (case, default port, duplicate and trailing slash)', () => {
+      expect(canonicalizeWebIValue('HTTPS://Example.COM:443//Trust///Path/?q=1#frag'))
+        .toBe('web:https://example.com/trust/path?q=1');
+    });
+
+    it('normalizes hash values (0x prefix and separators)', () => {
+      expect(canonicalizeHashIValue(' 0xAA-BB_cc 11 '))
+        .toBe('hash:aabbcc11');
+    });
+
+    it('normalizes typed i values with extra spaces around colons', () => {
+      expect(canonicalizeTypedSubjectIValue(' nostr : event : ABCDEF '))
+        .toBe('nostr:event:abcdef');
     });
   });
 });

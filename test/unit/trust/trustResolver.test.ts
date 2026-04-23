@@ -184,8 +184,10 @@ describe('IndexResolver', () => {
     });
     graph.applyTrustEvent(signTrust(template, SK_AUTHOR));
 
-    const scores = indexResolver.resolve(PUB_AUTHOR, PUB_AUTHOR, { graph });
-    expect(scores).toHaveLength(1);
-    expect(scores[0]!.connected).toBe(true);
+    const result = indexResolver.resolve(PUB_AUTHOR, PUB_AUTHOR, { graph });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0]!.connected).toBe(true);
   });
 });

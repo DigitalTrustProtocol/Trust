@@ -83,17 +83,20 @@ export async function resolveTrustCommand(options: {
     throw new Error('Author is required');
   }
 
-  const { tag, value: subjectId } = resolveTargetForQuery(options.subject);
+  const { value: subjectId } = resolveTargetForQuery(options.subject);
 
   const graph = await loadGraph(runtimeContext);
-  const scores = indexResolver.resolve(author, subjectId, {
+  const scoreResult = indexResolver.resolve(author, subjectId, {
     graph,
     context: options.context,
     maxDepth: options.maxDepth,
     format,
   });
+  if (!scoreResult.ok) {
+    throw new Error(`[${scoreResult.error.code}] ${scoreResult.error.message}`);
+  }
 
-  outputResolveResult(scores, subjectId, format, options.json ?? false);
+  outputResolveResult(scoreResult.data, subjectId, format, options.json ?? false);
 }
 
 

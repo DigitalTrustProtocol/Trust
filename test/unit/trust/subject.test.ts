@@ -194,10 +194,10 @@ describe('subject module', () => {
       expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
     });
 
-    it('should resolve bare hex as i (hash: query target)', () => {
+    it('should resolve bare hex as p (pubkey query target)', () => {
       const r = resolveTargetForQuery(TEST_PUBKEY);
-      expect(r.tag).toBe('i');
-      expect(r.value).toBe(`hash:${TEST_PUBKEY.toLowerCase()}`);
+      expect(r.tag).toBe('p');
+      expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
     });
 
     it('should resolve URL to canonical form', () => {

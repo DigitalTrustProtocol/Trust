@@ -100,14 +100,27 @@ export function canonicalizePubkeyValue(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function canonicalizeColonSeparatedSegments(value: string): string {
+  return value
+    .split(':')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0)
+    .join(':');
+}
+
 export function canonicalizeNostrIValue(type: string, value: string): string {
-  const normalizedType = type.trim().toLowerCase();
+  const normalizedType = canonicalizeColonSeparatedSegments(type).toLowerCase();
   const normalizedValue = value.trim().toLowerCase();
   return `nostr:${normalizedType}:${normalizedValue}`;
 }
 
 export function canonicalizeHashIValue(value: string): string {
-  return `hash:${value.trim().toLowerCase()}`;
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/^0x/, '')
+    .replace(/[^a-f0-9]/g, '');
+  return `hash:${normalized}`;
 }
 
 export function canonicalizeWebIValue(value: string): string {
@@ -117,9 +130,21 @@ export function canonicalizeWebIValue(value: string): string {
     const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(normalized);
     const withScheme = hasScheme ? normalized : `https://${normalized}`;
     const u = new URL(withScheme);
-    return `web:${(u.origin + u.pathname + u.search).toLowerCase()}`;
+    const protocol = u.protocol.toLowerCase();
+    const host = u.hostname.toLowerCase();
+    const isDefaultPort = (protocol === 'http:' && u.port === '80') || (protocol === 'https:' && u.port === '443');
+    const port = u.port && !isDefaultPort ? `:${u.port}` : '';
+    const pathname = (u.pathname || '/')
+      .replace(/\/{2,}/g, '/')
+      .replace(/\/+$/, '') || '/';
+    const search = u.search;
+    return `web:${`${protocol}//${host}${port}${pathname}${search}`.toLowerCase()}`;
   } catch {
-    return `web:${normalized.toLowerCase()}`;
+    const fallback = normalized
+      .toLowerCase()
+      .replace(/\/{2,}/g, '/')
+      .replace(/\/+$/, '');
+    return `web:${fallback}`;
   }
 }
 
@@ -131,17 +156,31 @@ export function canonicalizeEmailIValue(value: string): string {
   return `email:${value.trim().toLowerCase()}`;
 }
 
+/**
+ * Canonicalize context scopes:
+ * - trim surrounding whitespace
+ * - remove empty segments
+ * - keep ':' only between non-empty segments
+ * - lowercase for deterministic matching/derivation
+ */
+export function canonicalizeContextScope(context?: string | null): string {
+  if (context === undefined || context === null) return '';
+  const normalized = context.trim().toLowerCase();
+  if (normalized === '') return '';
+  return canonicalizeColonSeparatedSegments(normalized);
+}
+
 export function canonicalizeTypedSubjectIValue(value: string): string {
-  const raw = value.trim();
+  const raw = value.trim().replace(/\s*:\s*/g, ':');
   const iMatch = raw.match(/^([^:]+):(.*)$/s);
   if (!iMatch) return raw.toLowerCase();
 
-  const kind = iMatch[1]!.toLowerCase();
-  const rest = iMatch[2] ?? '';
+  const kind = iMatch[1]!.trim().toLowerCase();
+  const rest = (iMatch[2] ?? '').trim();
 
   if (kind === 'nostr') {
     const nostrMatch = rest.match(/^([^:]+):(.*)$/s);
-    if (!nostrMatch) return `nostr:${rest.toLowerCase()}`;
+    if (!nostrMatch) return `nostr:${canonicalizeColonSeparatedSegments(rest).toLowerCase()}`;
     return canonicalizeNostrIValue(nostrMatch[1]!, nostrMatch[2] ?? '');
   }
   if (kind === 'hash') return canonicalizeHashIValue(rest);
@@ -307,7 +346,8 @@ export function computeDTag(subjects: ParsedSubject[], context?: string): string
     base = bytesToHex(acc);
   }
 
-  if (context !== undefined && context !== null && context !== '') return `${base}|${context}`;
+  const canonicalContext = canonicalizeContextScope(context);
+  if (canonicalContext !== '') return `${base}|${canonicalContext}`;
   return base;
 }
 
@@ -324,6 +364,7 @@ export interface BuildTrustEventParams {
  */
 export function buildTrustEventTemplate(params: BuildTrustEventParams): EventTemplate {
   const { subjects, context, value, content = '' } = params;
+  const canonicalContext = canonicalizeContextScope(context);
 
   if (subjects.length === 0) {
     throw new Error('At least one subject required');
@@ -337,12 +378,12 @@ export function buildTrustEventTemplate(params: BuildTrustEventParams): EventTem
     throw new Error('Value must be 1, 0, or -1');
   }
 
-  const d = computeDTag(subjects, context);
+  const d = computeDTag(subjects, canonicalContext);
 
   const tags: string[][] = [['d', d], ['v', String(value)]];
 
-  if (context !== undefined && context !== null && context !== '') {
-    tags.push(['c', context]);
+  if (canonicalContext !== '') {
+    tags.push(['c', canonicalContext]);
   }
 
   // Subject tags: p, i
