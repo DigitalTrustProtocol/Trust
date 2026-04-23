@@ -1,6 +1,6 @@
 import { IGraph } from '../graph/Graph.js';
 import { Score } from './Score.js';
-import type { ErrorCodeType } from '../../../server/errors.js';
+import type { ApiEnvelope } from '../../../server/errors.js';
 
 /** Output format for resolve: number (trust−distrust), default (counts + degree), or path (includes paths). */
 export type ResolveFormat = 'number' | 'default' | 'path';
@@ -22,21 +22,11 @@ export interface IResolveStrategyOptions {
   format?: ResolveFormat;
 }
 
-export interface ResolveError {
-  code: ErrorCodeType;
-  message: string;
-}
-
-/** Resolver contract: explicit success/failure envelope for all callers (API/SDK/CLI/MCP). */
-export type ResolveResult =
-  | { ok: true; data: Array<Score> }
-  | { ok: false; error: ResolveError };
-
 export interface IResolveStrategy {
   readonly name: string;
   resolve(
     authorId: string,
     subjectId: string,
     options?: IResolveStrategyOptions
-  ): ResolveResult
+  ): ApiEnvelope<Array<Score>>
 }

@@ -268,11 +268,12 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       });
 
       if (!scoreResult.ok) {
-        const status = scoreResult.error.code === ErrorCode.SUBJECT_NOT_FOUND || scoreResult.error.code === ErrorCode.AUTHOR_NOT_FOUND ? 404 : 500;
-        return sendError(reply, status, scoreResult.error.code, scoreResult.error.message);
+        const err = scoreResult.error ?? { code: ErrorCode.INTERNAL_ERROR, message: 'Resolve failed without error details' };
+        const status = err.code === ErrorCode.SUBJECT_NOT_FOUND || err.code === ErrorCode.AUTHOR_NOT_FOUND ? 404 : 500;
+        return sendError(reply, status, err.code, err.message);
       }
 
-      return ok(scoreResult.data);
+      return scoreResult;
     },
   );
 
@@ -319,10 +320,11 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
             format,
           });
           if (!scoreResult.ok) {
+            const err = scoreResult.error ?? { code: ErrorCode.INTERNAL_ERROR, message: 'Resolve failed without error details' };
             return {
               subject,
               ok: false as const,
-              error: { code: scoreResult.error.code, message: scoreResult.error.message },
+              error: { code: err.code, message: err.message },
             };
           }
           return { subject, ok: true as const, score: scoreResult.data };

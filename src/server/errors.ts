@@ -38,3 +38,4 @@ export function fail(code: ErrorCodeType, message: string): ApiEnvelope<never> {
 export function sendError(reply: FastifyReply, status: number, code: ErrorCodeType, message: string) {
   return reply.code(status).send(fail(code, message));
 }
+

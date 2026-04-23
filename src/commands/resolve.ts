@@ -93,10 +93,12 @@ export async function resolveTrustCommand(options: {
     format,
   });
   if (!scoreResult.ok) {
-    throw new Error(`[${scoreResult.error.code}] ${scoreResult.error.message}`);
+    const err = scoreResult.error ?? { code: 'INTERNAL_ERROR', message: 'Resolve failed without error details' };
+    throw new Error(`[${err.code}] ${err.message}`);
   }
+  const scoreData = scoreResult.data ?? [];
 
-  outputResolveResult(scoreResult.data, subjectId, format, options.json ?? false);
+  outputResolveResult(scoreData, subjectId, format, options.json ?? false);
 }
 
 

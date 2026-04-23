@@ -1,8 +1,8 @@
-import { IResolveStrategy, IResolveStrategyOptions, ResolveResult } from "./IResolveStrategy.js";
+import { IResolveStrategy, IResolveStrategyOptions } from "./IResolveStrategy.js";
 import { Graph } from "../graph/Graph.js";
 import pathStrategyJson from "./PathStrategyJson.js";
 import { Score, IndexScoreMap } from "./Score.js";
-import { ErrorCode } from "../../../server/errors.js";
+import { ErrorCode, fail, type ApiEnvelope } from "../../../server/errors.js";
 
 const MAX_DEPTH = 4;
 
@@ -14,43 +14,25 @@ export class IndexResolver implements IResolveStrategy {
         authorId: string,
         subjectId: string,
         options: IResolveStrategyOptions = {}
-    ): ResolveResult {
+    ): ApiEnvelope<Array<Score>> {
         const graph = options.graph as Graph;
-        if (!graph) {
-            return {
-                ok: false,
-                error: {
-                    code: ErrorCode.GRAPH_NOT_FOUND,
-                    message: 'Graph is required for trust resolution. Call loadGraph() before resolve.',
-                },
-            };
-        }
+        if (!graph) 
+            return fail(ErrorCode.GRAPH_NOT_FOUND, 'Graph is required for trust resolution. Call loadGraph() before resolve.');
+        
 
         const time = Math.floor(Date.now() / 1000);
         authorId = authorId.toLowerCase().trim();
         subjectId = subjectId.toLowerCase().trim();
 
         const authorIndex = graph.nodesIndex.get(authorId);
-        if (authorIndex === undefined) {
-            return {
-                ok: false,
-                error: {
-                    code: ErrorCode.AUTHOR_NOT_FOUND,
-                    message: `Author not found in trust graph: ${authorId}`,
-                },
-            };
-        }
+        if (authorIndex === undefined) 
+            return fail(ErrorCode.AUTHOR_NOT_FOUND, `Author not found in trust graph: ${authorId}`);
+        
 
         const subjectIndex = graph.nodesIndex.get(subjectId);
-        if (subjectIndex === undefined) {
-            return {
-                ok: false,
-                error: {
-                    code: ErrorCode.SUBJECT_NOT_FOUND,
-                    message: `Subject not found in trust graph: ${subjectId}`,
-                },
-            };
-        }
+        if (subjectIndex === undefined) 
+            return fail(ErrorCode.SUBJECT_NOT_FOUND, `Subject not found in trust graph: ${subjectId}`);
+        
 
         const scores = new IndexScoreMap();
         const authorScore = scores.getSubject(authorIndex, 0);
@@ -75,15 +57,9 @@ export class IndexResolver implements IResolveStrategy {
         const subjectScore = scores.getSubject(subjectIndex, 0);
         subjectScore.subject = subjectId;
         const subjectNode = graph.getNode(subjectId);
-        if (!subjectNode) {
-            return {
-                ok: false,
-                error: {
-                    code: ErrorCode.SUBJECT_NOT_FOUND,
-                    message: `Subject not found in trust graph: ${subjectId}`,
-                },
-            };
-        }
+        if (!subjectNode) 
+            return fail(ErrorCode.SUBJECT_NOT_FOUND, `Subject not found in trust graph: ${subjectId}`);
+        
 
         const subjectIncoming = subjectNode.getIn(graph.getContextIndexes(context, subjectNode.type));
         if (subjectIncoming.size === 0) return { ok: true, data: [subjectScore] };

@@ -179,9 +179,11 @@ export async function resolve(subject: string, options?: ResolveOptions): Promis
     format,
   });
   if (!scoreResult.ok) {
-    throw new Error(`[${scoreResult.error.code}] ${scoreResult.error.message}`);
+    const err = scoreResult.error ?? { code: 'INTERNAL_ERROR', message: 'Resolve failed without error details' };
+    throw new Error(`[${err.code}] ${err.message}`);
   }
-  return scoreResult.data[0] ?? null;
+  const scoreData = scoreResult.data ?? [];
+  return scoreData[0] ?? null;
 }
 
 /**
@@ -209,13 +211,14 @@ export async function resolveBatch(
         format,
       });
       if (!scoreResult.ok) {
+        const err = scoreResult.error ?? { code: 'INTERNAL_ERROR', message: 'Resolve failed without error details' };
         return {
           subject,
           ok: false as const,
-          error: `[${scoreResult.error.code}] ${scoreResult.error.message}`,
+          error: `[${err.code}] ${err.message}`,
         };
       }
-      return { subject, ok: true as const, score: scoreResult.data };
+      return { subject, ok: true as const, score: scoreResult.data ?? [] };
     } catch (err) {
       return { subject, ok: false as const, error: err instanceof Error ? err.message : String(err) };
     }
