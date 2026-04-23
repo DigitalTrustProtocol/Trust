@@ -15,8 +15,6 @@ import { ExtendedNRelay, InsertEventOptions } from './dbManager.js';
 
 const DENORMALIZED_TAGS = new Set(['d', 'c', 't']);
 const packr = new Packr({ structuredClone: false });
-const DEFAULT_POSTGRES_EVENT_BATCH_WINDOW_MS = 100;
-const DEFAULT_POSTGRES_EVENT_BATCH_MAX_SIZE = 200;
 
 /** Bind JSONB columns as JSON text; nested JS arrays are otherwise serialized as PG array literals (`{{...}}`), which are invalid JSON. */
 function jsonb(value: unknown) {
@@ -63,12 +61,6 @@ export interface NPostgresOpts {
   indexExtensions?(event: NostrEvent): Record<string, string> | Promise<Record<string, string>>;
   /** Chunk size to use when streaming results with `.req`. Default: 20. */
   chunkSize?: number;
-  /** Batch writes before commit (strict ACK waits for commit). */
-  batchWrites?: boolean;
-  /** Maximum queue window before flushing a batch. Default: 100ms. */
-  batchWindowMs?: number;
-  /** Max events per batch. Default: 200. */
-  batchMaxSize?: number;
 }
 
 /** Query to select necessary fields from the `nostr_events` table. */
@@ -78,54 +70,12 @@ type SelectEventsQuery = SelectQueryBuilder<
   NPostgresSchema['nostr_events']
 >;
 
-type BatchEventPayload = {
-  id: string;
-  kind: number;
-  pubkey: string;
-  created_at: number;
-  firstseen: number;
-  raw_event_base64: string;
-  tags: string[][];
-  tags_index: Record<string, string[]>;
-  d: string | null;
-  t: string | null;
-  c: string | null;
-  search_text: string | null;
-  search_ext: Record<string, string>;
-  delete_ids: string[];
-  delete_addrs: string[];
-};
-
-type BatchResultRow = {
-  idx: number;
-  is_inserted: boolean;
-  is_deleted: boolean;
-  is_dublicate: boolean;
-  is_timeout: boolean;
-  is_error: boolean;
-  error_message: string | null;
-};
-
-type QueuedEvent = {
-  event: NostrEvent;
-  opts: InsertEventOptions;
-  payload: BatchEventPayload;
-  resolve: () => void;
-  reject: (err: unknown) => void;
-};
-
 export class NPostgres implements ExtendedNRelay {
   db: Kysely<NPostgresSchema>;
   private indexTags: (event: NostrEvent) => string[][];
   private indexSearch: (event: NostrEvent) => string | undefined;
   private indexExtensions: (event: NostrEvent) => Record<string, string> | Promise<Record<string, string>>;
   private chunkSize: number;
-  private readonly batchingEnabled: boolean;
-  private readonly batchWindowMs: number;
-  private readonly batchMaxSize: number;
-  private eventQueue: QueuedEvent[] = [];
-  private queueTimer: ReturnType<typeof setTimeout> | null = null;
-  private flushInFlight: Promise<void> | null = null;
 
   constructor(db: Kysely<any>, opts?: NPostgresOpts) {
     this.db = db as Kysely<NPostgresSchema>;
@@ -133,9 +83,6 @@ export class NPostgres implements ExtendedNRelay {
     this.indexSearch = opts?.indexSearch ?? NPostgres.indexSearch;
     this.indexExtensions = opts?.indexExtensions ?? (() => ({}));
     this.chunkSize = opts?.chunkSize ?? 20;
-    this.batchWindowMs = Math.max(1, opts?.batchWindowMs ?? DEFAULT_POSTGRES_EVENT_BATCH_WINDOW_MS);
-    this.batchMaxSize = Math.max(1, opts?.batchMaxSize ?? DEFAULT_POSTGRES_EVENT_BATCH_MAX_SIZE);
-    this.batchingEnabled = (opts?.batchWrites ?? true) && !this.db.isTransaction;
   }
 
   /** Default tag index function. */
@@ -156,30 +103,24 @@ export class NPostgres implements ExtendedNRelay {
   async event(event: NostrEvent, opts: InsertEventOptions = {}): Promise<void> {
     if (NKinds.ephemeral(event.kind)) return;
 
-    if (opts.signal?.aborted) return;
-    if (!this.batchingEnabled) {
-      return await this.eventImmediate(event, opts);
+    /*
+    // Removed because its slow
+    if (await this.isDeleted(event)) {
+      opts.isDeleted = true; // indicate that the event was deleted
+      opts.isInserted = false; // indicate that the event was not inserted into the database
+      return;
     }
-
-    const payload = await this.buildBatchPayload(event);
-    await new Promise<void>((resolve, reject) => {
-      this.eventQueue.push({ event, opts, payload, resolve, reject });
-      if (this.eventQueue.length >= this.batchMaxSize) {
-        this.scheduleBatchFlush(0);
-      } else {
-        this.scheduleBatchFlush(this.batchWindowMs);
-      }
-    });
-  }
-
-  private async eventImmediate(event: NostrEvent, opts: InsertEventOptions): Promise<void> {
+    */
     try {
-      await NPostgres.trx(this.db, (trx) => {
+      if (opts.signal?.aborted) return;
+      let result = await NPostgres.trx(this.db, (trx) => {
         return this.withTimeout(trx, opts.timeout, async (trx) => {
           if (event.kind === 5) await this.handleKind5(trx, event);
           opts.isInserted = await this.insertEvent(trx, event);
         });
       });
+
+      return result;
     } catch (e) {
       if (e instanceof Error) {
         opts.errorMessage = e.message;
@@ -196,137 +137,6 @@ export class NPostgres implements ExtendedNRelay {
       }
       throw e;
     }
-  }
-
-  private scheduleBatchFlush(delayMs: number): void {
-    if (this.queueTimer) {
-      clearTimeout(this.queueTimer);
-      this.queueTimer = null;
-    }
-    this.queueTimer = setTimeout(() => {
-      this.queueTimer = null;
-      void this.flushQueuedEvents();
-    }, delayMs);
-  }
-
-  private async flushQueuedEvents(): Promise<void> {
-    if (this.flushInFlight) {
-      await this.flushInFlight;
-      return;
-    }
-
-    this.flushInFlight = this.flushQueuedEventsInternal();
-    try {
-      await this.flushInFlight;
-    } finally {
-      this.flushInFlight = null;
-      if (this.eventQueue.length > 0) {
-        this.scheduleBatchFlush(0);
-      }
-    }
-  }
-
-  private async flushQueuedEventsInternal(): Promise<void> {
-    while (this.eventQueue.length > 0) {
-      const batch = this.eventQueue.splice(0, this.batchMaxSize);
-      const payload = batch.map((item) => item.payload);
-      const finiteTimeouts = batch
-        .map((item) => item.opts.timeout)
-        .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
-      const batchTimeout = finiteTimeouts.length > 0 ? Math.min(...finiteTimeouts) : undefined;
-
-      try {
-        const rows = await NPostgres.trx(this.db, (trx) =>
-          this.withTimeout(trx, batchTimeout, async (trx) => {
-            return await this.callBatchIngestFunction(trx, payload);
-          }),
-        );
-        const byIndex = new Map(rows.map((row) => [row.idx, row]));
-        for (let i = 0; i < batch.length; i++) {
-          const item = batch[i];
-          const row = byIndex.get(i);
-          if (!row) {
-            item.opts.isError = true;
-            item.opts.errorMessage = 'Batch ingest did not return a row for this event';
-            item.reject(new Error(item.opts.errorMessage));
-            continue;
-          }
-          this.applyBatchResultToOptions(row, item.opts);
-          item.resolve();
-        }
-      } catch (err) {
-        const fallbackMessage = err instanceof Error ? err.message : String(err);
-        for (const item of batch) {
-          item.opts.isError = true;
-          item.opts.errorMessage = fallbackMessage;
-          if (fallbackMessage.includes('statement timeout')) {
-            item.opts.isTimeout = true;
-          }
-          item.reject(err);
-        }
-      }
-    }
-  }
-
-  private async buildBatchPayload(event: NostrEvent): Promise<BatchEventPayload> {
-    const parameterized = NKinds.addressable(event.kind);
-    const d = parameterized ? event.tags.find(([name]) => name === 'd')?.[1] ?? '' : null;
-    const t = event.tags.find(([name]) => name === 't')?.[1] ?? null;
-    const c = event.tags.find(([name]) => name === 'c')?.[1] ?? null;
-    const tagsIndex = this.indexTags(event).reduce((result, [name, value]) => {
-      if (!result[name]) result[name] = [];
-      result[name].push(value);
-      return result;
-    }, {} as Record<string, string[]>);
-    const searchText = this.indexSearch(event);
-    const searchExt = await this.indexExtensions(event);
-    const firstseen = Math.floor(Date.now() / 1000);
-    const delete_ids = event.kind === 5
-      ? event.tags.filter(([name]) => name === 'e').map(([, value]) => value).filter(Boolean)
-      : [];
-    const delete_addrs = event.kind === 5
-      ? event.tags.filter(([name]) => name === 'a').map(([, value]) => value).filter(Boolean)
-      : [];
-
-    return {
-      id: event.id,
-      kind: event.kind,
-      pubkey: event.pubkey,
-      created_at: event.created_at,
-      firstseen,
-      raw_event_base64: Buffer.from(packr.pack(event)).toString('base64'),
-      tags: event.tags,
-      tags_index: tagsIndex,
-      d,
-      t,
-      c,
-      search_text: searchText ?? null,
-      search_ext: searchExt,
-      delete_ids,
-      delete_addrs,
-    };
-  }
-
-  private async callBatchIngestFunction(
-    trx: Kysely<NPostgresSchema>,
-    payload: BatchEventPayload[],
-  ): Promise<BatchResultRow[]> {
-    const q = sql<BatchResultRow>`
-      select idx, is_inserted, is_deleted, is_dublicate, is_timeout, is_error, error_message
-      from trust_ingest_events_batch(CAST(${JSON.stringify(payload)} AS jsonb))
-      order by idx asc
-    `;
-    const result = await q.execute(trx);
-    return result.rows;
-  }
-
-  private applyBatchResultToOptions(row: BatchResultRow, opts: InsertEventOptions): void {
-    opts.isInserted = row.is_inserted;
-    opts.isDeleted = row.is_deleted;
-    opts.isDublicate = row.is_dublicate;
-    opts.isTimeout = row.is_timeout;
-    opts.isError = row.is_error;
-    opts.errorMessage = row.error_message ?? undefined;
   }
 
   /** Check if an event has been deleted. */
@@ -835,9 +645,6 @@ export class NPostgres implements ExtendedNRelay {
         indexSearch: this.indexSearch,
         indexExtensions: this.indexExtensions,
         chunkSize: this.chunkSize,
-        batchWrites: this.batchingEnabled,
-        batchWindowMs: this.batchWindowMs,
-        batchMaxSize: this.batchMaxSize,
       });
 
       await callback(store, trx);
@@ -873,13 +680,6 @@ export class NPostgres implements ExtendedNRelay {
   }
 
   async close(): Promise<void> {
-    if (this.queueTimer) {
-      clearTimeout(this.queueTimer);
-      this.queueTimer = null;
-    }
-    if (this.eventQueue.length > 0) {
-      await this.flushQueuedEvents();
-    }
     await this.db.destroy();
   }
 
@@ -984,216 +784,6 @@ export class NPostgres implements ExtendedNRelay {
       .column('search_ext')
       .ifNotExists()
       .execute();
-
-    await sql.raw(`
-      create or replace function trust_ingest_events_batch(p_events jsonb)
-      returns table (
-        idx integer,
-        is_inserted boolean,
-        is_deleted boolean,
-        is_dublicate boolean,
-        is_timeout boolean,
-        is_error boolean,
-        error_message text
-      )
-      language plpgsql
-      as $$
-      declare
-        rec record;
-        v_kind integer;
-        v_pubkey text;
-        v_created_at bigint;
-        v_d text;
-        v_replaceable boolean;
-        v_parameterized boolean;
-        v_affected bigint;
-      begin
-        for rec in
-          select (ordinality - 1)::int as idx, value as evt
-          from jsonb_array_elements(p_events) with ordinality
-        loop
-          idx := rec.idx;
-          is_inserted := false;
-          is_deleted := false;
-          is_dublicate := false;
-          is_timeout := false;
-          is_error := false;
-          error_message := null;
-
-          begin
-            v_kind := (rec.evt->>'kind')::int;
-            v_pubkey := rec.evt->>'pubkey';
-            v_created_at := (rec.evt->>'created_at')::bigint;
-            v_parameterized := (v_kind >= 30000 and v_kind < 40000);
-            v_replaceable := (v_kind >= 10000 and v_kind < 20000) or v_kind in (0, 3);
-            v_d := case when v_parameterized then coalesce(rec.evt->>'d', '') else null end;
-
-            if exists (
-              select 1
-              from nostr_events ne
-              where ne.kind = 5
-                and ne.pubkey = v_pubkey
-                and (
-                  ne.tags_index @> jsonb_build_object('e', jsonb_build_array(rec.evt->>'id'))
-                  or (
-                    (v_replaceable or v_parameterized)
-                    and ne.tags_index @> jsonb_build_object('a', jsonb_build_array(concat(v_kind::text, ':', v_pubkey, ':', coalesce(v_d, ''))))
-                    and ne.created_at >= v_created_at
-                  )
-                )
-              limit 1
-            ) then
-              is_deleted := true;
-              return next;
-              continue;
-            end if;
-
-            if v_kind = 5 then
-              delete from nostr_events ne
-              where ne.pubkey = v_pubkey
-                and (
-                  ne.id in (
-                    select value
-                    from jsonb_array_elements_text(coalesce(rec.evt->'delete_ids', '[]'::jsonb))
-                  )
-                  or exists (
-                    select 1
-                    from jsonb_array_elements_text(coalesce(rec.evt->'delete_addrs', '[]'::jsonb)) as a(addr)
-                    where split_part(a.addr, ':', 2) = v_pubkey
-                      and split_part(a.addr, ':', 1) ~ '^[0-9]+$'
-                      and ne.kind = split_part(a.addr, ':', 1)::int
-                      and ne.created_at <= v_created_at
-                      and (
-                        split_part(a.addr, ':', 3) = ''
-                        or ne.d = split_part(a.addr, ':', 3)
-                      )
-                  )
-                );
-            end if;
-
-            if v_replaceable or v_parameterized then
-              insert into nostr_events (
-                id, kind, pubkey, created_at, firstseen, raw_event, tags, tags_index, d, t, c, search, search_ext
-              )
-              values (
-                rec.evt->>'id',
-                v_kind,
-                v_pubkey,
-                v_created_at,
-                coalesce((rec.evt->>'firstseen')::bigint, extract(epoch from now())::bigint),
-                decode(rec.evt->>'raw_event_base64', 'base64'),
-                coalesce(rec.evt->'tags', '[]'::jsonb),
-                coalesce(rec.evt->'tags_index', '{}'::jsonb),
-                v_d,
-                nullif(rec.evt->>'t', ''),
-                nullif(rec.evt->>'c', ''),
-                case
-                  when rec.evt->>'search_text' is null then null
-                  else to_tsvector(rec.evt->>'search_text')
-                end,
-                coalesce(rec.evt->'search_ext', '{}'::jsonb)
-              )
-              on conflict (kind, pubkey, d)
-                where kind >= 30000 and kind < 40000
-              do update set
-                id = excluded.id,
-                kind = excluded.kind,
-                pubkey = excluded.pubkey,
-                created_at = excluded.created_at,
-                raw_event = excluded.raw_event,
-                tags = excluded.tags,
-                tags_index = excluded.tags_index,
-                d = excluded.d,
-                t = excluded.t,
-                c = excluded.c,
-                search = excluded.search,
-                search_ext = excluded.search_ext
-              where nostr_events.created_at < excluded.created_at;
-            elsif v_replaceable then
-              insert into nostr_events (
-                id, kind, pubkey, created_at, firstseen, raw_event, tags, tags_index, d, t, c, search, search_ext
-              )
-              values (
-                rec.evt->>'id',
-                v_kind,
-                v_pubkey,
-                v_created_at,
-                coalesce((rec.evt->>'firstseen')::bigint, extract(epoch from now())::bigint),
-                decode(rec.evt->>'raw_event_base64', 'base64'),
-                coalesce(rec.evt->'tags', '[]'::jsonb),
-                coalesce(rec.evt->'tags_index', '{}'::jsonb),
-                null,
-                nullif(rec.evt->>'t', ''),
-                nullif(rec.evt->>'c', ''),
-                case
-                  when rec.evt->>'search_text' is null then null
-                  else to_tsvector(rec.evt->>'search_text')
-                end,
-                coalesce(rec.evt->'search_ext', '{}'::jsonb)
-              )
-              on conflict (kind, pubkey)
-                where kind >= 10000 and kind < 20000 or kind in (0, 3)
-              do update set
-                id = excluded.id,
-                kind = excluded.kind,
-                pubkey = excluded.pubkey,
-                created_at = excluded.created_at,
-                raw_event = excluded.raw_event,
-                tags = excluded.tags,
-                tags_index = excluded.tags_index,
-                d = excluded.d,
-                t = excluded.t,
-                c = excluded.c,
-                search = excluded.search,
-                search_ext = excluded.search_ext
-              where nostr_events.created_at < excluded.created_at;
-            else
-              insert into nostr_events (
-                id, kind, pubkey, created_at, firstseen, raw_event, tags, tags_index, d, t, c, search, search_ext
-              )
-              values (
-                rec.evt->>'id',
-                v_kind,
-                v_pubkey,
-                v_created_at,
-                coalesce((rec.evt->>'firstseen')::bigint, extract(epoch from now())::bigint),
-                decode(rec.evt->>'raw_event_base64', 'base64'),
-                coalesce(rec.evt->'tags', '[]'::jsonb),
-                coalesce(rec.evt->'tags_index', '{}'::jsonb),
-                null,
-                nullif(rec.evt->>'t', ''),
-                nullif(rec.evt->>'c', ''),
-                case
-                  when rec.evt->>'search_text' is null then null
-                  else to_tsvector(rec.evt->>'search_text')
-                end,
-                coalesce(rec.evt->'search_ext', '{}'::jsonb)
-              );
-            end if;
-
-            get diagnostics v_affected = row_count;
-            is_inserted := v_affected > 0;
-            if not is_inserted then
-              is_dublicate := true;
-            end if;
-          exception
-            when unique_violation then
-              is_inserted := false;
-              is_dublicate := true;
-            when query_canceled then
-              is_inserted := false;
-              is_timeout := true;
-            when others then
-              is_inserted := false;
-              is_error := true;
-              error_message := sqlerrm;
-          end;
-
-          return next;
-        end loop;
-      end;
-      $$;
-    `).execute(this.db);
 
     // Remove legacy graph LISTEN/NOTIFY triggers (graph updates follow the relay WebSocket instead).
     await sql.raw(`DROP TRIGGER IF EXISTS trg_nostr_events_ai_graph ON nostr_events`).execute(this.db);

@@ -6,6 +6,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { NostrClientREQ } from '@nostrify/types';
 import type WebSocket from 'ws';
 import type { RawData } from 'ws';
+import { performance } from 'node:perf_hooks';
 import { RuntimeContext } from '../../lib/runtimeContext.js';
 import { logger } from '../../lib/logger.js';
 import { parseClientMessage } from '../../lib/nostr/relayManager.js';
@@ -24,6 +25,10 @@ import { buildPrivacyAccessPayload } from '../privacy/privacyAccess.js';
 import { ok, sendError, ErrorCode } from '../errors.js';
 
 const HEX64 = /^[0-9a-f]{64}$/i;
+const RELAY_EVENT_SLOW_MS = Math.max(
+  1,
+  parseInt(process.env.TRUST_RELAY_EVENT_SLOW_MS ?? '100', 10) || 100,
+);
 
 function optionalRelayHexPubkey(raw: string | undefined): string | undefined {
   const v = raw?.trim().toLowerCase();
@@ -375,79 +380,151 @@ async function handleEvent(
   runtimeContext: RuntimeContext,
   clientIp?: string,
 ): Promise<boolean> {
+  const t0 = performance.now();
+  let verifyMs = 0;
+  let policyMs = 0;
+  let trustValidationMs = 0;
+  let nip62ValidationMs = 0;
+  let storeWriteMs = 0;
+  let ackSendMs = 0;
+  let result = 'unknown';
+
+  const sendOkWithTiming = (accepted: boolean, reason: string): void => {
+    const ackStart = performance.now();
+    sendRelayMessage(socket, ['OK', event.id, accepted, reason]);
+    ackSendMs += performance.now() - ackStart;
+  };
+
+  const maybeLogSlowEvent = (): void => {
+    const totalMs = performance.now() - t0;
+    if (totalMs < RELAY_EVENT_SLOW_MS) return;
+    logger.warn(
+      {
+        eventId: event.id,
+        kind: event.kind,
+        result,
+        thresholdMs: RELAY_EVENT_SLOW_MS,
+        totalMs: Number(totalMs.toFixed(1)),
+        verifyMs: Number(verifyMs.toFixed(1)),
+        policyMs: Number(policyMs.toFixed(1)),
+        trustValidationMs: Number(trustValidationMs.toFixed(1)),
+        nip62ValidationMs: Number(nip62ValidationMs.toFixed(1)),
+        storeWriteMs: Number(storeWriteMs.toFixed(1)),
+        ackSendMs: Number(ackSendMs.toFixed(1)),
+      },
+      'Relay: Slow EVENT processing',
+    );
+  };
+
   const store = runtimeContext.store;
   const lim = runtimeContext.relay.limitation;
 
-  if (!verifyEvent(event)) {
+  const verifyStart = performance.now();
+  const verified = verifyEvent(event);
+  verifyMs = performance.now() - verifyStart;
+  if (!verified) {
+    result = 'rejected_invalid_signature';
     logger.debug({ eventId: event.id }, 'Relay: Event rejected: invalid signature');
-    sendRelayMessage(socket, ['OK', event.id, false, 'invalid: failed event signature verification']);
+    sendOkWithTiming(false, 'invalid: failed event signature verification');
+    maybeLogSlowEvent();
     return false;
   }
 
+  const policyStart = performance.now();
   const policyReason = enforceRelayEventWritePolicy(event, lim, Math.floor(Date.now() / 1000));
+  policyMs = performance.now() - policyStart;
   if (policyReason) {
+    result = 'rejected_policy';
     logger.debug({ eventId: event.id, policyReason }, 'Relay: Event rejected by policy');
-    sendRelayMessage(socket, ['OK', event.id, false, policyReason]);
+    sendOkWithTiming(false, policyReason);
+    maybeLogSlowEvent();
     return false;
   }
 
   if (event.kind === KIND_TRUST) {
+    const trustValidationStart = performance.now();
     const trustEvent = asTrustEvent(event);
-    if (!isTrustEventValid(trustEvent)) {
+    const isValidTrust = isTrustEventValid(trustEvent);
+    trustValidationMs = performance.now() - trustValidationStart;
+    if (!isValidTrust) {
+      result = 'rejected_invalid_trust_event';
       logger.debug({ eventId: event.id }, 'invalid: invalid trust event');
-      sendRelayMessage(socket, ['OK', event.id, false, 'invalid: invalid trust event']);
+      sendOkWithTiming(false, 'invalid: invalid trust event');
+      maybeLogSlowEvent();
       return false; // reject the event if it is not a valid trust event
     }
   }
 
   if (event.kind === KIND_VANISH_REQUEST) {
+    const nip62ValidationStart = performance.now();
     const nip62 = validateNip62Event(runtimeContext.host, event);
+    nip62ValidationMs = performance.now() - nip62ValidationStart;
     if (!nip62.ok) {
-      sendRelayMessage(socket, ['OK', event.id, false, `invalid: ${nip62.reason}`]);
+      result = 'rejected_invalid_nip62';
+      sendOkWithTiming(false, `invalid: ${nip62.reason}`);
+      maybeLogSlowEvent();
       return false;
     }
 
+    const removeStart = performance.now();
     await store?.remove([{ authors: [nip62.pubkey], until: event.created_at }]);
-    sendRelayMessage(socket, ['OK', event.id, true, '']);
+    storeWriteMs = performance.now() - removeStart;
+    result = 'accepted_vanish';
+    sendOkWithTiming(true, '');
+    maybeLogSlowEvent();
     return true;
   }
 
   const opt: InsertEventOptions = {};
+  const writeStart = performance.now();
   await store?.event(event, opt); // add the event to the database
+  storeWriteMs = performance.now() - writeStart;
 
   if (opt.isInserted) {
     if (clientIp) {
       recordPrivacyIpForPubkey(event.pubkey, clientIp, 'relay_write');
     }
     //logger.debug({ eventId: event.id }, 'Relay: Event accepted');
-    sendRelayMessage(socket, ['OK', event.id, true, '']);
+    result = 'accepted_inserted';
+    sendOkWithTiming(true, '');
+    maybeLogSlowEvent();
     return true;
   } 
 
   if (opt.isDeleted) {
     //logger.debug({ eventId: event.id }, 'Relay: Event rejected: deleted');
-    sendRelayMessage(socket, ['OK', event.id, false, 'deleted: Event was deleted by another event (Kind 5)']);
+    result = 'rejected_deleted';
+    sendOkWithTiming(false, 'deleted: Event was deleted by another event (Kind 5)');
+    maybeLogSlowEvent();
     return false;
   }
 
   if (opt.isDublicate) {
     //logger.debug({ eventId: event.id }, 'Relay: Event rejected: duplicate');
-    sendRelayMessage(socket, ['OK', event.id, false, 'duplicate: Event already exists in the database']);
+    result = 'rejected_duplicate';
+    sendOkWithTiming(false, 'duplicate: Event already exists in the database');
+    maybeLogSlowEvent();
     return false;
   }
 
   if (opt.isTimeout) {
     //logger.debug({ eventId: event.id }, 'Relay: Event rejected: timeout');
-    sendRelayMessage(socket, ['OK', event.id, false, 'timeout: Timeout while adding event to the database']);
+    result = 'rejected_timeout';
+    sendOkWithTiming(false, 'timeout: Timeout while adding event to the database');
+    maybeLogSlowEvent();
     return false;
   }
 
   if (opt.isError) {
     //logger.debug({ eventId: event.id }, 'Relay: Event rejected: error');
-    sendRelayMessage(socket, ['OK', event.id, false, opt.errorMessage ?? 'error: filtered or rejected']);
+    result = 'rejected_error';
+    sendOkWithTiming(false, opt.errorMessage ?? 'error: filtered or rejected');
+    maybeLogSlowEvent();
     return false;
   }
   
+  result = 'rejected_unknown';
+  maybeLogSlowEvent();
   return false;
 }
 

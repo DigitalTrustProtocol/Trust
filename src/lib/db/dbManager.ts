@@ -40,7 +40,11 @@ export type NSQLiteDbInput = string | Database.Database;
 
 export async function createStore(cfg: ResolvedRuntimeConfig): Promise<Store> {
   if (cfg.database === 'postgres') {
-    const store = await createNPostgresStore(cfg.connectionString);
+    const store = await createNPostgresStore(cfg.connectionString, {
+      batchWrites: cfg.postgresBatching.enabled,
+      batchWindowMs: cfg.postgresBatching.windowMs,
+      batchMaxSize: cfg.postgresBatching.maxSize,
+    });
     await migratePostgresKV(store.db);
     return store;
   }
@@ -60,12 +64,19 @@ export async function createStore(cfg: ResolvedRuntimeConfig): Promise<Store> {
 
 
 
-export async function createNPostgresStore(url: string): Promise<NPostgres> {
+export async function createNPostgresStore(
+  url: string,
+  opts?: { batchWrites?: boolean; batchWindowMs?: number; batchMaxSize?: number },
+): Promise<NPostgres> {
   const pool = new Pool({ connectionString: url });
   const db = new Kysely<any>({
     dialect: new PostgresDialect({ pool, cursor: Cursor }),
   });
-  const store = new NPostgres(db);
+  const store = new NPostgres(db, {
+    batchWrites: opts?.batchWrites,
+    batchWindowMs: opts?.batchWindowMs,
+    batchMaxSize: opts?.batchMaxSize,
+  });
   await store.migrate();
   return store;
 }

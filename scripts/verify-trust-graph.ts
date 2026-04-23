@@ -17,6 +17,7 @@
 import type { IncomingMessage } from 'node:http';
 import { join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
+import { performance } from 'node:perf_hooks';
 import { hexToBytes } from '@noble/hashes/utils';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { nip19, type NostrEvent, type VerifiedEvent } from 'nostr-tools';
@@ -31,6 +32,10 @@ const RESOLVE_URL = process.env.TRUST_RESOLVE_URL ?? deriveResolveUrl(RELAY_URL)
 const RELAY_CONNECT_TIMEOUT_MS = Math.max(
   1000,
   parseInt(process.env.TRUST_RELAY_CONNECT_TIMEOUT_MS ?? '15000', 10) || 15_000,
+);
+const RELAY_PUBLISH_BATCH_SIZE = Math.max(
+  1,
+  parseInt(process.env.TRUST_VERIFY_PUBLISH_BATCH_SIZE ?? '200', 10) || 200,
 );
 
 interface TrustGraphFixture {
@@ -88,11 +93,36 @@ interface RelayMessageNotice {
 
 type RelayMessage = RelayMessageOk | RelayMessageNotice;
 
+interface PublishTiming {
+  totalMs: number;
+  sendQueueMs: number;
+  ackWaitMs: number;
+}
+
+interface PublishSample extends PublishTiming {
+  eventId: string;
+  from: string | number;
+  to: string | number;
+  context?: string;
+}
+
+interface PreparedPublish {
+  conn: TrustGraphFixture['connections'][number];
+  event: VerifiedEvent;
+}
+
+interface PublishWindowSample {
+  size: number;
+  elapsedMs: number;
+}
+
 async function main() {
+  const scriptStartMs = performance.now();
   console.log('🔍 Trust Graph Relay Verification\n');
   console.log(`Fixture: ${FIXTURE_PATH}`);
   console.log(`Relay:   ${RELAY_URL}`);
   console.log(`Resolve: ${RESOLVE_URL}\n`);
+  console.log(`Publish batching: ${RELAY_PUBLISH_BATCH_SIZE} events/window\n`);
 
   if (!existsSync(FIXTURE_PATH)) {
     console.error(`❌ Fixture not found: ${FIXTURE_PATH}`);
@@ -112,15 +142,25 @@ async function main() {
 
   const keys = validateAndNormalizeKeys(fixture.keys);
   const byPubkey = new Map(keys.map((key) => [key.pubkey, key]));
+  let relayConnectMs = 0;
+  let publishWallTotalMs = 0;
+  const publishSamples: PublishSample[] = [];
+  const publishWindows: PublishWindowSample[] = [];
+  let resolveTotalMs = 0;
+  let resolveMaxMs = 0;
+  let resolveMaxLabel = '';
 
   const httpOrigin = deriveHttpOriginFromRelay(RELAY_URL);
   console.log(`Checking Trust HTTP API (${httpOrigin}/v1/ping)…`);
   await preflightHttpServer(httpOrigin);
 
   console.log(`Connecting to relay WebSocket (timeout ${RELAY_CONNECT_TIMEOUT_MS}ms)…`);
+  const relayConnectStart = performance.now();
   const relay = await openRelay(RELAY_URL, RELAY_CONNECT_TIMEOUT_MS, { httpHealthOk: true });
+  relayConnectMs = performance.now() - relayConnectStart;
+  console.log(`Relay WebSocket connected in ${formatDuration(relayConnectMs)}`);
   try {
-    let published = 0;
+    const preparedPublishes: PreparedPublish[] = [];
     for (const conn of fixture.connections) {
       const fromPubkey = resolvePubkey(conn.from, keys);
       const toPubkey = resolvePubkey(conn.to, keys);
@@ -136,9 +176,34 @@ async function main() {
         value,
       });
       const event = finalizeEvent(template, hexToBytes(signer.privkey)) as VerifiedEvent;
-      await publishToRelay(relay, event);
-      published++;
+      preparedPublishes.push({ conn, event });
     }
+
+    let published = 0;
+    const publishWallStart = performance.now();
+    for (let i = 0; i < preparedPublishes.length; i += RELAY_PUBLISH_BATCH_SIZE) {
+      const window = preparedPublishes.slice(i, i + RELAY_PUBLISH_BATCH_SIZE);
+      const windowStart = performance.now();
+      const windowResults = await Promise.all(
+        window.map(async ({ conn, event }) => {
+          const publishTiming = await publishToRelay(relay, event);
+          return { conn, event, publishTiming };
+        }),
+      );
+      const windowElapsedMs = performance.now() - windowStart;
+      publishWindows.push({ size: window.length, elapsedMs: windowElapsedMs });
+      for (const { conn, event, publishTiming } of windowResults) {
+        publishSamples.push({
+          ...publishTiming,
+          eventId: event.id,
+          from: conn.from,
+          to: conn.to,
+          context: conn.context,
+        });
+        published++;
+      }
+    }
+    publishWallTotalMs = performance.now() - publishWallStart;
 
     console.log(`Published ${published} trust events\n`);
   } finally {
@@ -155,12 +220,19 @@ async function main() {
     const label = `issuer ${exp.issuer} -> subject ${exp.subject}${ctx}`;
 
     try {
+      const resolveStart = performance.now();
       const result = await resolveFromServer({
         resolveUrl: RESOLVE_URL,
         author: issuerPubkey,
         subject: subjectPubkey,
         context: exp.context,
       });
+      const resolveMs = performance.now() - resolveStart;
+      resolveTotalMs += resolveMs;
+      if (resolveMs > resolveMaxMs) {
+        resolveMaxMs = resolveMs;
+        resolveMaxLabel = label;
+      }
 
       const got: ResolveResult = {
         connected: Boolean(result.connected),
@@ -183,14 +255,14 @@ async function main() {
       if (ok) {
         console.log(`✓ ${label}`);
         console.log(
-          `  connected=${got.connected} degree=${got.degree} trust=${got.trust} distrust=${got.distrust}`,
+          `  connected=${got.connected} degree=${got.degree} trust=${got.trust} distrust=${got.distrust} (resolve ${formatDuration(resolveMs)})`,
         );
         passed++;
       } else {
         console.log(`✗ ${label}`);
         console.log(`  expected: connected=${expConnected} degree=${expDegree} trust=${expTrust} distrust=${expDistrust}`);
         console.log(
-          `  got:      connected=${got.connected} degree=${got.degree} trust=${got.trust} distrust=${got.distrust}`,
+          `  got:      connected=${got.connected} degree=${got.degree} trust=${got.trust} distrust=${got.distrust} (resolve ${formatDuration(resolveMs)})`,
         );
         failed++;
       }
@@ -213,7 +285,79 @@ async function main() {
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);
+  const scriptElapsedMs = performance.now() - scriptStartMs;
+  const publishCount = fixture.connections.length;
+  const resolveCount = fixture.expected.length;
+  console.log('\nTiming Summary');
+  console.log(`  Relay connect:            ${formatDuration(relayConnectMs)}`);
+  const publishLatencyAvgMs =
+    publishSamples.length > 0
+      ? publishSamples.reduce((sum, sample) => sum + sample.totalMs, 0) / publishSamples.length
+      : 0;
+  const publishThroughputPerSec = publishWallTotalMs > 0 ? (publishCount * 1000) / publishWallTotalMs : 0;
+  console.log(
+    `  Relay publish total:      ${formatDuration(publishWallTotalMs)} (${publishCount} events, ${publishWindows.length} windows, ${publishThroughputPerSec.toFixed(
+      1,
+    )} events/s)`,
+  );
+  console.log(
+    `  Relay publish avg ack:    ${formatDuration(publishLatencyAvgMs)} per event`,
+  );
+  const publishStats = getDurationStats(publishSamples.map((x) => x.totalMs));
+  if (publishStats) {
+    console.log(
+      `  Relay publish ack dist:   min ${formatDuration(publishStats.min)} p50 ${formatDuration(
+        publishStats.p50,
+      )} p95 ${formatDuration(publishStats.p95)} max ${formatDuration(publishStats.max)}`,
+    );
+  }
+  const windowStats = getDurationStats(publishWindows.map((x) => x.elapsedMs));
+  if (windowStats) {
+    console.log(
+      `  Relay publish window ms:  min ${formatDuration(windowStats.min)} p50 ${formatDuration(
+        windowStats.p50,
+      )} p95 ${formatDuration(windowStats.p95)} max ${formatDuration(windowStats.max)}`,
+    );
+  }
+  const slowestWindows = [...publishWindows]
+    .sort((a, b) => b.elapsedMs - a.elapsedMs)
+    .slice(0, Math.min(3, publishWindows.length));
+  if (slowestWindows.length > 0) {
+    console.log('  Slowest publish windows:');
+    for (const window of slowestWindows) {
+      console.log(
+        `    - ${formatDuration(window.elapsedMs)} (${window.size} events, avg ${formatDuration(
+          window.size > 0 ? window.elapsedMs / window.size : 0,
+        )}/event wall-clock)`,
+      );
+    }
+  }
+  const topSlowPublishes = [...publishSamples]
+    .sort((a, b) => b.totalMs - a.totalMs)
+    .slice(0, Math.min(3, publishSamples.length));
+  if (topSlowPublishes.length > 0) {
+    console.log('  Slowest ACK events:');
+    for (const sample of topSlowPublishes) {
+      const ctx = sample.context !== undefined ? ` context=${sample.context || 'global'}` : '';
+      console.log(
+        `    - ${formatDuration(sample.totalMs)} from=${sample.from} to=${sample.to}${ctx} event=${sample.eventId}`,
+      );
+    }
+  }
+  console.log(
+    `  Resolve API total:        ${formatDuration(resolveTotalMs)} (${resolveCount} requests, avg ${formatDuration(
+      resolveCount > 0 ? resolveTotalMs / resolveCount : 0,
+    )})`,
+  );
+  console.log(
+    `  Resolve API slowest:      ${formatDuration(resolveMaxMs)}${resolveMaxLabel ? ` (${resolveMaxLabel})` : ''}`,
+  );
+  console.log(`  Script total elapsed:     ${formatDuration(scriptElapsedMs)}`);
   process.exit(failed > 0 ? 1 : 0);
+}
+
+function formatDuration(ms: number): string {
+  return `${ms.toFixed(1)}ms`;
 }
 
 function deriveResolveUrl(relayUrl: string): string {
@@ -422,9 +566,12 @@ async function openRelay(
   });
 }
 
-async function publishToRelay(ws: WebSocket, event: NostrEvent): Promise<void> {
+async function publishToRelay(ws: WebSocket, event: NostrEvent): Promise<PublishTiming> {
   const timeoutMs = 10_000;
-  await new Promise<void>((resolve, reject) => {
+  const startMs = performance.now();
+  const payload = JSON.stringify(['EVENT', event]);
+  return await new Promise<PublishTiming>((resolve, reject) => {
+    let sendQueuedMs = startMs;
     const timer = setTimeout(() => {
       cleanup();
       reject(new Error(`Timed out waiting for relay ACK: ${event.id}`));
@@ -446,7 +593,11 @@ async function publishToRelay(ws: WebSocket, event: NostrEvent): Promise<void> {
         reject(new Error(`Relay rejected event ${event.id}: ${message.reason}`));
         return;
       }
-      resolve();
+      const ackAtMs = performance.now();
+      const queueMs = Math.max(0, sendQueuedMs - startMs);
+      const totalMs = Math.max(0, ackAtMs - startMs);
+      const ackWaitMs = Math.max(0, totalMs - queueMs);
+      resolve({ totalMs, sendQueueMs: queueMs, ackWaitMs });
     };
 
     const onError = (err: Error) => {
@@ -469,8 +620,32 @@ async function publishToRelay(ws: WebSocket, event: NostrEvent): Promise<void> {
     ws.on('message', onMessage);
     ws.on('error', onError);
     ws.on('close', onClose);
-    ws.send(JSON.stringify(['EVENT', event]));
+    ws.send(payload, (err?: Error) => {
+      if (err) {
+        cleanup();
+        reject(err);
+        return;
+      }
+      sendQueuedMs = performance.now();
+    });
   });
+}
+
+function getDurationStats(values: number[]): { min: number; p50: number; p95: number; max: number } | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return {
+    min: sorted[0],
+    p50: percentileFromSorted(sorted, 0.5),
+    p95: percentileFromSorted(sorted, 0.95),
+    max: sorted[sorted.length - 1],
+  };
+}
+
+function percentileFromSorted(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * p) - 1));
+  return sorted[idx];
 }
 
 function parseRelayMessage(raw: WebSocket.RawData): RelayMessage | null {

@@ -135,6 +135,11 @@ export interface UserConfig {
     driver?: 'sqlite' | 'postgres';
     sqlitePath?: string;
     postgresUrl?: string;
+    postgresBatching?: {
+      enabled?: boolean;
+      windowMs?: number;
+      maxSize?: number;
+    };
   };
   profile?: {
     name?: string;
@@ -249,6 +254,12 @@ export type ResolvedRuntimeConfig = UserConfig & {
   connectionString: string;
   /** Remote API fallback URL (default: https://trust.dance). */
   remoteApiUrl: string;
+  /** Effective Postgres write batching settings (env overrides config file). */
+  postgresBatching: {
+    enabled: boolean;
+    windowMs: number;
+    maxSize: number;
+  };
 };
 
 
@@ -583,6 +594,36 @@ function looksLikePostgresUrl(s: string): boolean {
   return s.startsWith('postgres://') || s.startsWith('postgresql://');
 }
 
+function parseEnvBoolean(raw: string | undefined): boolean | undefined {
+  if (raw === undefined) return undefined;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') return true;
+  if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') return false;
+  return undefined;
+}
+
+function parsePositiveInt(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const parsed = parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed;
+}
+
+function resolvePostgresBatching(base: UserConfig): { enabled: boolean; windowMs: number; maxSize: number } {
+  const configEnabled = base.db?.postgresBatching?.enabled;
+  const configWindowMs = base.db?.postgresBatching?.windowMs;
+  const configMaxSize = base.db?.postgresBatching?.maxSize;
+
+  const envEnabled = parseEnvBoolean(process.env.TRUST_PG_BATCH_ENABLED);
+  const envWindowMs = parsePositiveInt(process.env.TRUST_PG_BATCH_WINDOW_MS);
+  const envMaxSize = parsePositiveInt(process.env.TRUST_PG_BATCH_MAX_SIZE);
+
+  const enabled = envEnabled ?? configEnabled ?? true;
+  const windowMs = Math.max(1, envWindowMs ?? configWindowMs ?? 100);
+  const maxSize = Math.max(1, envMaxSize ?? configMaxSize ?? 200);
+  return { enabled, windowMs, maxSize };
+}
+
 function parseKindsEnv(raw: string | undefined): number[] | undefined {
   if (raw === undefined || raw.trim() === '') return undefined;
   const out: number[] = [];
@@ -759,6 +800,7 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
   }
 
   const remoteApiUrl = (process.env.TRUST_REMOTE_API_URL?.trim() || base.remoteApiUrl || DEFAULT_REMOTE_API_URL);
+  const postgresBatching = resolvePostgresBatching(base);
 
   const relayLimitation = mergeRelayLimitation(base.relay?.limitation);
   const relayInfo = resolveRelayRuntimeInfo(host, base);
@@ -781,6 +823,7 @@ export function resolveConfig(cli: Record<string, unknown> = {}): ResolvedRuntim
     database,
     connectionString,
     remoteApiUrl,
+    postgresBatching,
     publicOrigin: relayInfo.publicOrigin,
     relayIconUrl: relayInfo.iconUrl,
     termsOfServiceUrl: relayInfo.termsOfServiceUrl,
