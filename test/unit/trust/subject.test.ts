@@ -19,10 +19,10 @@ const TEST_EVENT_ID = 'b'.repeat(64);
 describe('subject module', () => {
   describe('parseSubject', () => {
     describe('bare hex and explicit tags', () => {
-      it('should parse bare 64-char hex as h (content hash)', () => {
+      it('should parse bare 64-char hex as i (hash: typed id)', () => {
         const r = parseSubject(TEST_PUBKEY);
-        expect(r.tag).toBe('h');
-        expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
+        expect(r.tag).toBe('i');
+        expect(r.value).toBe(`hash:${TEST_PUBKEY.toLowerCase()}`);
         expect(r.k).toBeUndefined();
       });
 
@@ -35,8 +35,8 @@ describe('subject module', () => {
 
       it('should force event id with e: prefix for 64-char hex', () => {
         const r = parseSubject(`e:${TEST_EVENT_ID}`);
-        expect(r.tag).toBe('e');
-        expect(r.value).toBe(TEST_EVENT_ID.toLowerCase());
+        expect(r.tag).toBe('i');
+        expect(r.value).toBe(`nevent:${TEST_EVENT_ID.toLowerCase()}`);
       });
 
       it('should force pubkey with p: prefix for 64-char hex', () => {
@@ -47,8 +47,8 @@ describe('subject module', () => {
 
       it('should force URL with r: prefix', () => {
         const r = parseSubject('r:example.com/foo');
-        expect(r.tag).toBe('r');
-        expect(r.value).toBe('https://example.com/foo');
+        expect(r.tag).toBe('i');
+        expect(r.value).toBe('url:https://example.com/foo');
       });
     });
 
@@ -67,35 +67,35 @@ describe('subject module', () => {
         expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
       });
 
-      it('should parse note as event with k=1 (short note kind)', () => {
+      it('should parse note as typed i (node id)', () => {
         const note = encodeNote(TEST_EVENT_ID);
         const r = parseSubject(note);
-        expect(r.tag).toBe('e');
-        expect(r.value).toBe(TEST_EVENT_ID.toLowerCase());
-        expect(r.k).toBe('1');
-      });
-
-      it('should parse nevent without kind as e without k', () => {
-        const nevent = encodeNevent(TEST_EVENT_ID);
-        const r = parseSubject(nevent);
-        expect(r.tag).toBe('e');
-        expect(r.value).toBe(TEST_EVENT_ID.toLowerCase());
+        expect(r.tag).toBe('i');
+        expect(r.value).toBe(`node:${TEST_EVENT_ID.toLowerCase()}`);
         expect(r.k).toBeUndefined();
       });
 
-      it('should parse nevent with kind as e with asserted k', () => {
-        const nevent = encodeNevent(TEST_EVENT_ID, undefined, undefined, 30023);
+      it('should parse nevent without kind as i (nevent id)', () => {
+        const nevent = encodeNevent(TEST_EVENT_ID);
         const r = parseSubject(nevent);
-        expect(r.tag).toBe('e');
-        expect(r.value).toBe(TEST_EVENT_ID.toLowerCase());
-        expect(r.k).toBe('30023');
+        expect(r.tag).toBe('i');
+        expect(r.value).toBe(`nevent:${TEST_EVENT_ID.toLowerCase()}`);
+        expect(r.k).toBeUndefined();
       });
 
-      it('should parse naddr as addressable', () => {
+      it('should parse nevent with kind as i (nevent id)', () => {
+        const nevent = encodeNevent(TEST_EVENT_ID, undefined, undefined, 30023);
+        const r = parseSubject(nevent);
+        expect(r.tag).toBe('i');
+        expect(r.value).toBe(`nevent:${TEST_EVENT_ID.toLowerCase()}`);
+        expect(r.k).toBeUndefined();
+      });
+
+      it('should parse naddr as typed i (naddressable)', () => {
         const naddr = encodeNaddr(30023, TEST_PUBKEY, 'my-article');
         const r = parseSubject(naddr);
-        expect(r.tag).toBe('a');
-        expect(r.value).toBe(`30023:${TEST_PUBKEY.toLowerCase()}:my-article`);
+        expect(r.tag).toBe('i');
+        expect(r.value).toBe(`naddressable:30023:${TEST_PUBKEY.toLowerCase()}:my-article`);
       });
     });
 
@@ -111,22 +111,22 @@ describe('subject module', () => {
     describe('a tag', () => {
       it('should parse kind:pubkey:d format', () => {
         const r = parseSubject(`30023:${TEST_PUBKEY}:my-id`);
-        expect(r.tag).toBe('a');
-        expect(r.value).toBe(`30023:${TEST_PUBKEY.toLowerCase()}:my-id`);
+        expect(r.tag).toBe('i');
+        expect(r.value).toBe(`naddressable:30023:${TEST_PUBKEY.toLowerCase()}:my-id`);
       });
     });
 
     describe('URL', () => {
-      it('should parse https URL as r tag', () => {
+      it('should parse https URL as i (url:)', () => {
         const r = parseSubject('https://example.com/path?q=1');
-        expect(r.tag).toBe('r');
-        expect(r.value).toBe('https://example.com/path?q=1');
+        expect(r.tag).toBe('i');
+        expect(r.value).toBe('url:https://example.com/path?q=1');
       });
 
       it('should strip fragment from URL', () => {
         const r = parseSubject('https://example.com/path#section');
-        expect(r.tag).toBe('r');
-        expect(r.value).toBe('https://example.com/path');
+        expect(r.tag).toBe('i');
+        expect(r.value).toBe('url:https://example.com/path');
       });
     });
 
@@ -134,8 +134,8 @@ describe('subject module', () => {
       it('should parse h: prefix for hash', () => {
         const hash = 'c'.repeat(64);
         const r = parseSubject('h:' + hash);
-        expect(r.tag).toBe('h');
-        expect(r.value).toBe(hash.toLowerCase());
+        expect(r.tag).toBe('i');
+        expect(r.value).toBe(`hash:${hash.toLowerCase()}`);
       });
     });
 
@@ -143,14 +143,14 @@ describe('subject module', () => {
       it('should parse isbn:', () => {
         const r = parseSubject('isbn:978-0-76-538203-0');
         expect(r.tag).toBe('i');
-        expect(r.value).toBe('isbn:9780765382030');
+        expect(r.value).toBe('ext:isbn:9780765382030');
         expect(r.k).toBe('isbn');
       });
 
       it('should parse doi:', () => {
         const r = parseSubject('doi:10.1234/example.paper');
         expect(r.tag).toBe('i');
-        expect(r.value).toBe('doi:10.1234/example.paper');
+        expect(r.value).toBe('ext:doi:10.1234/example.paper');
         expect(r.k).toBe('doi');
       });
 
@@ -181,8 +181,8 @@ describe('subject module', () => {
       expect(results).toHaveLength(2);
       expect(results[0].tag).toBe('p');
       expect(results[0].value).toBe(TEST_PUBKEY.toLowerCase());
-      expect(results[1].tag).toBe('e');
-      expect(results[1].value).toBe(TEST_EVENT_ID.toLowerCase());
+      expect(results[1].tag).toBe('i');
+      expect(results[1].value).toBe(`node:${TEST_EVENT_ID.toLowerCase()}`);
     });
   });
 
@@ -194,16 +194,16 @@ describe('subject module', () => {
       expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
     });
 
-    it('should resolve bare hex as h (subject / query target)', () => {
+    it('should resolve bare hex as i (hash: query target)', () => {
       const r = resolveTargetForQuery(TEST_PUBKEY);
-      expect(r.tag).toBe('h');
-      expect(r.value).toBe(TEST_PUBKEY.toLowerCase());
+      expect(r.tag).toBe('i');
+      expect(r.value).toBe(`hash:${TEST_PUBKEY.toLowerCase()}`);
     });
 
     it('should resolve URL to canonical form', () => {
       const r = resolveTargetForQuery('https://example.com/foo');
-      expect(r.tag).toBe('r');
-      expect(r.value).toBe('https://example.com/foo');
+      expect(r.tag).toBe('i');
+      expect(r.value).toBe('url:https://example.com/foo');
     });
   });
 

@@ -100,39 +100,37 @@ describe('sdk add() subject parsing and k tags', () => {
     expect(seq).toEqual([['p', TEST_PUBKEY]]);
   });
 
-  it('note → e then k=1', async () => {
+  it('note → i (node id), no k', async () => {
     const event = await addOne(encodeNote(TEST_EVENT_ID));
     const seq = subjectWireTags(event.tags);
-    expect(seq[0]).toEqual(['e', TEST_EVENT_ID.toLowerCase()]);
-    expect(seq[1]).toEqual(['k', '1']);
-    expect(seq).toHaveLength(2);
+    expect(seq).toEqual([['i', `node:${TEST_EVENT_ID.toLowerCase()}`]]);
   });
 
-  it('nevent without kind → e, no k', async () => {
+  it('nevent without kind → i (nevent id), no k', async () => {
     const event = await addOne(encodeNevent(TEST_EVENT_ID));
     const seq = subjectWireTags(event.tags);
-    expect(seq).toEqual([['e', TEST_EVENT_ID.toLowerCase()]]);
+    expect(seq).toEqual([['i', `nevent:${TEST_EVENT_ID.toLowerCase()}`]]);
   });
 
-  it('nevent with kind → e then k (decimal kind)', async () => {
+  it('nevent with kind → i (nevent id), no k', async () => {
     const event = await addOne(encodeNevent(TEST_EVENT_ID, undefined, undefined, 30023));
     const seq = subjectWireTags(event.tags);
-    expect(seq[0]).toEqual(['e', TEST_EVENT_ID.toLowerCase()]);
-    expect(seq[1]).toEqual(['k', '30023']);
-    expect(seq).toHaveLength(2);
+    expect(seq).toEqual([['i', `nevent:${TEST_EVENT_ID.toLowerCase()}`]]);
   });
 
-  it('naddr → a, no k', async () => {
+  it('naddr → i (naddressable), no k', async () => {
     const event = await addOne(encodeNaddr(30023, TEST_PUBKEY, 'article-id'));
     const seq = subjectWireTags(event.tags);
-    expect(seq).toEqual([['a', `30023:${TEST_PUBKEY}:article-id`]]);
+    expect(seq).toEqual([
+      ['i', `naddressable:30023:${TEST_PUBKEY}:article-id`],
+    ]);
   });
 
-  it('a:<kind>:<pubkey>:<d> → a, no k', async () => {
+  it('a:<kind>:<pubkey>:<d> → i (naddressable), no k', async () => {
     const pk = '4'.repeat(64);
     const event = await addOne(`a:0:${pk}:param-d`);
     const seq = subjectWireTags(event.tags);
-    expect(seq).toEqual([['a', `0:${pk.toLowerCase()}:param-d`]]);
+    expect(seq).toEqual([['i', `naddressable:0:${pk.toLowerCase()}:param-d`]]);
   });
 
   it('p:<64-hex> → p, no k', async () => {
@@ -149,72 +147,67 @@ describe('sdk add() subject parsing and k tags', () => {
     expect(seq).toEqual([['p', pk.toLowerCase()]]);
   });
 
-  it('e:<64-hex> → e, no k', async () => {
+  it('e:<64-hex> → i (nevent id), no k', async () => {
     const id = 'f'.repeat(64);
     const event = await addOne(`e:${id}`);
     const seq = subjectWireTags(event.tags);
-    expect(seq).toEqual([['e', id.toLowerCase()]]);
+    expect(seq).toEqual([['i', `nevent:${id.toLowerCase()}`]]);
   });
 
-  it('h:<64-hex> → h, no k', async () => {
+  it('h:<64-hex> → i (hash:), no k', async () => {
     const hash = '1'.repeat(64);
     const event = await addOne(`h:${hash}`);
     const seq = subjectWireTags(event.tags);
-    expect(seq).toEqual([['h', hash.toLowerCase()]]);
+    expect(seq).toEqual([['i', `hash:${hash.toLowerCase()}`]]);
   });
 
-  it('bare 64-hex → h (content hash), no k', async () => {
+  it('bare 64-hex → i (hash:), no k', async () => {
     const hash = '2'.repeat(64);
     const event = await addOne(hash);
     const seq = subjectWireTags(event.tags);
-    expect(seq).toEqual([['h', hash.toLowerCase()]]);
+    expect(seq).toEqual([['i', `hash:${hash.toLowerCase()}`]]);
   });
 
-  it('https URL → r, no k', async () => {
+  it('https URL → i (url:), no k', async () => {
     const event = await addOne('https://example.com/path?q=1');
     const seq = subjectWireTags(event.tags);
-    expect(seq).toEqual([['r', 'https://example.com/path?q=1']]);
+    expect(seq).toEqual([['i', 'url:https://example.com/path?q=1']]);
   });
 
-  it('r:<host/path> → r, no k', async () => {
+  it('r:<host/path> → i (url:), no k', async () => {
     const event = await addOne('r:example.com/foo');
     const seq = subjectWireTags(event.tags);
-    expect(seq).toEqual([['r', 'https://example.com/foo']]);
+    expect(seq).toEqual([['i', 'url:https://example.com/foo']]);
   });
 
-  it('kind:pubkey:d → a, no k', async () => {
+  it('kind:pubkey:d → i (naddressable), no k', async () => {
     const pk = '3'.repeat(64);
     const event = await addOne(`0:${pk}:dval`);
     const seq = subjectWireTags(event.tags);
-    expect(seq).toEqual([['a', `0:${pk.toLowerCase()}:dval`]]);
+    expect(seq).toEqual([['i', `naddressable:0:${pk.toLowerCase()}:dval`]]);
   });
 
-  it('isbn: → i then k', async () => {
+  it('isbn: → i (ext:isbn), no k', async () => {
     const event = await addOne('isbn:978-0-76-538203-0');
     const seq = subjectWireTags(event.tags);
-    expect(seq[0]).toEqual(['i', 'isbn:9780765382030']);
-    expect(seq[1]).toEqual(['k', 'isbn']);
-    expect(seq).toHaveLength(2);
+    expect(seq).toEqual([['i', 'ext:isbn:9780765382030']]);
   });
 
-  it('i:<nip73> → i then k', async () => {
+  it('i:<nip73> → i (ext:doi), no k', async () => {
     const event = await addOne('i:doi:10.1234/example.paper');
     const seq = subjectWireTags(event.tags);
-    expect(seq[0]).toEqual(['i', 'doi:10.1234/example.paper']);
-    expect(seq[1]).toEqual(['k', 'doi']);
+    expect(seq).toEqual([['i', 'ext:doi:10.1234/example.paper']]);
   });
 
-  it('batch: note + isbn preserves e,k then i,k order', async () => {
+  it('batch: note + isbn preserves i then i order', async () => {
     const event = await add([encodeNote(TEST_EVENT_ID), 'isbn:9780000000001'], {
       relays: [],
       value: 1,
     });
     const seq = subjectWireTags(event.tags);
-    expect(seq[0]).toEqual(['e', TEST_EVENT_ID.toLowerCase()]);
-    expect(seq[1]).toEqual(['k', '1']);
-    expect(seq[2]).toEqual(['i', 'isbn:9780000000001']);
-    expect(seq[3]).toEqual(['k', 'isbn']);
-    expect(seq).toHaveLength(4);
+    expect(seq[0]).toEqual(['i', `node:${TEST_EVENT_ID.toLowerCase()}`]);
+    expect(seq[1]).toEqual(['i', 'ext:isbn:9780000000001']);
+    expect(seq).toHaveLength(2);
   });
 
   it('calls publishEventWithReport with empty relay list when relaysResolved is []', async () => {

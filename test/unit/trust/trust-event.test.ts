@@ -59,9 +59,9 @@ describe('nip32010 computeDTag / buildTrustEventTemplate', () => {
     });
 
     it('non-64-hex preimage hashes to fragment', () => {
-      const s: ParsedSubject = { tag: 'r', value: 'https://example.com/a', k: '' };
+      const s: ParsedSubject = { tag: 'i', value: 'url:https://example.com/a' };
       const te = new TextEncoder();
-      expect(computeDTag([s])).toBe(`${bytesToHex(sha256(te.encode(s.value)))}`);
+      expect(computeDTag([s])).toBe(`${bytesToHex(sha256(te.encode(s.value.toLowerCase())))}`);
     });
 
     it('empty subjects throws', () => {
@@ -88,22 +88,23 @@ describe('nip32010 computeDTag / buildTrustEventTemplate', () => {
       expect(t.tags).toContainEqual(['v', '0']);
     });
 
-    it('emits k immediately after e when asserted kind is set', () => {
-      const subj: ParsedSubject = { tag: 'e', value: 'b'.repeat(64), k: '1' };
+    it('emits i tag with typed subject value (no k wire tags)', () => {
+      const subj: ParsedSubject = { tag: 'i', value: `node:${'b'.repeat(64)}` };
       const t = buildTrustEventTemplate({ subjects: [subj], value: 1 });
-      const eIdx = t.tags.findIndex((x) => x[0] === 'e');
-      expect(eIdx).toBeGreaterThanOrEqual(0);
-      expect(t.tags[eIdx + 1]).toEqual(['k', '1']);
+      expect(t.tags).toContainEqual(['i', `node:${'b'.repeat(64)}`]);
+      expect(t.tags.some((x) => x[0] === 'k')).toBe(false);
     });
 
-    it('pairs k with each i subject in wire order', () => {
-      const s1: ParsedSubject = { tag: 'i', value: 'isbn:9780000000001', k: 'isbn' };
-      const s2: ParsedSubject = { tag: 'i', value: 'doi:10.1/x', k: 'doi' };
+    it('emits one i tag per subject in wire order (no k wire tags)', () => {
+      const s1: ParsedSubject = { tag: 'i', value: 'ext:isbn:9780000000001', k: 'isbn' };
+      const s2: ParsedSubject = { tag: 'i', value: 'ext:doi:10.1/x', k: 'doi' };
       const t = buildTrustEventTemplate({ subjects: [s1, s2], value: 1 });
-      expect(t.tags).toContainEqual(['i', 'isbn:9780000000001']);
-      expect(t.tags).toContainEqual(['k', 'isbn']);
-      expect(t.tags).toContainEqual(['i', 'doi:10.1/x']);
-      expect(t.tags).toContainEqual(['k', 'doi']);
+      const iTags = t.tags.filter((x) => x[0] === 'i');
+      expect(iTags).toEqual([
+        ['i', 'ext:isbn:9780000000001'],
+        ['i', 'ext:doi:10.1/x'],
+      ]);
+      expect(t.tags.some((x) => x[0] === 'k')).toBe(false);
     });
   });
 });

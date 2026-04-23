@@ -1,14 +1,7 @@
-import { IGraph } from "../graph/Graph.js";
-import { KIND_TRUST } from "../../nostr/nip32010.js";
 import { IResolveStrategy, IResolveStrategyOptions } from "./IResolveStrategy.js";
-import { Score, ScoreMap } from "./Score.js";
-import { type EdgeSubject } from "../graph/EdgeMap.js";
-import { IEdge } from "../graph/Edge.js";
-import pathStrategyJson from "./pathStrategyJson.js";
 import { IndexGraph } from "../IndexGraph/IndexGraph.js";
-import { subscribe } from "diagnostics_channel";
-import { IndexScore, IndexScoreMap } from "./IndexScore.js";
 import indexPathStrategyJson from "./indexPathStrategyJson.js";
+import { IndexScore, IndexScoreMap } from "./IndexScore.js";
 
 const MAX_DEPTH = 4;
 
@@ -31,10 +24,10 @@ export class IndexResolver implements IResolveStrategy {
         subjectId = subjectId.toLowerCase().trim();
 
         const authorIndex = graph.nodesIndex.get(authorId);
-        if (!authorIndex) return []; // No author node found, so no trust
+        if (authorIndex === undefined) return []; // No author node found, so no trust
 
         const subjectIndex = graph.nodesIndex.get(subjectId);
-        if (!subjectIndex) return []; // No subject node found, so no trust
+        if (subjectIndex === undefined) return []; // No subject node found, so no trust
 
         const scores = new IndexScoreMap();
         const authorScore = scores.getSubject(authorIndex, 0);
@@ -69,8 +62,8 @@ export class IndexResolver implements IResolveStrategy {
             degree++;
 
             for (let i = nodeCounter; i < degreeLength; i++) {
-                const aIndex = queue[i];
-                const edgeIndex = subjectIncoming.get(authorIndex);
+                const aIndex = queue[i]!;
+                const edgeIndex = subjectIncoming.get(aIndex);
                 if (edgeIndex) {
                     const authorScore = scores.get(aIndex);
                     if (!authorScore) continue;

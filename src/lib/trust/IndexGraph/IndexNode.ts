@@ -31,29 +31,6 @@ export class IndexNode {
         }
     }
 
-    /*
-    getOut(contextIndexes: Array<number>): Map<number, number> | undefined {
-        if (contextIndexes.length === 1) {
-            let outMap = this.out.get(contextIndexes[0]);
-            if (!outMap) return undefined;
-            return outMap;
-        }
-
-        let result = new Map<number, number>();
-        for (const contextIndex of contextIndexes) {
-            let result = new Map<number, number>();
-            for (const contextIndex of contextIndexes) {
-                let outMap = this.out.get(contextIndex);
-                if (!outMap) continue;
-                for (const [subjectIndex, edgeIndex] of outMap.entries()) {
-                    result.set(subjectIndex, edgeIndex);
-                }
-            }
-        }
-        return result;
-    }
-*/
-
     getIn(contextIndexes: Array<number>): Map<number, number> {
         let result = new Map<number, number>();
         for (const contextIndex of contextIndexes) {

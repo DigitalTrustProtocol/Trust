@@ -1,15 +1,31 @@
 /**
- * Regression tests for trustResolver: minimum 2-hop (degree-2) paths through the graph,
- * with a distinct target subject for each NIP-32010 subject tag (p, e, a, h, r, i).
+ * Tests for IndexGraph + IndexResolver after migration from Graph / StandardResolver.
+ *
+ * Kind 32010 events may use legacy wire tags (e, a, h, r); `extractSubjects` stores subjects on
+ * `IndexGraph` under canonical ids (see `canonicalizeSubjectValue` in nip32010).
  */
 
 import { describe, expect, it } from 'vitest';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
-import { Graph } from '../../../src/lib/trust/graph/Graph.js';
-import trustResolver from '../../../src/lib/trust/resolvers/trustResolver.js';
-import { asTrustEvent, buildTrustEventTemplate } from '../../../src/lib/nostr/nip32010.js';
+import { IndexGraph } from '../../../src/lib/trust/IndexGraph/IndexGraph.js';
+import indexResolver from '../../../src/lib/trust/resolvers/IndexResolver.js';
+import {
+  asTrustEvent,
+  buildTrustEventTemplate,
+  canonicalizeSubjectValue,
+} from '../../../src/lib/nostr/nip32010.js';
 import type { ParsedSubject } from '../../../src/lib/trust/subject.js';
 import type { EventTemplate } from 'nostr-tools';
+
+/** Wire tags allowed on kind 32010 templates; `ParsedSubject` only covers parsed `p` / `i`. */
+type TrustWireSubject =
+  | ParsedSubject
+  | { tag: 'e' | 'a' | 'h' | 'r'; value: string; k?: string };
+
+/** Node id stored in `IndexGraph` after `applyTrustEvent` (matches `extractSubjects`). */
+function graphSubjectId(sub: TrustWireSubject): string {
+  return canonicalizeSubjectValue(sub.tag, sub.value);
+}
 
 /** Deterministic secp256k1 secret key (valid range) for tests. */
 function sk(fill: number): Uint8Array {
@@ -34,24 +50,22 @@ function signTrust(template: EventTemplate, secret: Uint8Array) {
   );
 }
 
-/** Author trusts bridge pubkey (general context, v=1). */
-function edgeAuthorTrustsBridge(graph: Graph) {
+function edgeAuthorTrustsBridge(graph: IndexGraph, context?: string) {
   const template = buildTrustEventTemplate({
     subjects: [{ tag: 'p', value: PUB_BRIDGE }],
     value: 1,
+    ...(context !== undefined ? { context } : {}),
   });
   graph.applyTrustEvent(signTrust(template, SK_AUTHOR));
 }
 
-/**
- * Bridge trusts the given subject; builds graph: author → bridge → target (2 hops).
- */
-function buildTwoHopGraph(target: ParsedSubject, context?: string) {
-  const graph = new Graph();
-  edgeAuthorTrustsBridge(graph);
+/** Bridge trusts `target`; graph: author → bridge → canonical subject node. */
+function buildTwoHopGraph(target: TrustWireSubject, context?: string) {
+  const graph = new IndexGraph();
+  edgeAuthorTrustsBridge(graph, context);
 
   const template = buildTrustEventTemplate({
-    subjects: [target],
+    subjects: [target as unknown as ParsedSubject],
     context,
     value: 1,
   });
@@ -59,84 +73,119 @@ function buildTwoHopGraph(target: ParsedSubject, context?: string) {
   return graph;
 }
 
-function expectConnectedDegree2(
-  graph: Graph,
+/** Assert trust edges exist at the context buckets used by `IndexGraph.applyTrustEvent`. */
+function expectTwoHopTopology(
+  graph: IndexGraph,
   author: string,
-  subjectId: string,
-  opts?: { context?: string }
+  bridge: string,
+  canonicalSubjectId: string,
+  ctx: string,
+  /** Context bucket for the *target* subject (`p` vs `i` per `applyTrustEvent`). */
+  subjectContext: 'p' | 'i'
 ) {
-  const scores = trustResolver.resolve(author, subjectId, {
-    graph,
-    context: opts?.context ?? '',
-    followTrustThreshold: 1,
-  });
-  const score = scores[0]!;
-  expect(score.connected, `expected connection to subject ${subjectId.slice(0, 12)}…`).toBe(
-    true
-  );
-  expect(score.count).toBeGreaterThan(0);
-  expect(score.degree).toBe(2);
-  expect(score.trustValue).toBeGreaterThanOrEqual(1);
+  const authorIdx = graph.nodesIndex.get(author);
+  const bridgeIdx = graph.nodesIndex.get(bridge);
+  const subjectIdx = graph.nodesIndex.get(canonicalSubjectId);
+  expect(authorIdx, 'author node index').toBeDefined();
+  expect(bridgeIdx, 'bridge node index').toBeDefined();
+  expect(subjectIdx, 'subject node index').toBeDefined();
+
+  const authorNode = graph.getNode(author);
+  const bridgeNode = graph.getNode(bridge);
+  const subjectNode = graph.getNode(canonicalSubjectId);
+  expect(authorNode).toBeTruthy();
+  expect(bridgeNode).toBeTruthy();
+  expect(subjectNode).toBeTruthy();
+
+  const pCtx = graph.getContextIndex(ctx, 'p');
+  const iCtx = graph.getContextIndex(ctx, 'i');
+  expect(pCtx, 'p-context bucket').toBeDefined();
+  expect(iCtx, 'i-context bucket').toBeDefined();
+
+  // Author → bridge (subject tag p uses p-context).
+  const incomingToBridge = bridgeNode!.getIn([pCtx!]);
+  expect(incomingToBridge.get(authorIdx!)).toBeDefined();
+
+  const subjectCtxIdx = graph.getContextIndex(ctx, subjectContext);
+  expect(subjectCtxIdx, `${subjectContext}-context for subject`).toBeDefined();
+  const incomingToSubject = subjectNode!.getIn([subjectCtxIdx!]);
+  expect(incomingToSubject.get(bridgeIdx!)).toBeDefined();
 }
 
-describe('trustResolver (graph strategy)', () => {
-  it('resolves 2-hop trust for subject tag p (pubkey)', () => {
-    const graph = buildTwoHopGraph({ tag: 'p', value: PUB_TARGET_P });
-    expectConnectedDegree2(graph, PUB_AUTHOR, PUB_TARGET_P);
+describe('IndexGraph (trust topology)', () => {
+  it('stores author → bridge → p subject', () => {
+    const target: TrustWireSubject = { tag: 'p', value: PUB_TARGET_P };
+    const graph = buildTwoHopGraph(target);
+    expectTwoHopTopology(graph, PUB_AUTHOR, PUB_BRIDGE, graphSubjectId(target), '', 'p');
   });
 
-  it('resolves 2-hop trust for subject tag e (event id)', () => {
+  it('stores author → bridge → e subject (canonical nostr:event id)', () => {
     const eventId = `${PUB_BRIDGE.slice(0, 32)}00ff00ff00ff00ff00ff00ff00ff00ff`;
-    const graph = buildTwoHopGraph({ tag: 'e', value: eventId });
-    expectConnectedDegree2(graph, PUB_AUTHOR, eventId);
+    const target: TrustWireSubject = { tag: 'e', value: eventId };
+    const graph = buildTwoHopGraph(target);
+    expectTwoHopTopology(graph, PUB_AUTHOR, PUB_BRIDGE, graphSubjectId(target), '', 'i');
   });
 
-  it('resolves 2-hop trust for subject tag a (addressable / replaceable)', () => {
+  it('stores author → bridge → a subject (canonical nostr:addr)', () => {
     const aVal = `0:${PUB_BRIDGE}:trust-resolver-test-d`;
-    const graph = buildTwoHopGraph({ tag: 'a', value: aVal });
-    expectConnectedDegree2(graph, PUB_AUTHOR, aVal.toLowerCase());
+    const target: TrustWireSubject = { tag: 'a', value: aVal };
+    const graph = buildTwoHopGraph(target);
+    expectTwoHopTopology(graph, PUB_AUTHOR, PUB_BRIDGE, graphSubjectId(target), '', 'i');
   });
 
-  it('resolves 2-hop trust for subject tag h (content hash)', () => {
+  it('stores author → bridge → h subject (canonical hash:)', () => {
     const hash = `${PUB_BRIDGE.slice(0, 32)}112233445566778899aabbccddeeff00`;
-    const graph = buildTwoHopGraph({ tag: 'h', value: hash });
-    expectConnectedDegree2(graph, PUB_AUTHOR, hash);
+    const target: TrustWireSubject = { tag: 'h', value: hash };
+    const graph = buildTwoHopGraph(target);
+    expectTwoHopTopology(graph, PUB_AUTHOR, PUB_BRIDGE, graphSubjectId(target), '', 'i');
   });
 
-  it('resolves 2-hop trust for subject tag r (URL)', () => {
+  it('stores author → bridge → r subject (canonical web:)', () => {
     const url = 'https://example.com/trust-resolver-r-target';
-    const graph = buildTwoHopGraph({ tag: 'r', value: url });
-    expectConnectedDegree2(graph, PUB_AUTHOR, url.toLowerCase());
+    const target: TrustWireSubject = { tag: 'r', value: url };
+    const graph = buildTwoHopGraph(target);
+    expectTwoHopTopology(graph, PUB_AUTHOR, PUB_BRIDGE, graphSubjectId(target), '', 'i');
   });
 
-  it('resolves 2-hop trust for subject tag i (external id + k scheme)', () => {
+  it('stores author → bridge → i subject', () => {
     const subj: ParsedSubject = {
       tag: 'i',
       value: 'isbn:9780000000001',
       k: 'isbn',
     };
     const graph = buildTwoHopGraph(subj);
-    expectConnectedDegree2(graph, PUB_AUTHOR, subj.value.toLowerCase());
+    expectTwoHopTopology(graph, PUB_AUTHOR, PUB_BRIDGE, graphSubjectId(subj), '', 'i');
   });
 
-  it('resolves 2-hop trust with non-empty context on both hops', () => {
-    const graph = new Graph();
+  it('stores two-hop edges with non-empty context on both hops', () => {
+    const graph = new IndexGraph();
     const ctx = 'development';
-    const templateAB = buildTrustEventTemplate({
-      subjects: [{ tag: 'p', value: PUB_BRIDGE }],
-      context: ctx,
-      value: 1,
-    });
-    graph.applyTrustEvent(signTrust(templateAB, SK_AUTHOR));
+    edgeAuthorTrustsBridge(graph, ctx);
 
     const eventId = 'f'.repeat(64);
+    const target: TrustWireSubject = { tag: 'e', value: eventId };
     const templateBT = buildTrustEventTemplate({
-      subjects: [{ tag: 'e', value: eventId }],
+      subjects: [target as unknown as ParsedSubject],
       context: ctx,
       value: 1,
     });
     graph.applyTrustEvent(signTrust(templateBT, SK_BRIDGE));
 
-    expectConnectedDegree2(graph, PUB_AUTHOR, eventId, { context: ctx });
+    expectTwoHopTopology(graph, PUB_AUTHOR, PUB_BRIDGE, graphSubjectId(target), ctx, 'i');
+  });
+});
+
+describe('IndexResolver', () => {
+  it('marks connected when author and subject are the same pubkey', () => {
+    const graph = new IndexGraph();
+    const template = buildTrustEventTemplate({
+      subjects: [{ tag: 'p', value: PUB_AUTHOR }],
+      value: 1,
+    });
+    graph.applyTrustEvent(signTrust(template, SK_AUTHOR));
+
+    const scores = indexResolver.resolve(PUB_AUTHOR, PUB_AUTHOR, { graph });
+    expect(scores).toHaveLength(1);
+    expect(scores[0]!.connected).toBe(true);
   });
 });

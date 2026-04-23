@@ -74,7 +74,7 @@ describe('trust e2e tests', () => {
   });
 
   describe('trust resolve', () => {
-    it('should resolve unknown identity as 0/0/0', async () => {
+    it('should resolve unknown identity with no connection (offline)', async () => {
       const { stdout, code } = await runCli([
         'resolve',
         'a'.repeat(64),
@@ -83,8 +83,8 @@ describe('trust e2e tests', () => {
       ]);
 
       expect(code).toBe(0);
-      expect(stdout).toContain('Trust: 0');
-      expect(stdout).toContain('Distrust: 0');
+      expect(stdout).toContain('No API available');
+      expect(stdout).toContain('No connection found');
     });
 
     it('should output JSON with --json', async () => {
@@ -97,11 +97,9 @@ describe('trust e2e tests', () => {
       ]);
 
       expect(code).toBe(0);
-      const firstLine = stdout.split(/\r?\n/).find((line) => line.trim().startsWith('{'));
-      expect(firstLine).toBeTruthy();
-      const json = JSON.parse(firstLine!) as { trust?: number; distrust?: number };
-      expect(json).toHaveProperty('trust', 0);
-      expect(json).toHaveProperty('distrust', 0);
+      const jsonLine = stdout.split(/\r?\n/).find((line) => line.trim().startsWith('['));
+      expect(jsonLine).toBeTruthy();
+      expect(JSON.parse(jsonLine!)).toEqual([]);
     });
   });
 
