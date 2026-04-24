@@ -174,6 +174,14 @@ export class NPostgres implements ExtendedNRelay {
 
   private async eventImmediate(event: NostrEvent, opts: InsertEventOptions): Promise<void> {
     try {
+
+      if (await this.isDeleted(event)) {
+        opts.isDeleted = true; // indicate that the event was deleted
+        opts.isInserted = false; // indicate that the event was not inserted into the database
+        return;
+      }
+  
+
       await NPostgres.trx(this.db, (trx) => {
         return this.withTimeout(trx, opts.timeout, async (trx) => {
           if (event.kind === 5) await this.handleKind5(trx, event);
@@ -329,7 +337,10 @@ export class NPostgres implements ExtendedNRelay {
     opts.errorMessage = row.error_message ?? undefined;
   }
 
-  /** Check if an event has been deleted. */
+  /**
+   * Check if an event has been tombstoned by an existing kind-5 delete.
+   * Batched writes: same logic runs inside `trust_ingest_events_batch` (see migrate() SQL).
+   */
   protected async isDeleted(event: NostrEvent): Promise<boolean> {
     const filters: NostrFilter[] = [
       { kinds: [5], authors: [event.pubkey], '#e': [event.id], limit: 1 },
@@ -1028,6 +1039,8 @@ export class NPostgres implements ExtendedNRelay {
             v_replaceable := (v_kind >= 10000 and v_kind < 20000) or v_kind in (0, 3);
             v_d := case when v_parameterized then coalesce(rec.evt->>'d', '') else null end;
 
+            -- Tombstone check: must match NPostgres.isDeleted() (kind 5 + #e on this id, OR for
+            -- replaceable/addressable kinds + #a address + delete event created_at >= this event).
             if exists (
               select 1
               from nostr_events ne

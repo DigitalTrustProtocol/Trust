@@ -53,3 +53,11 @@ trust add npub1lkg4ae7a6zfu4x099wzdntcult8344feg25w5rl39c7kddstfx0s99q8ye --rela
 
 trust show 14ef37f455f58524f6ae7c2034b36062fa8dacae8ebb51fc4e711fc62cad872e --relays ws://localhost:3417/relay
 trust show fd915ee7ddd093ca99e52b84d9af1cfacf1ad53942a8ea0ff12e3d66b60b499f --relays ws://localhost:3417/relay
+
+
+
+
+
+run individual test
+e.g.:
+npx vitest run test/e2e/trust.test.ts
