@@ -21,6 +21,8 @@ npm-debug.log*
 .env.local
 .env.development
 .env.production
+.env.test
+.env.example
 
 # Test coverage
 coverage/
