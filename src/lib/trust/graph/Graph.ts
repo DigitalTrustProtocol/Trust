@@ -3,6 +3,7 @@ import { extractSubjects, ITrustEvent, SubjectType } from '../../nostr/nip32010.
 
 import { EdgeT1, IEdge } from './Edge.js';
 import { Node } from './Node.js';
+import SharedMapTyped from '../../Shared/SharedMapTyped.js';
 
 export interface IGraph {
   applyTrustEvent(trust: ITrustEvent): boolean;
@@ -29,6 +30,11 @@ export class Graph implements IGraph {
   edgesIndex: Map<string, number> = new Map();
   edgesList: Array<IEdge | null> = new Array<IEdge | null>();
 
+
+  outMap?: SharedMapTyped; // out map is a map of context indexes to a map of subject indexes to a map of edge indexes
+  inMap?: SharedMapTyped; // in map is a map of context indexes to a map of subject indexes to a map of edge indexes
+
+  
 
   eventAddedSinceLastSave: number = 0;
   eventRemovedSinceLastSave: number = 0;
