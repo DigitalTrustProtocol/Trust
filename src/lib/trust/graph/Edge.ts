@@ -11,6 +11,10 @@ import {
   ITrustEvent
 } from "../../nostr/nip32010.js";
 
+
+
+
+
 export interface IEdge {
   index?: number;
   parameterizedId: string;

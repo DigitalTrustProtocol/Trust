@@ -4,6 +4,15 @@ import SharedMapTyped from '../../src/lib/Shared/SharedMapTyped.js';
 const U32_MAX = 0xffffffff;
 
 describe('SharedMapTyped', () => {
+    it('from attaches to existing storage for worker-style usage', () => {
+        const owner = new SharedMapTyped(32);
+        owner.set(123, 456, 789);
+        const worker = SharedMapTyped.from(owner.storage);
+        expect(worker.get(123, 456)).toBe(789);
+        worker.set(9, 8, 7);
+        expect(owner.get(9, 8)).toBe(7);
+    });
+
     it('set/get/has: returns undefined for missing key', () => {
         const m = new SharedMapTyped(32);
         expect(m.get(1, 2)).toBeUndefined();

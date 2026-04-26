@@ -83,7 +83,7 @@ interface ChainEntry {
  */
 export default class SharedMapTyped {
     /** Assigned in {@link SharedMapTyped._allocateStorage}. */
-    storage!: SharedArrayBuffer;
+    public storage!: SharedArrayBuffer;
     meta!: Uint32Array;
     keysData!: Uint32Array;
     valuesData!: Uint32Array;
@@ -91,7 +91,7 @@ export default class SharedMapTyped {
     bucketUsed!: Uint8Array;
     linelocks!: Int32Array;
     maplock!: Int32Array;
-    readonly stats: {
+    stats: {
         set: number;
         delete: number;
         collisions: number;
@@ -105,6 +105,62 @@ export default class SharedMapTyped {
         if (!(aligned > 0)) throw new RangeError('maxSize must be a positive number');
         this.stats = { set: 0, delete: 0, collisions: 0, rechains: 0, get: 0, deadlock: 0 };
         this._allocateStorage(aligned);
+    }
+
+    /**
+     * Attach to an existing `SharedArrayBuffer` built by {@link SharedMapTyped}.
+     * Useful in workers that receive only the SAB reference.
+     */
+    static from(storage: SharedArrayBuffer): SharedMapTyped {
+        const metaCount = Object.keys(META).length;
+        const lockCount = Object.keys(LOCK).length;
+        const minBytes = metaCount * Uint32Array.BYTES_PER_ELEMENT;
+        if (storage.byteLength < minBytes) {
+            throw new RangeError('SharedMapTyped.from: buffer too small for header');
+        }
+
+        const meta = new Uint32Array(storage, 0, metaCount);
+        const maxSize = meta[META.maxSize] >>> 0;
+        const length = meta[META.length] >>> 0;
+        if (maxSize < 1 || length > maxSize) {
+            throw new RangeError('SharedMapTyped.from: invalid meta header');
+        }
+
+        let offset = 0;
+        const metaBytes = metaCount * Uint32Array.BYTES_PER_ELEMENT;
+        const keysBytes = KEY_WORDS * maxSize * Uint32Array.BYTES_PER_ELEMENT;
+        const valuesBytes = VALUE_WORDS * maxSize * Uint32Array.BYTES_PER_ELEMENT;
+        const chainBytes = maxSize * Uint32Array.BYTES_PER_ELEMENT;
+        const usedBytes = maxSize * Uint8Array.BYTES_PER_ELEMENT;
+        let afterUsed = offset + metaBytes + keysBytes + valuesBytes + chainBytes + usedBytes;
+        afterUsed = (afterUsed + 3) & ~3;
+        const lineBytes = Math.ceil(maxSize / 32) * Int32Array.BYTES_PER_ELEMENT;
+        const lockBytes = lockCount * Int32Array.BYTES_PER_ELEMENT;
+        const need = afterUsed + lineBytes + lockBytes;
+        if (need > storage.byteLength) {
+            throw new RangeError('SharedMapTyped.from: buffer byteLength is smaller than embedded layout');
+        }
+
+        const inst = Object.create(SharedMapTyped.prototype) as SharedMapTyped;
+        inst.stats = { set: 0, delete: 0, collisions: 0, rechains: 0, get: 0, deadlock: 0 };
+        inst.storage = storage;
+
+        offset = 0;
+        inst.meta = new Uint32Array(storage, offset, metaCount);
+        offset += inst.meta.byteLength;
+        inst.keysData = new Uint32Array(storage, offset, KEY_WORDS * maxSize);
+        offset += inst.keysData.byteLength;
+        inst.valuesData = new Uint32Array(storage, offset, VALUE_WORDS * maxSize);
+        offset += inst.valuesData.byteLength;
+        inst.chaining = new Uint32Array(storage, offset, maxSize);
+        offset += inst.chaining.byteLength;
+        inst.bucketUsed = new Uint8Array(storage, offset, maxSize);
+        offset += inst.bucketUsed.byteLength;
+        offset = (offset + 3) & ~3;
+        inst.linelocks = new Int32Array(storage, offset, Math.ceil(maxSize / 32));
+        offset += inst.linelocks.byteLength;
+        inst.maplock = new Int32Array(storage, offset, lockCount);
+        return inst;
     }
 
     /**

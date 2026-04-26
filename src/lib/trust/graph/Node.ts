@@ -2,6 +2,56 @@ import type { VerifiedEvent } from 'nostr-tools';
 import type { SubjectType, Identity } from '../../nostr/nip32010.js';
 import { parseIdentityFromKind0, mergeIdentity } from '../identity.js';
 import { Graph } from './Graph.js';
+import { SharedListView } from '../../Shared/SharedList.js';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
+
+
+export class NodeView implements SharedListView {
+
+    //private dv!: DataView; 
+    private data!: Uint8Array<ArrayBufferLike>;
+
+    constructor(id: string, type: SubjectType) {
+        this.attach(new Uint8Array(NodeView.SIZE));
+        this.id = id;
+        this.type = type;
+    }
+
+    attach(b: Uint8Array<ArrayBufferLike>): void {
+        this.data = b.subarray(b.byteOffset, b.byteOffset + b.byteLength);
+    }
+
+
+    get id(): string { // 32 byte pubkey or subject id
+        return bytesToHex(this.data);
+    }
+
+    set id(value: string) {
+        // Convert the hex string to a Uint8Array
+        if (value.length !== 64) throw new Error('Invalid pubkey length');
+
+        const bytes = hexToBytes(value);
+
+        this.data.set(bytes, 0);
+    }
+
+    get type(): SubjectType {
+        let data =  this.data[32];
+        return data === 0 ? 'p' : 'i';
+    }
+    
+    set type(value: SubjectType) {
+        let type = value === 'p' ? 0 : 1;
+        this.data[32] = type & 0xFF; // 0 | 1
+    }
+
+    get bytes(): Uint8Array<ArrayBufferLike> {
+        return this.data;
+    }
+
+    static SIZE = 33;
+}
+
 
 export class Node {
     index: number = 0;

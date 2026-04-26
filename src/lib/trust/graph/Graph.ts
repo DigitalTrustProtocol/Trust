@@ -1,9 +1,12 @@
 import { VerifiedEvent } from 'nostr-tools';
-import { extractSubjects, ITrustEvent, SubjectType } from '../../nostr/nip32010.js';
+import { extractSubjects, getValueFromTags, ITrustEvent, SubjectType } from '../../nostr/nip32010.js';
 
 import { EdgeT1, IEdge } from './Edge.js';
-import { Node } from './Node.js';
+import { Node, NodeView } from './Node.js';
 import SharedMapTyped from '../../Shared/SharedMapTyped.js';
+import SharedMultiList from '../../Shared/SharedMultiList.js';
+import SharedList from '../../Shared/SharedList.js';
+import { EdgeView } from './EdgeView.js';
 
 export interface IGraph {
   applyTrustEvent(trust: ITrustEvent): boolean;
@@ -34,6 +37,10 @@ export class Graph implements IGraph {
   outMap?: SharedMapTyped; // out map is a map of context indexes to a map of subject indexes to a map of edge indexes
   inMap?: SharedMapTyped; // in map is a map of context indexes to a map of subject indexes to a map of edge indexes
 
+  lists?: SharedMultiList;
+  nodes?: SharedList<NodeView>;
+  edges?: SharedList<EdgeView>;
+
   
 
   eventAddedSinceLastSave: number = 0;
@@ -46,6 +53,17 @@ export class Graph implements IGraph {
       edges: this.edgesList.length,
     };
   }
+
+
+  constructor() {
+    this.nodes = new SharedList<NodeView>(1000, NodeView.SIZE);
+    this.edges = new SharedList<EdgeView>(1000, EdgeView.SIZE);
+
+    this.lists = new SharedMultiList(1000, { initialListSlots: 1000, maxByteLength: 1000 * (NodeView.SIZE + EdgeView.SIZE) });
+    this.lists.storage = new SharedArrayBuffer(1000 * (NodeView.SIZE + EdgeView.SIZE));
+    this.lists.storage = new SharedArrayBuffer(1000 * (NodeView.SIZE + EdgeView.SIZE));
+  }
+
 
   applyTrustEvent(trust: ITrustEvent): boolean {
 
@@ -267,13 +285,31 @@ export class Graph implements IGraph {
     return edge;
   }
 
-  removeEdge(parameterizedId: string): IEdge | null {
-    let index = this.edgesIndex.get(parameterizedId);
+  addEdgeView(trust: ITrustEvent): EdgeView | null {
+    //let edge: IEdge | null = null;
+    let index = this.edgesIndex.get(trust.parameterizedId); // Avoid internal object reference tracking (a design principle) 
+    let edgeView: EdgeView | null = null;
+    if (index !== undefined) edgeView = this.edges?.unsafeItemAt(index) as EdgeView | null; // ! is used to tell the compiler that the edge is not null
+    if (edgeView) {
+      if (edgeView.createdAt > trust.created_at) return null; // If the edge is older than the new event, return null
+      edgeView.createdAt = trust.created_at;
+      edgeView.value = getValueFromTags(trust);
+    } else {
+      let edge = new EdgeT1(trust);
+      edgeView = new EdgeView(edge);
+      this.edges?.add(edgeView);
+    }
+    return edgeView;
+  }
+
+
+  removeEdge(d_tag: string): IEdge | null {
+    let index = this.edgesIndex.get(d_tag);
     if (!index) return null;
     let edge = this.edgesList[index];
     if (!edge) return null;
     this.edgesList[index] = null;
-    this.edgesIndex.delete(parameterizedId);
+    this.edgesIndex.delete(d_tag);
     let node = this.getNode(edge.author);
     if (node && edge.index) node.edges.delete(edge.index);
     return edge;
