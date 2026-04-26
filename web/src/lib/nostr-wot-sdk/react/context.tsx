@@ -1,0 +1,265 @@
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  type ReactNode,
+} from 'react';
+import { WoT } from '../wot';
+import type { WoTOptions, NostrWindow } from '../types';
+
+/**
+ * Extension connection state
+ */
+export type ExtensionConnectionState =
+  | 'checking'
+  | 'connected'
+  | 'not-available';
+
+/**
+ * Extension status exposed to consumers
+ */
+export interface ExtensionState {
+  /**
+   * Current connection state
+   */
+  state: ExtensionConnectionState;
+  /**
+   * Whether extension is connected and ready
+   */
+  isConnected: boolean;
+  /**
+   * Whether extension is currently checking
+   */
+  isChecking: boolean;
+  /**
+   * Whether check is complete
+   */
+  isChecked: boolean;
+  /**
+   * Manually trigger a check
+   */
+  refresh: () => void;
+}
+
+/**
+ * WoT context value
+ */
+interface WoTContextValue {
+  wot: WoT | null;
+  isReady: boolean;
+  extension: ExtensionState;
+}
+
+/**
+ * WoT context
+ */
+const WoTContext = createContext<WoTContextValue | null>(null);
+
+/**
+ * WoT provider props
+ */
+export interface WoTProviderProps {
+  /**
+   * WoT configuration options
+   */
+  options?: Partial<WoTOptions>;
+  /**
+   * Children to render
+   */
+  children: ReactNode;
+}
+
+/**
+ * Check if extension is available
+ */
+function checkExtensionAvailable(): boolean {
+  if (typeof window === 'undefined') return false;
+  return !!(window as NostrWindow).nostr?.wot;
+}
+
+/**
+ * WoT provider component
+ *
+ * Provides WoT instance to all children components.
+ * Automatically detects extension availability.
+ *
+ * @example
+ * ```tsx
+ * import { WoTProvider } from 'nostr-wot-sdk/react';
+ *
+ * // Basic usage - automatically detects extension
+ * function App() {
+ *   return (
+ *     <WoTProvider>
+ *       <YourApp />
+ *     </WoTProvider>
+ *   );
+ * }
+ *
+ * // With fallback for when extension is not available
+ * function App() {
+ *   return (
+ *     <WoTProvider options={{
+ *       fallback: { myPubkey: 'abc123...' }
+ *     }}>
+ *       <YourApp />
+ *     </WoTProvider>
+ *   );
+ * }
+ * ```
+ */
+export function WoTProvider({
+  options = {},
+  children,
+}: WoTProviderProps) {
+  const [extensionState, setExtensionState] = useState<ExtensionConnectionState>('checking');
+  const [isReady, setIsReady] = useState(false);
+
+  // Check extension availability (manual refresh)
+  const checkExtension = useCallback(() => {
+    const available = checkExtensionAvailable();
+    setExtensionState(available ? 'connected' : 'not-available');
+    setIsReady(true);
+  }, []);
+
+  // Check on mount with retry mechanism
+  // Extensions inject their content scripts asynchronously after page load,
+  // so we need to poll for a short period to detect them reliably
+  useEffect(() => {
+    // Check immediately
+    if (checkExtensionAvailable()) {
+      setExtensionState('connected');
+      setIsReady(true);
+      return;
+    }
+
+    // Retry several times - extensions may inject after page load
+    let attempts = 0;
+    const maxAttempts = 15;
+    const intervalMs = 100; // Check every 100ms for 1.5 seconds total
+
+    const intervalId = setInterval(() => {
+      attempts++;
+
+      if (checkExtensionAvailable()) {
+        setExtensionState('connected');
+        setIsReady(true);
+        clearInterval(intervalId);
+        return;
+      }
+
+      if (attempts >= maxAttempts) {
+        setExtensionState('not-available');
+        setIsReady(true);
+        clearInterval(intervalId);
+      }
+    }, intervalMs);
+
+    return () => clearInterval(intervalId);
+  }, []);
+
+  // Create WoT instance
+  const wot = useMemo(() => {
+    if (!isReady) {
+      return null;
+    }
+
+    try {
+      return new WoT(options);
+    } catch (error) {
+      console.error('WoTProvider: Failed to create WoT instance:', error);
+      return null;
+    }
+  }, [
+    isReady,
+    options.oracle,
+    options.myPubkey,
+    options.maxHops,
+    options.timeout,
+    options.fallback?.myPubkey,
+    options.fallback?.oracle,
+  ]);
+
+  // Extension state for consumers
+  const extension = useMemo<ExtensionState>(() => {
+    const isConnected = extensionState === 'connected';
+    const isChecking = extensionState === 'checking';
+    const isChecked = extensionState !== 'checking';
+
+    return {
+      state: extensionState,
+      isConnected,
+      isChecking,
+      isChecked,
+      refresh: checkExtension,
+    };
+  }, [extensionState, checkExtension]);
+
+  const value = useMemo<WoTContextValue>(() => {
+    const extensionValue: ExtensionState =
+      extension ?? {
+        state: 'checking',
+        isConnected: false,
+        isChecking: true,
+        isChecked: false,
+        refresh: checkExtension,
+      };
+    return {
+      wot,
+      isReady: isReady && wot !== null,
+      extension: extensionValue,
+    };
+  }, [wot, isReady, extension, checkExtension]);
+
+  return <WoTContext.Provider value={value}>{children}</WoTContext.Provider>;
+}
+
+/**
+ * Hook to access WoT context
+ *
+ * @returns WoT context value
+ * @throws If used outside of WoTProvider
+ */
+export function useWoTContext(): WoTContextValue {
+  const context = useContext(WoTContext);
+
+  if (context === null) {
+    throw new Error('useWoTContext must be used within a WoTProvider');
+  }
+
+  return context;
+}
+
+/**
+ * Hook to access WoT instance directly
+ *
+ * @returns WoT instance or null if not ready
+ */
+export function useWoTInstance(): WoT | null {
+  const { wot } = useWoTContext();
+  return wot;
+}
+
+/**
+ * Hook to access extension state
+ *
+ * @returns Extension state and status
+ *
+ * @example
+ * ```tsx
+ * function ExtensionStatus() {
+ *   const { isConnected, isChecking } = useExtension();
+ *
+ *   if (isChecking) return <span>Checking...</span>;
+ *   if (isConnected) return <span>Extension connected!</span>;
+ *   return <span>Extension not available</span>;
+ * }
+ * ```
+ */
+export function useExtension(): ExtensionState {
+  const { extension } = useWoTContext();
+  return extension;
+}
