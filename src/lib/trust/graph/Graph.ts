@@ -8,13 +8,42 @@ import SharedMultiList from '../../Shared/SharedMultiList.js';
 import SharedList from '../../Shared/SharedList.js';
 import { EdgeView } from './EdgeView.js';
 
+export type GraphTrustValue = 1 | 0 | -1;
+
+export interface GraphTrustEdgePayload {
+  dTag: string;
+  author: string;
+  kind: number;
+  value: GraphTrustValue;
+  context: string;
+  createdAt: number;
+  activate?: number;
+  expire?: number;
+  content?: string;
+}
+
+export interface GraphTrustConnectionPayload {
+  author: string;
+  subject: string;
+  subjectType: SubjectType;
+  edge: GraphTrustEdgePayload;
+}
+
+export interface GraphTrustConnectionOptions {
+  context?: string;
+  value?: GraphTrustValue;
+  subjectType?: SubjectType;
+  includeInactive?: boolean;
+}
+
 export interface IGraph {
   applyTrustEvent(trust: ITrustEvent): boolean;
   removeTrustEvent(trust: ITrustEvent): boolean;
   removePubkey(pubkey: string, until: number): boolean;
   getContextIndexes(context: string, subjectType: SubjectType): Array<number>;
   applyUserMetadataEvent(event: VerifiedEvent): boolean;
-  trustedSubjects(authorId: string, context?: string, includeEmptyContext?: boolean): string[];
+  out(authorId: string, options?: GraphTrustConnectionOptions): GraphTrustConnectionPayload[];
+  in(subjectId: string, options?: GraphTrustConnectionOptions): GraphTrustConnectionPayload[];
   addNode(id: string, type: SubjectType): Node;
   getNode(id: string): Node | null;
   createNode(id: string, type: SubjectType): Node;
@@ -73,8 +102,10 @@ export class Graph implements IGraph {
     const authorId = trust.pubkey.toLowerCase();
     const authorNode = this.addNode(authorId, 'p'); // author is a pubkey, so type is 'p'
 
-    let pContextIndex = undefined;
-    let iContextIndex = undefined;
+    // Keep both context buckets present for each trust event context.
+    // Some resolver topology expectations rely on both p:* and i:* existing.
+    const pContextIndex = this.applyContext(trust.c_tag ?? '', 'p');
+    const iContextIndex = this.applyContext(trust.c_tag ?? '', 'i');
 
     const subjects = extractSubjects(trust);
     if (subjects.length === 0) return false;
@@ -86,12 +117,7 @@ export class Graph implements IGraph {
       const subjectType: SubjectType = subject.tag;
       const subjectNode = this.addNode(subjectId, subjectType);
 
-      let contextIndex = undefined;
-      if (subjectType === 'p') {
-        contextIndex = pContextIndex ?? (pContextIndex = this.applyContext(trust.c_tag ?? '', 'p'));
-      } else {
-        contextIndex = iContextIndex ?? (iContextIndex = this.applyContext(trust.c_tag ?? '', 'i'));
-      }
+      const contextIndex = subjectType === 'p' ? pContextIndex : iContextIndex;
       
 
       if(value !== 0) {
@@ -112,7 +138,7 @@ export class Graph implements IGraph {
 
   removeTrustEvent(trust: ITrustEvent): boolean {
     let edgeIndex = this.edgesIndex.get(trust.parameterizedId);
-    if (!edgeIndex) return false; // No edge found for the parameterizedId
+    if (edgeIndex === undefined) return false; // No edge found for the parameterizedId
     let edge = this.edgesList[edgeIndex];
     if (!edge) {
       console.trace('Edge not found for parameterizedId: ' + trust.parameterizedId + ' in removeTrustEvent - Failsafe check, as this should never happen');
@@ -133,7 +159,7 @@ export class Graph implements IGraph {
       const subjectId = subject.value;
 
       let subjectNodeIndex = this.nodesIndex.get(subjectId);
-      if (!subjectNodeIndex) continue;
+      if (subjectNodeIndex === undefined) continue;
 
       const subjectNode = this.nodesList[subjectNodeIndex];
       if (!subjectNode) continue;
@@ -206,24 +232,62 @@ export class Graph implements IGraph {
     return true;
   }
 
-  trustedSubjects(authorId: string, context?: string, includeEmptyContext: boolean = true): string[] {
-    let result: string[] = [];
-    const authorNode = this.getNode(authorId);
-    if (!authorNode) return result;
-    let time = Math.floor(Date.now() / 1000); // Current time in seconds 
+  private edgePayload(edge: IEdge): GraphTrustEdgePayload {
+    return {
+      dTag: edge.parameterizedId,
+      author: edge.author,
+      kind: edge.kind,
+      value: edge.value,
+      context: edge.context,
+      createdAt: edge.createdAt,
+      ...(edge.activate !== undefined ? { activate: edge.activate } : {}),
+      ...(edge.expire !== undefined ? { expire: edge.expire } : {}),
+      ...(edge.content !== undefined ? { content: edge.content } : {}),
+    };
+  }
 
+  private connections(
+    nodeId: string,
+    direction: 'out' | 'in',
+    options: GraphTrustConnectionOptions = {},
+  ): GraphTrustConnectionPayload[] {
+    const node = this.getNode(nodeId);
+    if (!node) return [];
 
-    let pContextIndex = this.getContextIndexes(context ?? '', 'p');
- 
-    for (const contextIndex of pContextIndex) {
-      for (const [subjectIndex, edgeIndex] of authorNode.out.get(contextIndex)!.entries()) {
-        let edge = this.edgesList[edgeIndex];
-        if (!edge) continue;
-        if (!edge.isValidAt(time)) continue;
-        if (edge.value > 0) {
-          let subjectNode = this.nodesList[subjectIndex];
-          if (!subjectNode) continue;
-          result.push(subjectNode.id);
+    const subjectTypes = options.subjectType ? [options.subjectType] : (['p', 'i'] as SubjectType[]);
+    const now = Math.floor(Date.now() / 1000);
+    const seen = new Set<string>();
+    const result: GraphTrustConnectionPayload[] = [];
+
+    for (const subjectType of subjectTypes) {
+      const contextIndexes = this.getContextIndexes(options.context ?? '', subjectType);
+      for (const contextIndex of contextIndexes) {
+        const peerMap = node[direction].get(contextIndex);
+        if (!peerMap) continue;
+
+        for (const [peerIndex, edgeIndex] of peerMap.entries()) {
+          const edge = this.edgesList[edgeIndex];
+          if (!edge) continue;
+          if (!options.includeInactive && !edge.isValidAt(now)) continue;
+          if (options.value !== undefined && edge.value !== options.value) continue;
+
+          const peerNode = this.nodesList[peerIndex];
+          if (!peerNode) continue;
+
+          const authorNode = direction === 'out' ? node : peerNode;
+          const subjectNode = direction === 'out' ? peerNode : node;
+          if (options.subjectType && subjectNode.type !== options.subjectType) continue;
+
+          const key = `${authorNode.index}:${subjectNode.index}:${edgeIndex}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+
+          result.push({
+            author: authorNode.id,
+            subject: subjectNode.id,
+            subjectType: subjectNode.type,
+            edge: this.edgePayload(edge),
+          });
         }
       }
     }
@@ -231,6 +295,13 @@ export class Graph implements IGraph {
     return result;
   }
 
+  out(authorId: string, options: GraphTrustConnectionOptions = {}): GraphTrustConnectionPayload[] {
+    return this.connections(authorId, 'out', options);
+  }
+
+  in(subjectId: string, options: GraphTrustConnectionOptions = {}): GraphTrustConnectionPayload[] {
+    return this.connections(subjectId, 'in', options);
+  }
 
   addNode(id: string, type: SubjectType): Node  {
     let node: Node | null = null;
@@ -305,13 +376,13 @@ export class Graph implements IGraph {
 
   removeEdge(d_tag: string): IEdge | null {
     let index = this.edgesIndex.get(d_tag);
-    if (!index) return null;
+    if (index === undefined) return null;
     let edge = this.edgesList[index];
     if (!edge) return null;
     this.edgesList[index] = null;
     this.edgesIndex.delete(d_tag);
     let node = this.getNode(edge.author);
-    if (node && edge.index) node.edges.delete(edge.index);
+    if (node && edge.index !== undefined) node.edges.delete(edge.index);
     return edge;
   }
 
@@ -330,7 +401,7 @@ export class Graph implements IGraph {
   }
 
   getContextIndex(context: string, subjectType: SubjectType): number | undefined{
-    let key = subjectType + ':' + context;
+    let key = subjectType + (context.length > 0 ? ':' : '') + context;
     return this.contextIndex.get(key);
   }
 

@@ -121,11 +121,15 @@ function getUnseenTrustedAuthors(
       if (contexts?.length) {
         const acc = new Set<string>();
         for (const c of contexts) {
-          for (const t of graph.trustedSubjects(current.author, c, true)) acc.add(t);
+          for (const t of graph.out(current.author, { context: c, value: 1, subjectType: 'p' })) {
+            acc.add(t.subject);
+          }
         }
         return acc;
       }
-      return new Set(graph.trustedSubjects(current.author, undefined, true));
+      return new Set(
+        graph.out(current.author, { value: 1, subjectType: 'p' }).map((connection) => connection.subject),
+      );
     })();
     for (const author of trustedList) {
       queue.push({ author, depth: current.depth + 1 });

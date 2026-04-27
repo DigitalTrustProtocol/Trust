@@ -4,6 +4,7 @@ import { parseAuthorPubkeyInput, resolveTargetForQuery } from '../../lib/trust/s
 import { loadSecretKey, loadKeyPair } from '../../lib/keys.js';
 import { getPublicKey } from 'nostr-tools/pure';
 import type { VerifiedEvent } from 'nostr-tools';
+import type { SubjectType } from '../../lib/nostr/nip32010.js';
 import { getLoadedGraph, loadGraph } from '../../lib/trust/graphManager.js';
 import { RuntimeContext } from '../../lib/runtimeContext.js';
 import { ok, sendError, ErrorCode } from '../errors.js';
@@ -35,6 +36,15 @@ type ResolveBatchBody = {
 
 type PrivacyVanishBody = VerifiedEvent | { event: VerifiedEvent };
 
+type GraphConnectionsQuery = {
+  author?: string;
+  subject?: string;
+  context?: string;
+  value?: string;
+  subjectType?: SubjectType;
+  includeInactive?: string;
+};
+
 function normalizeContext(context: string | undefined): string | undefined {
   if (context === undefined) return '';
   if (context === 'undefined') return undefined;
@@ -51,6 +61,49 @@ function resolveAuthor(author?: string): { author: string | null; error?: string
   }
   const sk = loadSecretKey();
   return { author: sk ? getPublicKey(sk).toLowerCase() : null };
+}
+
+function getIdentityPayload(): { publicKey: string; npub: string; profile: unknown } | null {
+  const keyPair = loadKeyPair();
+  if (!keyPair) return null;
+
+  const config = getRuntimeConfig();
+  return {
+    publicKey: keyPair.publicKey,
+    npub: keyPair.npub,
+    profile: config?.profile ?? null,
+  };
+}
+
+function parseConnectionOptions(q: GraphConnectionsQuery): {
+  options?: {
+    context?: string;
+    value?: 1 | 0 | -1;
+    subjectType?: SubjectType;
+    includeInactive?: boolean;
+  };
+  error?: string;
+} {
+  let value: 1 | 0 | -1 | undefined;
+  if (q.value !== undefined) {
+    if (q.value === '1') value = 1;
+    else if (q.value === '0') value = 0;
+    else if (q.value === '-1') value = -1;
+    else return { error: 'value must be one of 1, 0, -1' };
+  }
+
+  if (q.subjectType !== undefined && q.subjectType !== 'p' && q.subjectType !== 'i') {
+    return { error: 'subjectType must be p or i' };
+  }
+
+  return {
+    options: {
+      context: normalizeContext(q.context),
+      value,
+      subjectType: q.subjectType,
+      includeInactive: q.includeInactive === 'true',
+    },
+  };
 }
 
 const startTime = Date.now();
@@ -168,19 +221,27 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       },
     },
     async (_request: FastifyRequest, reply: FastifyReply) => {
-    const keyPair = loadKeyPair();
-    if (!keyPair) {
-      return sendError(reply, 404, ErrorCode.NO_IDENTITY, 'No identity configured. Run trust init first.');
-    }
+      const identity = getIdentityPayload();
+      if (!identity) {
+        return sendError(reply, 404, ErrorCode.NO_IDENTITY, 'No identity configured. Run trust init first.');
+      }
+      return ok(identity);
+    },
+  );
 
-
-    let config = getRuntimeConfig();
-
-    return ok({
-      publicKey: keyPair.publicKey,
-      npub: keyPair.npub,
-      profile: config?.profile ?? null
-    });
+  app.get(
+    '/v1/whoami',
+    {
+      schema: {
+        tags: ['identity'],
+      },
+    },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const identity = getIdentityPayload();
+      if (!identity) {
+        return sendError(reply, 404, ErrorCode.NO_IDENTITY, 'No identity configured. Run trust init first.');
+      }
+      return ok(identity);
     },
   );
 
@@ -410,11 +471,11 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
     return ok(page);
   });
 */
-  // ── Trusted Subjects ───────────────────────────────────────────────
+  // ── Graph adjacency (out / in) ─────────────────────────────────────
 
   app.get<{
-    Querystring: { author?: string; context?: string };
-  }>('/v1/trusted', {
+    Querystring: GraphConnectionsQuery;
+  }>('/v1/out', {
     schema: {
       tags: ['graph'],
     },
@@ -429,13 +490,66 @@ export default fp(async function apiPlugin(app, runtimeContext: RuntimeContext) 
       return sendError(reply, 400, ErrorCode.MISSING_AUTHOR, 'Author is required');
     }
 
-    
+    const parsed = parseConnectionOptions(q);
+    if (parsed.error) {
+      return sendError(reply, 400, ErrorCode.INVALID_VALUE, parsed.error);
+    }
+
     const graph = runtimeContext.graph;
     if (!graph) {
       return sendError(reply, 500, ErrorCode.GRAPH_NOT_FOUND, 'Graph not loaded');
     }
-    const subjects = graph.trustedSubjects(author, q.context);
-    return ok(subjects);
+
+    return ok({
+      author,
+      direction: 'out' as const,
+      connections: graph.out(author, parsed.options),
+    });
+  });
+
+  app.get<{
+    Querystring: GraphConnectionsQuery;
+  }>('/v1/in', {
+    schema: {
+      tags: ['graph'],
+    },
+  }, async (request, reply) => {
+    const q = request.query;
+    let subjectId: string | null = null;
+
+    try {
+      if (q.subject) {
+        subjectId = resolveTargetForQuery(q.subject).value;
+      } else {
+        const { author, error: authorError } = resolveAuthor(q.author);
+        if (authorError) {
+          return sendError(reply, 400, ErrorCode.INVALID_SUBJECT, authorError);
+        }
+        subjectId = author;
+      }
+    } catch {
+      return sendError(reply, 400, ErrorCode.INVALID_SUBJECT, `Invalid subject: ${q.subject}`);
+    }
+
+    if (!subjectId) {
+      return sendError(reply, 400, ErrorCode.MISSING_SUBJECT, 'Subject is required');
+    }
+
+    const parsed = parseConnectionOptions(q);
+    if (parsed.error) {
+      return sendError(reply, 400, ErrorCode.INVALID_VALUE, parsed.error);
+    }
+
+    const graph = runtimeContext.graph;
+    if (!graph) {
+      return sendError(reply, 500, ErrorCode.GRAPH_NOT_FOUND, 'Graph not loaded');
+    }
+
+    return ok({
+      subject: subjectId,
+      direction: 'in' as const,
+      connections: graph.in(subjectId, parsed.options),
+    });
   });
 
 }, { name: 'trust-api' });

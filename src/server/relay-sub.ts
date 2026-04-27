@@ -279,7 +279,7 @@ export async function queryAuthorGraph(
           timestamp = Math.max(timestamp, trustEvent.created_at);
       
           // Find the subjects of the the author and add them to the queue
-          let subjects = graph.trustedSubjects(event.pubkey);
+          let subjects = graph.out(event.pubkey, { value: 1, subjectType: 'p' }).map(c => c.subject);
           subjects.forEach(subject => {
             if (visitedAuthor.has(subject)) return;
             visitedAuthor.add(subject);

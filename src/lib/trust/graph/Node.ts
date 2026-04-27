@@ -127,7 +127,7 @@ export class Node {
         if (outCreatedAt > createdAt) return; // If the createdAt is lesser than the graph record, do not remove the edge
         */
         let edgeIndex = contextMap.get(subjectIndex);
-        if (!edgeIndex) return;
+        if (edgeIndex === undefined) return;
         let edge = graph.edgesList[edgeIndex];
         if (!edge) return;
         if (edge.createdAt > createdAt) return; // If the createdAt is lesser than the graph record, do not remove the edge
@@ -151,7 +151,7 @@ export class Node {
         if (inCreatedAt > createdAt) return; // If the createdAt is lesser than the graph record, do not remove the edge
         */
         let edgeIndex = inMap.get(subjectIndex);
-        if (!edgeIndex) return;
+        if (edgeIndex === undefined) return;
         let edge = graph.edgesList[edgeIndex];
         if (!edge) return;
         if (edge.createdAt > createdAt) return; // If the createdAt is lesser than the graph record, do not remove the edge
@@ -166,17 +166,17 @@ export class Node {
 
     /** Update identity from a kind 0 user metadata event. */
     updateUserMetadata(event: VerifiedEvent): this {
-        const parsed = parseIdentityFromKind0(event);
-        if (parsed) {
-            this.identity = this.identity ? mergeIdentity(this.identity, parsed) : parsed;
-        }
+        //const parsed = parseIdentityFromKind0(event);
+        //if (parsed) {
+            //this.identity = this.identity ? mergeIdentity(this.identity, parsed) : parsed;
+        //}
         return this;
     }
 
     updateIdentity(identity: Identity): this {
-        if (!this.identity) {
-            this.identity = identity;
-        }
+        //if (!this.identity) {
+            //this.identity = identity;
+        //}
         //else {
         //      this.identity = mergeIdentity(this.identity, identity);
         //}

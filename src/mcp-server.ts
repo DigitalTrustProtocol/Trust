@@ -66,17 +66,6 @@ export function createMcpServer(): McpServer {
         },
       },
       {
-        name: 'trust_trusted',
-        description: 'List subjects trusted by an author in a given context.',
-        inputSchema: {
-          type: 'object' as const,
-          properties: {
-            author: { type: 'string', description: 'Author pubkey (npub or hex). Defaults to primary identity.' },
-            context: { type: 'string', description: 'Trust context filter' },
-          },
-        },
-      },
-      {
         name: 'trust_graph_stats',
         description: 'Get trust graph statistics: node count, edge count.',
         inputSchema: {
@@ -129,12 +118,6 @@ export function createMcpServer(): McpServer {
             return { content: [{ type: 'text', text: JSON.stringify({ error: 'No identity configured. Run trust init first.' }) }], isError: true };
           }
           return { content: [{ type: 'text', text: JSON.stringify(identity, null, 2) }] };
-        }
-
-        case 'trust_trusted': {
-          const a = args as { author?: string; context?: string };
-          const subjects = await sdk.trusted(a.author, { context: a.context });
-          return { content: [{ type: 'text', text: JSON.stringify(subjects, null, 2) }] };
         }
 
         case 'trust_graph_stats': {

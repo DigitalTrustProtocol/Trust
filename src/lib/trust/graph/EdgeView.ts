@@ -23,6 +23,7 @@ export class EdgeView implements SharedListView {
         this.nodeIndex = edge.index ?? 0;
         this.activate = edge.activate ?? 0;
         this.expire = edge.expire ?? 0;
+        this.createdAt = edge.createdAt;
         this.value = edge.value ?? 0;
     }
 
@@ -81,6 +82,6 @@ export class EdgeView implements SharedListView {
         return this.buffer;
     }
 
-    static SIZE = 48;
+    static SIZE = 49;
 
 }

@@ -216,7 +216,7 @@ async function getGraphFromDB(runtimeContext: RuntimeContext): Promise<void> {
         graph!.applyTrustEvent(trustEvent);
       }
 
-      const subjects = graph!.trustedSubjects(a);
+      const subjects = graph!.out(a, { value: 1, subjectType: 'p' }).map((connection) => connection.subject);
       for (const subject of subjects) {
         if (!visited.has(subject)) {
           visited.add(subject);

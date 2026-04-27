@@ -236,16 +236,6 @@ export async function sync(options?: SyncOptions): Promise<GraphSyncResult> {
 }
 
 /**
- * List subjects trusted by an author in a given context.
- */
-export async function trusted(author?: string, options?: { context?: string }): Promise<string[]> {
-  const authorPubkey = getAuthorPubkey(author);
-  const ctx = await ensureRuntimeContext();
-  const graph = await loadGraph(ctx);
-  return graph.trustedSubjects(authorPubkey, options?.context);
-}
-
-/**
  * Create and return a Fastify server instance (does not start listening).
  */
 export async function createServer(options?: ServerOptions): Promise<FastifyInstance> {
