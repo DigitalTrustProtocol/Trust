@@ -1,0 +1,128 @@
+---
+description: Core operating rule for trustworthy, architecture-aware, test-verified changes
+alwaysApply: true
+---
+
+# Core Execution Rule
+
+You are working in a production codebase. Optimize for correctness, architectural consistency, and verifiable outcomes over speed.
+
+## Primary Objective
+
+Deliver complete, correct, and maintainable solutions that match existing project conventions and architecture.
+Do not make speculative or stylistic-only changes unless explicitly requested.
+
+## Non-Negotiable Workflow
+
+Follow this sequence for every non-trivial task:
+
+1. Understand request and success criteria.
+2. Read relevant existing code and architecture docs.
+3. Identify current patterns and constraints.
+4. Propose minimal viable change set.
+5. Implement focused edits.
+6. Run verification (tests/lint/typecheck/build as relevant).
+7. Report results, risks, and next steps.
+
+If any step is skipped, treat the task as incomplete.
+
+## Context Control (Prevent Drift)
+
+- Re-state the task goal internally before editing.
+- Keep a short working plan with explicit steps.
+- Tie every code change directly to the user request.
+- If you detect "detail rabbit holes," stop and re-anchor to scope.
+- Prefer finishing one coherent slice end-to-end over many partial tweaks.
+- Do not expand scope without explicit user approval.
+
+## Mandatory Discovery Before Editing
+
+Before changing code, you must:
+
+- Read the files you will edit.
+- Read neighboring modules that define usage patterns.
+- Read project docs/configs when relevant (README, architecture/implementation docs, package/tool configs).
+- Identify and follow existing naming, folder, typing, and error-handling conventions.
+- Reuse existing utilities/components before creating new abstractions.
+
+Do not edit until this discovery is done.
+
+## Architecture-First Rules
+
+- Preserve module boundaries and responsibilities.
+- Favor composition over duplication.
+- Keep functions/components small and single-purpose.
+- Avoid hidden coupling and side effects.
+- Keep interfaces/types explicit at boundaries.
+- Prefer deterministic behavior; avoid implicit global state changes.
+
+## Clean Code Standards
+
+- Write self-explanatory code with clear names.
+- Keep changes minimal and local to the problem.
+- Remove dead code introduced by refactors.
+- Add comments only for non-obvious reasoning, not obvious mechanics.
+- Do not introduce temporary hacks without marking constraints and follow-up.
+- Match existing formatting/lint/tooling conventions exactly.
+
+## Type and Error Discipline
+
+- Do not weaken type safety to make it pass.
+- Avoid `any` unless unavoidable and justified.
+- Handle errors explicitly with actionable messages/context.
+- Never swallow errors silently.
+- Propagate or map errors according to existing project patterns.
+
+## Testing and Verification (Required)
+
+For every change, run relevant verification. At minimum, choose the smallest valid set that proves correctness:
+
+- Unit/integration tests for affected behavior.
+- Lint for changed files/project.
+- Typecheck for affected packages/project.
+- Build when runtime/bundling behavior is affected.
+
+If tests are missing for changed behavior, add them when practical.
+If any verification cannot be run, state exactly why and provide a manual verification procedure.
+
+## Definition of Done
+
+A task is done only when all are true:
+
+- Requested behavior is implemented.
+- Code follows existing architecture and conventions.
+- Relevant tests/checks pass (or blockers are explicitly documented).
+- Diff is focused and free of unrelated edits.
+- Final report includes:
+  - what changed,
+  - why,
+  - how it was verified,
+  - known risks/limitations.
+
+## Composer Effectiveness Rules
+
+- Start with a concise plan and execute in clear phases.
+- Batch related edits; avoid many micro-patches with no checkpoint.
+- After each phase, validate and summarize progress against scope.
+- Prefer high-signal outputs: concrete file changes, concrete verification, concrete outcomes.
+- If ambiguity blocks progress, ask one precise question with options instead of guessing.
+
+## Strict Prohibitions
+
+- No architecture-blind edits.
+- No convention-breaking rewrites without request.
+- No speculative refactors.
+- No silent test skips.
+- No unrelated file churn.
+- No fake completion claims without verification evidence.
+
+## Priority Order for Decisions
+
+When trade-offs exist, prioritize in this order:
+
+1. Correctness
+2. Safety and data integrity
+3. Architectural consistency
+4. Testability/verifiability
+5. Simplicity
+6. Speed

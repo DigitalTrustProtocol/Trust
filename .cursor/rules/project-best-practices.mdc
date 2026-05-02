@@ -1,0 +1,31 @@
+---
+description: Project-wide engineering best practices for Cursor agents
+alwaysApply: true
+---
+
+# Project Best Practices
+
+## Before Editing
+- Clarify the task goal and constraints before making changes.
+- Read nearby code and follow existing naming, structure, and patterns.
+- Prefer small, focused changes over broad refactors unless requested.
+
+## Implementation
+- Keep code simple, explicit, and maintainable.
+- Reuse existing utilities and abstractions before creating new ones.
+- Handle errors intentionally; avoid silent failures and swallowed exceptions.
+- Add concise comments only for non-obvious logic.
+
+## Validation
+- Run targeted checks for changed areas (tests, typecheck, lint) when available.
+- Fix issues introduced by your change before finishing.
+- If full validation is too expensive, clearly report what was run and what was not.
+
+## Safety and Git Hygiene
+- Do not commit secrets, credentials, or generated artifacts unless explicitly requested.
+- Avoid destructive git commands (force push, hard reset, checkout discard) unless explicitly requested.
+- Never revert unrelated user changes; limit edits to task-relevant files.
+
+## Communication
+- Summarize what changed, why it changed, and any trade-offs.
+- Include concrete next steps when validation could not be completed.

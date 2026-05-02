@@ -1,7 +1,8 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { nip19 } from 'nostr-tools';
 import { WoTProvider, useWoTContext, useExtension, type ExtensionState } from '../lib/nostr-wot-sdk/react';
 import { useHeaderSession } from '../components/HeaderSessionContext';
+import { fetchKind0Profile } from '../lib/fetchNostrProfile';
 import { GraphProvider, useGraph } from './GraphContext';
 import { useGraphData } from './useGraphData';
 import { useNodeSelection } from './useNodeSelection';
@@ -51,12 +52,74 @@ function toHexPubkey(input: string): string | null {
   return null;
 }
 
-function PlaygroundChrome() {
+const ROOT_PUBKEY_HISTORY_KEY = 'trust.playground.rootPubkeyHistory.v1';
+const ROOT_PUBKEY_HISTORY_LIMIT = 8;
+
+function readRootPubkeyHistory(): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(ROOT_PUBKEY_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((v): v is string => typeof v === 'string' && /^[0-9a-f]{64}$/i.test(v))
+      .map((v) => v.toLowerCase())
+      .slice(0, ROOT_PUBKEY_HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function writeRootPubkeyHistory(values: string[]) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(
+    ROOT_PUBKEY_HISTORY_KEY,
+    JSON.stringify(values.slice(0, ROOT_PUBKEY_HISTORY_LIMIT))
+  );
+}
+
+function mergeHistoryWithLoggedIn(loggedInPubkey: string | null, history: string[]): string[] {
+  const out: string[] = [];
+  if (loggedInPubkey) out.push(loggedInPubkey.toLowerCase());
+  for (const pubkey of history) {
+    const normalized = pubkey.toLowerCase();
+    if (!out.includes(normalized)) out.push(normalized);
+  }
+  return out.slice(0, ROOT_PUBKEY_HISTORY_LIMIT);
+}
+
+function PlaygroundWithProviders({
+  oracleUrl,
+  hexFallback,
+  rootOverridePubkey,
+}: {
+  oracleUrl: string;
+  hexFallback: string | null;
+  rootOverridePubkey: string | null;
+}) {
+  const options = useMemo(() => {
+    const base = oracleUrl.trim().replace(/\/+$/, '');
+    if (!hexFallback) return { oracle: base };
+    // Top-level myPubkey lets getMyPubkey() work without window.nostr.wot (oracle + NIP-07 users).
+    return { oracle: base, myPubkey: hexFallback, fallback: { myPubkey: hexFallback, oracle: base } };
+  }, [oracleUrl, hexFallback]);
+
+  return (
+    <WoTProvider options={options}>
+      <GraphProvider>
+        <PlaygroundChromeWithRoot rootOverridePubkey={rootOverridePubkey} />
+      </GraphProvider>
+    </WoTProvider>
+  );
+}
+
+function PlaygroundChromeWithRoot({ rootOverridePubkey }: { rootOverridePubkey: string | null }) {
   const wotCtx = useWoTContext();
   const wotExtUi = coerceExtensionState(wotCtx.extension);
   const { state: graphState, setFilters, resetGraph, resetFilters, isNodeExpanded } = useGraph();
   const { selectedNode, selectedProfile, clearSelection } = useNodeSelection();
-  const { expandNodeFollows, isLoading, error: graphHookError, userPubkey } = useGraphData();
+  const { expandNodeFollows, isLoading, error: graphHookError, userPubkey } = useGraphData(rootOverridePubkey);
 
   const extClass =
     wotExtUi.state === 'connected'
@@ -76,7 +139,7 @@ function PlaygroundChrome() {
       <div className={`${styles.extensionBar} ${extClass}`} role="status">
         {wotExtUi.isChecking && <span>Checking for Nostr WoT extension…</span>}
         {!wotExtUi.isChecking && wotExtUi.isConnected && (
-          <span> WoT extension connected — follow lists and trust scores use your local graph.</span>
+          <span> WoT extension connected — graph data is loaded from this Trust server API.</span>
         )}
         {!wotExtUi.isChecking && !wotExtUi.isConnected && (
           <span>
@@ -138,8 +201,8 @@ function PlaygroundChrome() {
       </div>
 
       <p className={styles.hint}>
-        Click a node to inspect it. Right-click a node (or use Expand below) to load follows. Oracle
-        fallback uses the same public endpoint as nostr-wot when the extension has no batch result.
+        Click a node to inspect it. Right-click a node (or use Expand below) to load trust edges via
+        <code className={styles.code}> /v1/out</code>.
       </p>
 
       {graphHookError && (
@@ -228,29 +291,6 @@ function PlaygroundChrome() {
   );
 }
 
-function PlaygroundWithProviders({
-  oracleUrl,
-  hexFallback,
-}: {
-  oracleUrl: string;
-  hexFallback: string | null;
-}) {
-  const options = useMemo(() => {
-    const base = oracleUrl.trim().replace(/\/+$/, '');
-    if (!hexFallback) return { oracle: base };
-    // Top-level myPubkey lets getMyPubkey() work without window.nostr.wot (oracle + NIP-07 users).
-    return { oracle: base, myPubkey: hexFallback, fallback: { myPubkey: hexFallback, oracle: base } };
-  }, [oracleUrl, hexFallback]);
-
-  return (
-    <WoTProvider options={options}>
-      <GraphProvider>
-        <PlaygroundChrome />
-      </GraphProvider>
-    </WoTProvider>
-  );
-}
-
 type NostrWindow = { nostr?: { getPublicKey?: () => Promise<string> } };
 
 function PlaygroundExtensionChecking() {
@@ -304,16 +344,87 @@ export function PlaygroundPage() {
   const wotExt = useExtension();
   const { signedOut } = useHeaderSession();
   const [oracleUrl, setOracleUrl] = useState(() => getWotOracleBase());
-  const [manualKey, setManualKey] = useState('');
-  const hexFallback = useMemo(() => toHexPubkey(manualKey), [manualKey]);
-  const providerKey = `${oracleUrl}|${hexFallback ?? ''}`;
+  const [loggedInPubkey, setLoggedInPubkey] = useState<string | null>(null);
+  const [rootSearchInput, setRootSearchInput] = useState('');
+  const [rootPubkeyHistory, setRootPubkeyHistory] = useState<string[]>(() => readRootPubkeyHistory());
+  const [rootOptionNames, setRootOptionNames] = useState<Record<string, string>>({});
+  const didInitRootInputRef = useRef(false);
+  const selectedRootPubkey = useMemo(() => toHexPubkey(rootSearchInput), [rootSearchInput]);
+  const providerKey = `${oracleUrl}|${selectedRootPubkey ?? ''}`;
+  const rootChoices = useMemo(
+    () => mergeHistoryWithLoggedIn(loggedInPubkey, rootPubkeyHistory),
+    [loggedInPubkey, rootPubkeyHistory]
+  );
+
+  const saveRootPubkey = useCallback(
+    (pubkey: string) => {
+      const normalized = pubkey.toLowerCase();
+      setRootPubkeyHistory((prev) => {
+        const next = [normalized, ...prev.filter((p) => p !== normalized)].slice(
+          0,
+          ROOT_PUBKEY_HISTORY_LIMIT
+        );
+        writeRootPubkeyHistory(next);
+        return next;
+      });
+    },
+    []
+  );
+
+  useEffect(() => {
+    const tryGetLoggedInPubkey = async () => {
+      try {
+        const pk = await (window as NostrWindow).nostr?.getPublicKey?.();
+        if (!pk || !/^[0-9a-f]{64}$/i.test(pk)) return;
+        const normalized = pk.toLowerCase();
+        setLoggedInPubkey(normalized);
+        if (!didInitRootInputRef.current && !rootSearchInput.trim()) {
+          setRootSearchInput(normalized);
+          didInitRootInputRef.current = true;
+        }
+      } catch {
+        // Ignore when no NIP-07 signer is available.
+      }
+    };
+    void tryGetLoggedInPubkey();
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+    const loadNames = async () => {
+      const next: Record<string, string> = {};
+      for (const pubkey of rootChoices) {
+        const profile = await fetchKind0Profile(pubkey);
+        const name = profile?.displayName || profile?.name;
+        if (name) next[pubkey] = name;
+      }
+      if (!isCancelled) {
+        setRootOptionNames((prev) => ({ ...prev, ...next }));
+      }
+    };
+    if (rootChoices.length > 0) {
+      void loadNames();
+    }
+    return () => {
+      isCancelled = true;
+    };
+  }, [rootChoices]);
 
   const fillPubkeyFromNip07 = useCallback(async () => {
     const pk = await (window as NostrWindow).nostr?.getPublicKey?.();
     if (pk && /^[0-9a-f]{64}$/i.test(pk)) {
-      setManualKey(pk.toLowerCase());
+      const normalized = pk.toLowerCase();
+      setLoggedInPubkey(normalized);
+      setRootSearchInput(normalized);
+      saveRootPubkey(normalized);
     }
-  }, []);
+  }, [saveRootPubkey]);
+
+  const applyRootSelection = useCallback(() => {
+    if (!selectedRootPubkey) return;
+    saveRootPubkey(selectedRootPubkey);
+    setRootSearchInput(selectedRootPubkey);
+  }, [selectedRootPubkey, saveRootPubkey]);
 
   if (wotExt.isChecking) {
     return <PlaygroundExtensionChecking />;
@@ -331,9 +442,9 @@ export function PlaygroundPage() {
           <a href="https://github.com/nostr-wot/nostr-wot-sdk" target="_blank" rel="noopener noreferrer">
             nostr-wot-sdk
           </a>{' '}
-          (under <code className={styles.code}>web/src/lib/nostr-wot-sdk</code>), matching the nostr-wot
-          playground: extension-first,{' '}
-          <code className={styles.code}>{getWotOracleBase()}</code> as the default oracle.
+          (under <code className={styles.code}>web/src/lib/nostr-wot-sdk</code>), with extension-first mode
+          and this site domain as the default fallback API host (
+          <code className={styles.code}>{getWotOracleBase() || 'same origin'}</code>).
         </p>
       </header>
 
@@ -345,33 +456,58 @@ export function PlaygroundPage() {
             type="url"
             value={oracleUrl}
             onChange={(e) => setOracleUrl(e.target.value.trim())}
-            placeholder="https://wot-oracle.mappingbitcoin.com"
+            placeholder={typeof window !== 'undefined' ? window.location.origin : 'https://your-domain.example'}
             autoComplete="off"
           />
         </label>
         <label className={styles.field}>
-          <span>Your pubkey (optional, hex or npub)</span>
+          <span>Graph root pubkey (searchable)</span>
           <input
             className={styles.input}
-            value={manualKey}
-            onChange={(e) => setManualKey(e.target.value)}
-            placeholder="When no WoT extension — needed for oracle / graph root"
+            list="playground-root-pubkeys"
+            value={rootSearchInput}
+            onChange={(e) => setRootSearchInput(e.target.value)}
+            placeholder="Hex or npub (logged-in account is first)"
             autoComplete="off"
           />
+          <datalist id="playground-root-pubkeys">
+            {rootChoices.map((pubkey) => (
+              <option
+                key={pubkey}
+                value={pubkey}
+                label={`${pubkey === loggedInPubkey ? 'Logged-in' : 'Recent'}${
+                  rootOptionNames[pubkey] ? ` - ${rootOptionNames[pubkey]}` : ''
+                }`}
+              />
+            ))}
+          </datalist>
         </label>
         <div className={styles.rowActions} style={{ alignSelf: 'flex-end' }}>
           <button type="button" className={styles.btn} onClick={() => void fillPubkeyFromNip07()}>
             Use NIP-07 signer
           </button>
+          <button
+            type="button"
+            className={styles.btnPrimary}
+            onClick={applyRootSelection}
+            disabled={!selectedRootPubkey}
+          >
+            Use as root
+          </button>
         </div>
       </div>
-      {manualKey.trim() && !hexFallback && (
+      {rootSearchInput.trim() && !selectedRootPubkey && (
         <p className={styles.warn} role="alert">
           Could not parse pubkey. Use 64-char hex or npub1…
         </p>
       )}
 
-      <PlaygroundWithProviders key={providerKey} oracleUrl={oracleUrl} hexFallback={hexFallback} />
+      <PlaygroundWithProviders
+        key={providerKey}
+        oracleUrl={oracleUrl}
+        hexFallback={selectedRootPubkey}
+        rootOverridePubkey={selectedRootPubkey}
+      />
     </div>
   );
 }

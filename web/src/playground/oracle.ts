@@ -1,8 +1,6 @@
-import { DEFAULT_ORACLE } from '../lib/nostr-wot-sdk/utils';
-
-/** Public WoT oracle host (same default as nostr-wot / nostr-wot-sdk). Override with `VITE_WOT_ORACLE_URL`. */
+/** Oracle/API host for WoT fallback queries. Defaults to current site origin. */
 export function getWotOracleBase(): string {
   const env = import.meta.env.VITE_WOT_ORACLE_URL as string | undefined;
-  const raw = env?.trim() || DEFAULT_ORACLE;
+  const raw = env?.trim() || (typeof window !== 'undefined' ? window.location.origin : '');
   return raw.replace(/\/+$/, '');
 }

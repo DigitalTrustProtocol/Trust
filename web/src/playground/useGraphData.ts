@@ -1,17 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchGraphOut, fetchWhoami, getApiBase } from "../api";
 import { useGraph } from "./GraphContext";
 import { useWoTContext } from "../lib/nostr-wot-sdk/react";
 import type { GraphData, GraphNode, GraphEdge, NodeProfile } from "./graph/types";
 import { formatPubkey } from "./graph/transformers";
-import {
-  getCachedProfiles,
-  cacheProfiles,
-  getPubkeysToFetch,
-  getCachedTrustBatch,
-  cacheTrustBatch,
-  type TrustData,
-} from "./cache/profileCache";
-import { getWotOracleBase } from "./oracle";
+import { getCachedProfiles, cacheProfiles, getPubkeysToFetch } from "./cache/profileCache";
 
 // Relays for profile fetching only
 const PROFILE_RELAYS = [
@@ -19,11 +12,16 @@ const PROFILE_RELAYS = [
   "wss://relay.nostr.band",
 ];
 
+function trustValueToScore(value: 1 | 0 | -1): number {
+  if (value === 1) return 1;
+  if (value === 0) return 0.3;
+  return 0.05;
+}
+
 /**
- * Hook to fetch and manage graph data
- * Uses WoT extension via SDK for all graph operations
+ * Hook to fetch and manage graph data from Trust graph API.
  */
-export function useGraphData() {
+export function useGraphData(rootOverridePubkey?: string | null) {
   const {
     setData,
     mergeData,
@@ -36,8 +34,8 @@ export function useGraphData() {
     state,
   } = useGraph();
 
-  // Get WoT instance from SDK context
   const { wot, isReady } = useWoTContext();
+  const apiBase = getApiBase();
 
   // Track user pubkey
   const [userPubkey, setUserPubkey] = useState<string | null>(null);
@@ -49,33 +47,29 @@ export function useGraphData() {
   const profileCacheRef = useRef<Map<string, NodeProfile>>(new Map());
   const expandingNodesRef = useRef<Set<string>>(new Set());
   const initializedRef = useRef(false);
-  // Full list of root's follows (unpaged) — used to enforce correct hop distances.
-  // A pubkey in this set is ALWAYS hop-1, regardless of where it was discovered.
-  const rootFollowsRef = useRef<Set<string>>(new Set());
-  const wotRef = useRef(wot);
-  wotRef.current = wot;
-
-  // Get user pubkey when WoT is ready
   useEffect(() => {
     const getPubkey = async () => {
-      console.log("[useGraphData] Checking WoT readiness - wot:", !!wot, "isReady:", isReady);
-      if (wot && isReady) {
-        try {
+      if (!isReady) return;
+      try {
+        if (rootOverridePubkey) {
+          setUserPubkey(rootOverridePubkey);
+          return;
+        }
+        if (wot) {
           const pubkey = await wot.getMyPubkey();
-          console.log("[useGraphData] SDK getMyPubkey response:", pubkey);
           if (pubkey) {
             setUserPubkey(pubkey);
-            console.log("[useGraphData] Got user pubkey:", pubkey.slice(0, 8));
-          } else {
-            console.warn("[useGraphData] getMyPubkey returned null/undefined");
+            return;
           }
-        } catch (err) {
-          console.error("[useGraphData] Failed to get pubkey:", err);
         }
+        const whoami = await fetchWhoami(apiBase);
+        if (whoami.publicKey) setUserPubkey(whoami.publicKey.toLowerCase());
+      } catch (err) {
+        console.error("[useGraphData] Failed to get pubkey:", err);
       }
     };
-    getPubkey();
-  }, [wot, isReady]);
+    void getPubkey();
+  }, [wot, isReady, apiBase, rootOverridePubkey]);
 
   /**
    * Fetch profiles for multiple pubkeys (optional, non-blocking)
@@ -188,7 +182,7 @@ export function useGraphData() {
   );
 
   /**
-   * Build initial graph with only the root node
+   * Build initial graph with only the root node.
    */
   const buildInitialGraph = useCallback(async () => {
     if (!userPubkey || initializedRef.current) return;
@@ -239,37 +233,23 @@ export function useGraphData() {
   ]);
 
   /**
-   * Expand a node to load its follows using extension
+   * Expand a node by loading `GET /v1/out?author=<pubkey>`.
    */
   const expandNodeFollows = useCallback(
     async (pubkey: string) => {
-      console.log("[expandNodeFollows] Called for pubkey:", pubkey.slice(0, 8));
-
-      // Capture WoT instance to avoid race conditions
-      const wotInstance = wotRef.current;
-      if (!wotInstance) {
-        console.log("[expandNodeFollows] WoT not available");
-        setError("WoT extension required");
-        return;
-      }
-
       if (expandingNodesRef.current.has(pubkey)) {
-        console.log("[expandNodeFollows] Already expanding, skipping");
         return;
       }
 
       const currentState = stateRef.current;
       if (currentState.expandedNodes.has(pubkey)) {
-        console.log("[expandNodeFollows] Already expanded, skipping");
         return;
       }
 
       const node = currentState.data.nodes.find((n) => n.id === pubkey);
       const parentDistance = node?.distance ?? 0;
-      console.log("[expandNodeFollows] Node distance:", parentDistance);
 
       if (parentDistance >= 4) {
-        console.log("[expandNodeFollows] Distance >= 4, skipping");
         return;
       }
 
@@ -278,131 +258,12 @@ export function useGraphData() {
       setLoading(true);
 
       try {
-        // Get follows from extension
-        console.log("[expandNodeFollows] Fetching follows from extension for pubkey:", pubkey.slice(0, 8));
-        const follows = await wotInstance.getFollows(pubkey);
-        console.log("[expandNodeFollows] SDK getFollows response - count:", follows?.length || 0, "first 3:", follows?.slice(0, 3).map(f => f.slice(0, 8)));
-
-        if (!follows || follows.length === 0) {
-          console.log("[expandNodeFollows] No follows found");
-          return;
-        }
-
-        // If expanding the root node, store ALL its follows for hop-distance enforcement
-        if (parentDistance === 0) {
-          rootFollowsRef.current = new Set(follows);
-          console.log("[expandNodeFollows] Stored root follows:", follows.length);
-        }
+        const out = await fetchGraphOut(apiBase, { author: pubkey });
+        const connections = out.connections;
+        if (connections.length === 0) return;
 
         const latestState = stateRef.current;
         const existingIds = new Set(latestState.data.nodes.map((n) => n.id));
-        const newPubkeys = follows.filter((pk: string) => !existingIds.has(pk));
-
-        // Get trust data - first from cache, then from extension for uncached
-        // SDK now provides score directly, so we cache hops, paths, and score
-        const wotData = new Map<string, { distance: number; paths: number | null; score: number | null }>();
-
-        if (newPubkeys.length > 0) {
-          // Get cached trust data first
-          const cachedTrust = getCachedTrustBatch(newPubkeys);
-          cachedTrust.forEach((trust, pk) => {
-            wotData.set(pk, {
-              distance: trust.distance ?? parentDistance + 1,
-              paths: trust.paths,
-              score: trust.score,
-            });
-          });
-
-          // Fetch trust for uncached pubkeys - use getDistanceBatch with includePaths and includeScores
-          const uncachedPubkeys = newPubkeys.filter((pk) => !cachedTrust.has(pk));
-          if (uncachedPubkeys.length > 0) {
-            try {
-              console.log("[expandNodeFollows] Getting WoT data for", uncachedPubkeys.length, "pubkeys...");
-              const batchResults = await wotInstance.getDistanceBatch(uncachedPubkeys, { includePaths: true, includeScores: true });
-              console.log("[expandNodeFollows] SDK getDistanceBatch response (first 3):",
-                JSON.stringify(Object.fromEntries(Object.entries(batchResults).slice(0, 3)), null, 2));
-
-              const newTrustData = new Map<string, TrustData>();
-              const nullResultPubkeys: string[] = [];
-
-              for (const [pk, result] of Object.entries(batchResults)) {
-                // Expecting { hops, paths, score } | null from SDK
-                if (result === null) {
-                  // Extension doesn't have data — collect for Oracle fallback
-                  nullResultPubkeys.push(pk);
-                } else {
-                  const resultData = result as { hops: number; paths: number; score: number };
-                  wotData.set(pk, {
-                    distance: resultData.hops,
-                    paths: resultData.paths,
-                    score: resultData.score,
-                  });
-                  // Only cache real data from the extension
-                  newTrustData.set(pk, {
-                    distance: resultData.hops,
-                    paths: resultData.paths,
-                    score: resultData.score,
-                  });
-                }
-              }
-
-              // Query Oracle API for pubkeys the extension couldn't resolve
-              if (nullResultPubkeys.length > 0) {
-                const rootPk = stateRef.current.rootPubkey;
-                if (rootPk) {
-                  console.log("[expandNodeFollows] Querying Oracle for", nullResultPubkeys.length, "null-result pubkeys...");
-                  const oracleBase = getWotOracleBase();
-                  const oracleResults = await Promise.allSettled(
-                    nullResultPubkeys.slice(0, 50).map(async (pk) => {
-                      const res = await fetch(
-                        `${oracleBase}/distance?from=${rootPk}&to=${pk}`
-                      );
-                      if (!res.ok) return { pk, data: null };
-                      const data = await res.json();
-                      return { pk, data };
-                    })
-                  );
-
-                  for (const settled of oracleResults) {
-                    if (settled.status === "fulfilled" && settled.value.data && settled.value.data.hops != null) {
-                      const { pk, data } = settled.value;
-                      wotData.set(pk, {
-                        distance: data.hops,
-                        paths: data.paths ?? null,
-                        score: data.score ?? null,
-                      });
-                      // Cache Oracle results — they are real WoT data
-                      newTrustData.set(pk, {
-                        distance: data.hops,
-                        paths: data.paths ?? null,
-                        score: data.score ?? null,
-                      });
-                    }
-                  }
-                }
-
-                // For any pubkeys still unresolved after Oracle, use structural fallback
-                // but do NOT cache it
-                for (const pk of nullResultPubkeys) {
-                  if (!wotData.has(pk)) {
-                    wotData.set(pk, {
-                      distance: parentDistance + 1,
-                      paths: null,
-                      score: null,
-                    });
-                  }
-                }
-              }
-
-              // Cache the new trust data (only real data, never structural fallbacks)
-              if (newTrustData.size > 0) {
-                cacheTrustBatch(newTrustData);
-              }
-            } catch (err) {
-              console.warn("[expandNodeFollows] getDistanceBatch failed:", err);
-            }
-          }
-        }
 
         const newNodes: GraphNode[] = [];
         const newLinks: GraphEdge[] = [];
@@ -414,44 +275,34 @@ export function useGraphData() {
         const parentY = parentNode?.y ?? 0;
         const parentZ = parentNode?.z ?? 0;
 
-        // Count how many new nodes we'll create, for even angular spread
-        const newFollowPubkeys = follows.filter((pk: string) => !existingIds.has(pk));
-        const totalNew = newFollowPubkeys.length;
+        const profilePubkeys: string[] = [];
+        const totalNew = connections.length;
         let newNodeIndex = 0;
 
-        for (const followPubkey of follows) {
-          const extData = wotData.get(followPubkey);
-          const pathCount = extData?.paths ?? 1;
-          const trustScore = extData?.score ?? 0;
-
-          // Enforce correct hop distance:
-          // If the root directly follows this person, they are ALWAYS hop-1,
-          // regardless of where they were discovered during expansion.
-          const isRootFollow = rootFollowsRef.current.has(followPubkey);
-          const correctDistance = isRootFollow ? 1 : (extData?.distance ?? parentDistance + 1);
-
-          // Skip nodes that the root follows but are being discovered via another expansion —
-          // they should only appear when the root is expanded (or already visible as hop-1).
-          // This prevents a root follow from appearing as hop-2 under a different node.
-          if (isRootFollow && parentDistance > 0) {
-            // Don't render this node here — it belongs to hop-1 layer
-            continue;
-          }
+        for (const connection of connections) {
+          const targetId = connection.subject;
+          const subjectType = connection.subjectType;
+          const pathCount = 1;
+          const trustScore = trustValueToScore(connection.edge.value);
+          const correctDistance = parentDistance + 1;
+          const isPubkey = subjectType === "p";
+          const linkType: GraphEdge["type"] =
+            connection.edge.value < 0 ? "mute" : "follow";
 
           // Only add links to NEW nodes — skip edges to already-existing nodes
           // to avoid cross-cluster "ray" lines flying across the screen
-          if (!existingIds.has(followPubkey)) {
+          if (!existingIds.has(targetId)) {
             newLinks.push({
               source: pubkey,
-              target: followPubkey,
-              type: "follow",
+              target: targetId,
+              type: linkType,
               strength: trustScore,
               bidirectional: false,
             });
           }
 
-          if (!existingIds.has(followPubkey)) {
-            const cachedProfile = profileCacheRef.current.get(followPubkey);
+          if (!existingIds.has(targetId)) {
+            const cachedProfile = isPubkey ? profileCacheRef.current.get(targetId) : undefined;
 
             // Seed initial position scattered around the parent node
             // Use random angle + varying radius so nodes don't all appear at once in a visible ring
@@ -465,11 +316,11 @@ export function useGraphData() {
             newNodeIndex++;
 
             newNodes.push({
-              id: followPubkey,
+              id: targetId,
               label:
                 cachedProfile?.displayName ||
                 cachedProfile?.name ||
-                formatPubkey(followPubkey),
+                (isPubkey ? formatPubkey(targetId) : `${subjectType}:${targetId.slice(0, 12)}...`),
               picture: cachedProfile?.picture,
               distance: correctDistance,
               pathCount,
@@ -481,6 +332,7 @@ export function useGraphData() {
               y,
               z,
             });
+            if (isPubkey) profilePubkeys.push(targetId);
           }
         }
 
@@ -526,32 +378,21 @@ export function useGraphData() {
         });
 
         // Collect distance corrections for existing nodes found in this expansion.
-        // A node might already be in the graph at hop-3 but is actually hop-2 from root.
-        const existingFollows = follows.filter((pk: string) => existingIds.has(pk) && pk !== pubkey);
+        const existingFollows = connections
+          .map((c) => c.subject)
+          .filter((id) => existingIds.has(id) && id !== pubkey);
         const distanceUpdates: GraphNode[] = [];
 
         if (existingFollows.length > 0) {
-          try {
-            const existingBatchResults = await wotInstance.getDistanceBatch(
-              existingFollows.slice(0, 50),
-              { includePaths: true, includeScores: true }
-            );
-
-            for (const [pk, result] of Object.entries(existingBatchResults)) {
-              if (result === null) continue;
-              const resultData = result as { hops: number; paths: number; score: number };
-              const existingNode = latestState.data.nodes.find(n => n.id === pk);
-              if (existingNode && resultData.hops < existingNode.distance) {
-                distanceUpdates.push({
-                  ...existingNode,
-                  distance: resultData.hops,
-                  pathCount: resultData.paths ?? existingNode.pathCount,
-                  trustScore: resultData.score ?? existingNode.trustScore,
-                });
-              }
+          for (const id of existingFollows) {
+            const existingNode = latestState.data.nodes.find((n) => n.id === id);
+            if (!existingNode) continue;
+            if (parentDistance + 1 < existingNode.distance) {
+              distanceUpdates.push({
+                ...existingNode,
+                distance: parentDistance + 1,
+              });
             }
-          } catch {
-            // Non-critical — skip corrections if batch fails
           }
         }
 
@@ -562,21 +403,15 @@ export function useGraphData() {
           mergeData({ nodes: [...cappedNodes, ...distanceUpdates], links: cappedLinks });
         }
 
-        if (newPubkeys.length > 0) {
-          fetchProfiles(newPubkeys).then((profiles) => {
+        if (profilePubkeys.length > 0) {
+          fetchProfiles(profilePubkeys).then((profiles) => {
             if (profiles.size > 0) {
               addProfiles(profiles);
             }
           });
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.toLowerCase().includes("not initialized") || msg.toLowerCase().includes("account configured")) {
-          // Extension local graph not ready — silently un-mark so user can retry
-          console.warn("[expandNodeFollows] Extension local graph not ready:", msg);
-        } else {
-          console.error("Failed to expand node:", err);
-        }
+        console.error("Failed to expand node:", err);
         // Un-mark as expanded on failure so the Expand button reappears
         collapseNode(pubkey);
       } finally {
@@ -584,7 +419,7 @@ export function useGraphData() {
         setLoading(false);
       }
     },
-    [expandNode, collapseNode, fetchProfiles, addProfiles, mergeData, setLoading, setError]
+    [apiBase, expandNode, collapseNode, fetchProfiles, addProfiles, mergeData, setLoading]
   );
 
   // Reset refs when user changes or graph is cleared
@@ -598,7 +433,6 @@ export function useGraphData() {
     if (state.data.nodes.length === 0) {
       initializedRef.current = false;
       expandingNodesRef.current.clear();
-      rootFollowsRef.current.clear();
     }
   }, [state.data.nodes.length]);
 
@@ -609,6 +443,8 @@ export function useGraphData() {
     }
   }, [isReady, userPubkey, state.data.nodes.length, buildInitialGraph]);
 
+  const readyForGraphApi = !!userPubkey;
+
   return {
     buildInitialGraph,
     expandNodeFollows,
@@ -616,7 +452,7 @@ export function useGraphData() {
     fetchProfiles,
     isLoading: state.isLoading,
     error: state.error,
-    isReady,
+    isReady: isReady && readyForGraphApi,
     userPubkey,
   };
 }
