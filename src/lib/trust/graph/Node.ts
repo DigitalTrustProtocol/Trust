@@ -2,7 +2,7 @@ import type { VerifiedEvent } from 'nostr-tools';
 import type { SubjectType, Identity } from '../../nostr/nip32010.js';
 import { parseIdentityFromKind0, mergeIdentity } from '../identity.js';
 import { Graph } from './Graph.js';
-import { SharedListView } from '../../Shared/SharedList.js';
+import type { SharedListView } from '../../Shared/SharedList.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 
 
@@ -19,6 +19,20 @@ export class NodeView implements SharedListView {
 
     attach(b: Uint8Array<ArrayBufferLike>): void {
         this.data = b.subarray(b.byteOffset, b.byteOffset + b.byteLength);
+    }
+
+    attachAt(
+        buffer: ArrayBufferLike,
+        byteOffset: number,
+        byteLength: number,
+        _itemIndex: number,
+        _listLength: number,
+    ): void {
+        this.attach(new Uint8Array(buffer, byteOffset, byteLength));
+    }
+
+    nextItem(): this | undefined {
+        return undefined;
     }
 
 

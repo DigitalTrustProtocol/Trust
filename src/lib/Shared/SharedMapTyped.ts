@@ -1,14 +1,20 @@
 /**
- * SharedMapTyped — concurrent hash map in a SharedArrayBuffer.
+ * SharedMapTyped — `(key1, key2) → value` hash map in a `SharedArrayBuffer`.
  *
- * **Lineage.** The locking model, coalesced-chaining table, line locks, and
- * reader/writer maplock protocol follow the original **SharedMap** design by
- * [Momtchil Momtchev](mailto:momtchil@momtchev.com) (see
- * [mmomtchev/SharedMap](https://github.com/mmomtchev/SharedMap)). This file is a
- * **substantially altered derivative**: fixed-width binary records (two uint32
- * key parts, one uint32 value), a dedicated occupancy bitmap so `(0,0)` is a
- * valid key, a different hash over key words, `resize()`, TypeScript, and other
- * layout/API changes — not a drop-in replacement for the upstream class.
+ * **Concurrency.** No mutex, no line locks, no `Atomics`. Intended for **main-thread-only**
+ * mutation (`set` / `delete` / `clear` / internal rehash); workers should treat the buffer as
+ * **read-only** and only call `get` / `has` / `keys` / `map` / `reduce` after the producer publishes
+ * updates (same model as {@link SharedList}).
+ *
+ * **Growth.** When the entry count **exceeds** `floor(0.75 × bucketCapacity)` after an insert, the
+ * map is rehashed into a larger table (default next size `max(⌈n / 0.75⌉, 2 × current capacity)`,
+ * aligned to 4 buckets). Explicit {@link resize} is still available. For growable buffers created
+ * with {@link SharedMapTyped.createShared}, use {@link clone} or {@link growSharedBacking} like
+ * {@link SharedList}.
+ *
+ * **Lineage.** Table shape (coalesced chaining, occupancy bitmap, uint32 key/value words) derives
+ * from the earlier concurrent `SharedMapTyped` design; locking and `Atomics` were removed in
+ * favor of the single-writer model above.
  *
  * @packageDocumentation
  */
@@ -18,6 +24,13 @@ const UINT32_UNDEFINED = 0xffffffff;
 
 const KEY_WORDS = 2;
 const VALUE_WORDS = 1;
+
+const LAYOUT_VERSION = 1;
+
+/** `true` when entry count strictly exceeds 75% of bucket slots (`n × 100 > cap × 75`). */
+function exceedsLoadFactor(n: number, cap: number): boolean {
+    return n * 100 > cap * 75;
+}
 
 function _hashPair(k1: number, k2: number): number {
     let h = (Math.imul(k1 >>> 0, 0x9e3779b1) ^ (k2 >>> 0) * 0x85ebca6b) >>> 0;
@@ -30,39 +43,62 @@ function _hashPair(k1: number, k2: number): number {
     return h === UINT32_UNDEFINED ? 1 : h;
 }
 
-function align32(v: number): number {
-    return (v & 0xffffffffffffc) + (v & 0x3 ? 0x4 : 0);
+function align32(maxSize: number): number {
+    return (maxSize & 0xffffffffffffc) + (maxSize & 0x3 ? 0x4 : 0);
 }
 
 const META = {
     maxSize: 0,
     length: 1,
+    layoutVersion: 2,
 } as const;
 
-const LOCK = {
-    SHAREDREAD: 0,
-    READLOCK: 1,
-    READERS: 2,
-    SHAREDWRITE: 3,
-    WRITELOCK: 4,
-    WRITERS: 5,
-} as const;
+const META_WORDS = 3;
 
-class Deadlock extends Error {
-    constructor(message?: string, options?: ErrorOptions) {
-        super(message, options);
-    }
+function totalBytesForBuckets(maxSize: number): number {
+    let offset = META_WORDS * Uint32Array.BYTES_PER_ELEMENT;
+    const keysBytes = KEY_WORDS * maxSize * Uint32Array.BYTES_PER_ELEMENT;
+    const valuesBytes = VALUE_WORDS * maxSize * Uint32Array.BYTES_PER_ELEMENT;
+    const chainBytes = maxSize * Uint32Array.BYTES_PER_ELEMENT;
+    const usedBytes = maxSize * Uint8Array.BYTES_PER_ELEMENT;
+    let total = offset + keysBytes + valuesBytes + chainBytes + usedBytes;
+    total = (total + 3) & ~3;
+    return total;
 }
 
-export interface SharedMapTypedOptions {
-    lockWrite?: boolean;
-    lockExclusive?: boolean;
+type GrowableSharedArrayBufferCtor = new (
+    byteLength: number,
+    options?: { maxByteLength?: number },
+) => SharedArrayBuffer;
+
+function createGrowableSharedArrayBuffer(byteLength: number, maxByteLength: number): SharedArrayBuffer {
+    const Ctor = SharedArrayBuffer as unknown as GrowableSharedArrayBufferCtor;
+    return new Ctor(byteLength, { maxByteLength });
 }
 
-/** Key pair as unsigned 32-bit components (low words of JS numbers). */
+function readSharedArrayBufferMaxByteLength(sab: SharedArrayBuffer): number | undefined {
+    const m = (sab as { maxByteLength?: number }).maxByteLength;
+    return typeof m === 'number' && Number.isFinite(m) ? m : undefined;
+}
+
 export interface SharedMapTypedKeyPair {
     key1: number;
     key2: number;
+}
+
+export interface SharedMapTypedConstructorOptions {
+    ownedSharedBacking?: { initialByteLength: number; maxByteLength: number };
+    initFresh?: { initialBucketCapacity: number };
+}
+
+export interface SharedMapTypedCreateSharedOptions {
+    initialBucketCapacity: number;
+    maxByteLength?: number;
+}
+
+export interface SharedMapTypedCloneOptions {
+    newByteLength?: number;
+    newMaxByteLength?: number;
 }
 
 interface FindResult {
@@ -76,301 +112,287 @@ interface ChainEntry {
     value: number;
 }
 
-/**
- * Fixed-shape concurrent hash map: `(key1, key2) → value` with uint32 words
- * stored in a `SharedArrayBuffer`. See the file header for attribution to the
- * original SharedMap author and a summary of differences from upstream.
- */
 export default class SharedMapTyped {
-    /** Assigned in {@link SharedMapTyped._allocateStorage}. */
     public storage!: SharedArrayBuffer;
     meta!: Uint32Array;
     keysData!: Uint32Array;
     valuesData!: Uint32Array;
     chaining!: Uint32Array;
     bucketUsed!: Uint8Array;
-    linelocks!: Int32Array;
-    maplock!: Int32Array;
     stats: {
         set: number;
         delete: number;
         collisions: number;
         rechains: number;
         get: number;
-        deadlock: number;
+        rehash: number;
     };
+    private _ownedSharedBacking: { initialByteLength: number; maxByteLength: number } | undefined;
 
-    constructor(maxSize: number) {
-        const aligned = align32(maxSize);
-        if (!(aligned > 0)) throw new RangeError('maxSize must be a positive number');
-        this.stats = { set: 0, delete: 0, collisions: 0, rechains: 0, get: 0, deadlock: 0 };
-        this._allocateStorage(aligned);
+    constructor(storage: SharedArrayBuffer, options?: SharedMapTypedConstructorOptions) {
+        this.stats = { set: 0, delete: 0, collisions: 0, rechains: 0, get: 0, rehash: 0 };
+        this._ownedSharedBacking = options?.ownedSharedBacking;
+        this.storage = storage;
+
+        if (options?.initFresh) {
+            const raw = options.initFresh.initialBucketCapacity;
+            const cap = align32(raw);
+            if (!(cap > 0)) {
+                throw new RangeError('SharedMapTyped: initialBucketCapacity must be a positive number');
+            }
+            const need = totalBytesForBuckets(cap);
+            if (need > storage.byteLength) {
+                throw new RangeError('SharedMapTyped: buffer too small for initFresh layout');
+            }
+            this._bindViews(cap);
+            this.meta[META.maxSize] = cap >>> 0;
+            this.meta[META.length] = 0;
+            this.meta[META.layoutVersion] = LAYOUT_VERSION;
+            this.chaining.fill(UINT32_UNDEFINED);
+            this.bucketUsed.fill(0);
+            this.keysData.fill(0);
+            this.valuesData.fill(0);
+        } else {
+            SharedMapTyped._attachFromStorageInto(this, storage);
+        }
     }
 
     /**
-     * Attach to an existing `SharedArrayBuffer` built by {@link SharedMapTyped}.
-     * Useful in workers that receive only the SAB reference.
+     * Allocate a growable `SharedArrayBuffer` and build an empty map. Main thread owns writes;
+     * workers attach with {@link SharedMapTyped.from}.
      */
+    static createShared(options: SharedMapTypedCreateSharedOptions): SharedMapTyped {
+        const cap = align32(options.initialBucketCapacity);
+        if (!(cap > 0)) {
+            throw new RangeError('SharedMapTyped.createShared: initialBucketCapacity must be positive');
+        }
+        const need = totalBytesForBuckets(cap);
+        const minMax = Math.max(need * 4, need + 4096);
+        const maxB = Math.max(options.maxByteLength ?? minMax, need);
+        if (!Number.isInteger(maxB) || maxB < need) {
+            throw new RangeError('SharedMapTyped.createShared: maxByteLength must be ≥ layout size');
+        }
+        const sab = createGrowableSharedArrayBuffer(need, maxB);
+        return new SharedMapTyped(sab, {
+            initFresh: { initialBucketCapacity: cap },
+            ownedSharedBacking: { initialByteLength: need, maxByteLength: maxB },
+        });
+    }
+
+    /** Attach to an existing buffer (e.g. worker); use only for reads unless coordinated with the writer. */
     static from(storage: SharedArrayBuffer): SharedMapTyped {
-        const metaCount = Object.keys(META).length;
-        const lockCount = Object.keys(LOCK).length;
-        const minBytes = metaCount * Uint32Array.BYTES_PER_ELEMENT;
-        if (storage.byteLength < minBytes) {
-            throw new RangeError('SharedMapTyped.from: buffer too small for header');
-        }
-
-        const meta = new Uint32Array(storage, 0, metaCount);
-        const maxSize = meta[META.maxSize] >>> 0;
-        const length = meta[META.length] >>> 0;
-        if (maxSize < 1 || length > maxSize) {
-            throw new RangeError('SharedMapTyped.from: invalid meta header');
-        }
-
-        let offset = 0;
-        const metaBytes = metaCount * Uint32Array.BYTES_PER_ELEMENT;
-        const keysBytes = KEY_WORDS * maxSize * Uint32Array.BYTES_PER_ELEMENT;
-        const valuesBytes = VALUE_WORDS * maxSize * Uint32Array.BYTES_PER_ELEMENT;
-        const chainBytes = maxSize * Uint32Array.BYTES_PER_ELEMENT;
-        const usedBytes = maxSize * Uint8Array.BYTES_PER_ELEMENT;
-        let afterUsed = offset + metaBytes + keysBytes + valuesBytes + chainBytes + usedBytes;
-        afterUsed = (afterUsed + 3) & ~3;
-        const lineBytes = Math.ceil(maxSize / 32) * Int32Array.BYTES_PER_ELEMENT;
-        const lockBytes = lockCount * Int32Array.BYTES_PER_ELEMENT;
-        const need = afterUsed + lineBytes + lockBytes;
-        if (need > storage.byteLength) {
-            throw new RangeError('SharedMapTyped.from: buffer byteLength is smaller than embedded layout');
-        }
-
         const inst = Object.create(SharedMapTyped.prototype) as SharedMapTyped;
-        inst.stats = { set: 0, delete: 0, collisions: 0, rechains: 0, get: 0, deadlock: 0 };
+        inst.stats = { set: 0, delete: 0, collisions: 0, rechains: 0, get: 0, rehash: 0 };
+        inst._ownedSharedBacking = undefined;
         inst.storage = storage;
-
-        offset = 0;
-        inst.meta = new Uint32Array(storage, offset, metaCount);
-        offset += inst.meta.byteLength;
-        inst.keysData = new Uint32Array(storage, offset, KEY_WORDS * maxSize);
-        offset += inst.keysData.byteLength;
-        inst.valuesData = new Uint32Array(storage, offset, VALUE_WORDS * maxSize);
-        offset += inst.valuesData.byteLength;
-        inst.chaining = new Uint32Array(storage, offset, maxSize);
-        offset += inst.chaining.byteLength;
-        inst.bucketUsed = new Uint8Array(storage, offset, maxSize);
-        offset += inst.bucketUsed.byteLength;
-        offset = (offset + 3) & ~3;
-        inst.linelocks = new Int32Array(storage, offset, Math.ceil(maxSize / 32));
-        offset += inst.linelocks.byteLength;
-        inst.maplock = new Int32Array(storage, offset, lockCount);
+        SharedMapTyped._attachFromStorageInto(inst, storage);
         return inst;
     }
 
-    /**
-     * Build views for a zeroed SharedArrayBuffer sized for `maxSize` buckets.
-     * `maxSize` must already be {@link align32 | aligned} and positive.
-     */
-    private _allocateStorage(maxSize: number): void {
-        let offset = 0;
-        const metaBytes = Object.keys(META).length * Uint32Array.BYTES_PER_ELEMENT;
-        const keysBytes = KEY_WORDS * maxSize * Uint32Array.BYTES_PER_ELEMENT;
-        const valuesBytes = VALUE_WORDS * maxSize * Uint32Array.BYTES_PER_ELEMENT;
-        const chainBytes = maxSize * Uint32Array.BYTES_PER_ELEMENT;
-        const usedBytes = maxSize * Uint8Array.BYTES_PER_ELEMENT;
-        let afterUsed = offset + metaBytes + keysBytes + valuesBytes + chainBytes + usedBytes;
-        afterUsed = (afterUsed + 3) & ~3;
-        const lineBytes = Math.ceil(maxSize / 32) * Int32Array.BYTES_PER_ELEMENT;
-        const lockBytes = Object.keys(LOCK).length * Int32Array.BYTES_PER_ELEMENT;
+    private static _attachFromStorageInto(target: SharedMapTyped, storage: SharedArrayBuffer): void {
+        const minBytes = META_WORDS * Uint32Array.BYTES_PER_ELEMENT;
+        if (storage.byteLength < minBytes) {
+            throw new RangeError('SharedMapTyped.from: buffer too small for header');
+        }
+        const meta = new Uint32Array(storage, 0, META_WORDS);
+        const maxSize = meta[META.maxSize] >>> 0;
+        const length = meta[META.length] >>> 0;
+        const ver = meta[META.layoutVersion] >>> 0;
+        if (ver !== LAYOUT_VERSION) {
+            throw new RangeError(`SharedMapTyped.from: unsupported layout version ${ver}`);
+        }
+        if (maxSize < 1 || length > maxSize) {
+            throw new RangeError('SharedMapTyped.from: invalid meta header');
+        }
+        const need = totalBytesForBuckets(maxSize);
+        if (need > storage.byteLength) {
+            throw new RangeError('SharedMapTyped.from: buffer byteLength is smaller than embedded layout');
+        }
+        target.meta = meta;
+        target._bindViews(maxSize);
+    }
 
-        this.storage = new SharedArrayBuffer(afterUsed - offset + lineBytes + lockBytes);
-
-        offset = 0;
-        this.meta = new Uint32Array(this.storage, offset, Object.keys(META).length);
-        offset += this.meta.byteLength;
-        this.meta[META.maxSize] = maxSize;
-        this.meta[META.length] = 0;
-
+    private _bindViews(maxSize: number): void {
+        let offset = META_WORDS * Uint32Array.BYTES_PER_ELEMENT;
+        this.meta = new Uint32Array(this.storage, 0, META_WORDS);
         this.keysData = new Uint32Array(this.storage, offset, KEY_WORDS * maxSize);
         offset += this.keysData.byteLength;
         this.valuesData = new Uint32Array(this.storage, offset, VALUE_WORDS * maxSize);
         offset += this.valuesData.byteLength;
         this.chaining = new Uint32Array(this.storage, offset, maxSize);
-        this.chaining.fill(UINT32_UNDEFINED);
         offset += this.chaining.byteLength;
         this.bucketUsed = new Uint8Array(this.storage, offset, maxSize);
-        offset += this.bucketUsed.byteLength;
-        offset = (offset + 3) & ~3;
-
-        this.linelocks = new Int32Array(this.storage, offset, Math.ceil(maxSize / 32));
-        offset += this.linelocks.byteLength;
-        this.maplock = new Int32Array(this.storage, offset, Object.keys(LOCK).length);
     }
 
-    /** Release {@link lockExclusive} on another map’s `maplock` view (same layout as this class). */
-    private _unlockReadLockOn(maplock: Int32Array): void {
-        const state = Atomics.exchange(maplock, LOCK.READLOCK, 0);
-        if (state === 0) throw new Error('maplock desync ' + LOCK.READLOCK);
-        Atomics.notify(maplock, LOCK.READLOCK);
+    /** Refresh typed views after the backing buffer grew in place (same `maxSize` in header). */
+    rebind(): void {
+        const maxSize = this.meta[META.maxSize] >>> 0;
+        this._bindViews(maxSize);
+    }
+
+    clone(options?: SharedMapTypedCloneOptions): SharedMapTyped {
+        const oldBuf = this.storage;
+        const oldLen = oldBuf.byteLength;
+        const meta = this._ownedSharedBacking;
+        const sabMax = readSharedArrayBufferMaxByteLength(oldBuf);
+        const oldMax = meta?.maxByteLength ?? sabMax ?? oldLen;
+
+        const newLen = options?.newByteLength ?? oldLen;
+        if (!Number.isInteger(newLen) || newLen < oldLen) {
+            throw new RangeError('SharedMapTyped.clone: newByteLength must be an integer ≥ current byteLength');
+        }
+        let newMax = options?.newMaxByteLength ?? oldMax;
+        if (!Number.isInteger(newMax) || newMax < newLen) {
+            throw new RangeError('SharedMapTyped.clone: newMaxByteLength must be an integer ≥ newByteLength');
+        }
+
+        const src = new Uint8Array(oldBuf, 0, oldLen);
+        const nextBuf = createGrowableSharedArrayBuffer(newLen, newMax);
+        new Uint8Array(nextBuf, 0, oldLen).set(src);
+
+        const inst = Object.create(SharedMapTyped.prototype) as SharedMapTyped;
+        inst.stats = { set: 0, delete: 0, collisions: 0, rechains: 0, get: 0, rehash: 0 };
+        inst.storage = nextBuf;
+        inst._ownedSharedBacking =
+            meta !== undefined ? { initialByteLength: meta.initialByteLength, maxByteLength: newMax } : undefined;
+        SharedMapTyped._attachFromStorageInto(inst, nextBuf);
+        return inst;
+    }
+
+    growSharedBacking(targetByteLength: number): void {
+        if (!this._ownedSharedBacking) {
+            throw new RangeError('SharedMapTyped.growSharedBacking: only for buffers from createShared');
+        }
+        const sab = this.storage;
+        const grow = (sab as { grow?: (n: number) => void }).grow;
+        if (typeof grow !== 'function') {
+            throw new RangeError('SharedMapTyped.growSharedBacking: SharedArrayBuffer is not growable');
+        }
+        const cur = sab.byteLength;
+        if (!Number.isInteger(targetByteLength) || targetByteLength <= cur) {
+            throw new RangeError(
+                'SharedMapTyped.growSharedBacking: targetByteLength must be an integer > current length',
+            );
+        }
+        const maxB = readSharedArrayBufferMaxByteLength(sab);
+        if (maxB !== undefined && targetByteLength > maxB) {
+            throw new RangeError(
+                `SharedMapTyped.growSharedBacking: targetByteLength ${targetByteLength} exceeds maxByteLength ${maxB}`,
+            );
+        }
+        grow.call(sab, targetByteLength);
+        this.rebind();
+    }
+
+    get buffer(): SharedArrayBuffer {
+        return this.storage;
+    }
+
+    get length(): number {
+        return this.meta[META.length] >>> 0;
+    }
+
+    get size(): number {
+        return this.meta[META.maxSize] >>> 0;
     }
 
     /**
-     * Replace backing storage with a new SharedArrayBuffer and reinsert all entries.
-     * Must run when no other agents still rely on the previous buffer’s locks, or they must
-     * adopt this instance’s new `storage` reference after `resize` returns.
-     *
-     * @param newMaxSize — new bucket capacity (aligned up to a multiple of 4); must be ≥ current {@link length}.
+     * Replace with a larger bucket table and rehash all entries.
+     * @param newMaxSize — bucket capacity (aligned to a multiple of 4); must be ≥ current {@link length}.
      */
     resize(newMaxSize: number): void {
         const aligned = align32(newMaxSize);
-        if (!(aligned > 0)) throw new RangeError('newMaxSize must be a positive number');
+        if (!(aligned > 0)) {
+            throw new RangeError('newMaxSize must be a positive number');
+        }
         if (aligned < this.length) {
             throw new RangeError(
                 `SharedMapTyped.resize: new capacity ${aligned} is smaller than current length ${this.length}`,
             );
         }
-        if (aligned === this.size) return;
+        if (aligned === this.size) {
+            return;
+        }
+        this._rehashToCapacity(aligned);
+    }
 
-        this.lockExclusive();
-        const oldMaplock = this.maplock;
-        let releasedOldLock = false;
-        try {
-            const oldMax = this.meta[META.maxSize];
-            const expectedLen = Atomics.load(this.meta, META.length);
+    private _nextBucketCapacityForCount(n: number, currentCap: number): number {
+        const minSlots = Math.ceil((n * 100) / 75);
+        const doubled = currentCap * 2;
+        return align32(Math.max(minSlots, doubled, n + 1));
+    }
 
-            const tmp = new SharedMapTyped(aligned);
-            tmp.lockExclusive();
-            try {
-                let copied = 0;
-                for (let pos = 0; pos < oldMax; pos++) {
-                    if (!this.bucketUsed[pos]) continue;
-                    tmp._set(
-                        this.keysData[pos * KEY_WORDS] >>> 0,
-                        this.keysData[pos * KEY_WORDS + 1] >>> 0,
-                        this._readValue(pos),
-                        true,
-                    );
-                    copied++;
-                }
-                if (copied !== expectedLen) {
-                    throw new Error('SharedMapTyped.resize: entry count does not match meta length');
-                }
-            } finally {
-                tmp.unlockExclusive();
+    private _rehashToCapacity(newAlignedMax: number): void {
+        const old = this;
+        const need = totalBytesForBuckets(newAlignedMax);
+        let newBuf: SharedArrayBuffer;
+        let nextOwned: { initialByteLength: number; maxByteLength: number } | undefined;
+
+        if (this._ownedSharedBacking) {
+            const ceiling = Math.max(need * 4, need + 4096, this._ownedSharedBacking.maxByteLength);
+            newBuf = createGrowableSharedArrayBuffer(need, ceiling);
+            nextOwned = {
+                initialByteLength: need,
+                maxByteLength: readSharedArrayBufferMaxByteLength(newBuf) ?? ceiling,
+            };
+        } else {
+            newBuf = new SharedArrayBuffer(need);
+            nextOwned = undefined;
+        }
+
+        const fresh = new SharedMapTyped(newBuf, {
+            initFresh: { initialBucketCapacity: newAlignedMax },
+            ownedSharedBacking: nextOwned,
+        });
+
+        const n = old.meta[META.length] >>> 0;
+        let copied = 0;
+        const oldMax = old.meta[META.maxSize] >>> 0;
+        for (let pos = 0; pos < oldMax; pos++) {
+            if (!old.bucketUsed[pos]) {
+                continue;
             }
-
-            this._unlockReadLockOn(oldMaplock);
-            releasedOldLock = true;
-
-            this.storage = tmp.storage;
-            this.meta = tmp.meta;
-            this.keysData = tmp.keysData;
-            this.valuesData = tmp.valuesData;
-            this.chaining = tmp.chaining;
-            this.bucketUsed = tmp.bucketUsed;
-            this.linelocks = tmp.linelocks;
-            this.maplock = tmp.maplock;
-        } catch (e: unknown) {
-            if (!releasedOldLock) this._unlockReadLockOn(oldMaplock);
-            throw e;
+            fresh._putPair(
+                old.keysData[pos * KEY_WORDS] >>> 0,
+                old.keysData[pos * KEY_WORDS + 1] >>> 0,
+                old._readValue(pos),
+            );
+            copied++;
+        }
+        if (copied !== n) {
+            throw new Error('SharedMapTyped._rehashToCapacity: entry count mismatch');
         }
 
-        this.stats.set = 0;
-        this.stats.delete = 0;
-        this.stats.collisions = 0;
-        this.stats.rechains = 0;
-        this.stats.get = 0;
-        this.stats.deadlock = 0;
+        this.storage = fresh.storage;
+        this.meta = fresh.meta;
+        this.keysData = fresh.keysData;
+        this.valuesData = fresh.valuesData;
+        this.chaining = fresh.chaining;
+        this.bucketUsed = fresh.bucketUsed;
+        this._ownedSharedBacking = fresh._ownedSharedBacking;
+        this.stats.rehash++;
     }
 
-    get length(): number {
-        return Atomics.load(this.meta, META.length);
-    }
-
-    get size(): number {
-        return this.meta[META.maxSize];
-    }
-
-    /* eslint-disable no-constant-condition */
-    _lock(l: number): void {
-        while (true) {
-            const state = Atomics.exchange(this.maplock, l, 1);
-            if (state === 0) return;
-            Atomics.wait(this.maplock, l, state);
+    private _maybeRehashForLoad(): void {
+        const n = this.meta[META.length] >>> 0;
+        const cap = this.meta[META.maxSize] >>> 0;
+        if (cap < 1) {
+            return;
+        }
+        if (exceedsLoadFactor(n, cap)) {
+            const next = this._nextBucketCapacityForCount(n, cap);
+            if (next > cap) {
+                this._rehashToCapacity(next);
+            }
         }
     }
 
-    _unlock(l: number): void {
-        const state = Atomics.exchange(this.maplock, l, 0);
-        if (state === 0) throw new Error('maplock desync ' + l);
-        Atomics.notify(this.maplock, l);
-    }
-
-    _lockLine(pos: number): number {
-        const bitmask = 1 << (pos % 32);
-        const index = Math.floor(pos / 32);
-        while (true) {
-            const state = Atomics.or(this.linelocks, index, bitmask);
-            if ((state & bitmask) === 0) return pos;
-            Atomics.wait(this.linelocks, index, state);
+    private _ensureSlotForNewKey(key1: number, key2: number): void {
+        const n = this.meta[META.length] >>> 0;
+        const cap = this.meta[META.maxSize] >>> 0;
+        if (n >= cap && this._find(key1, key2) === undefined) {
+            this._rehashToCapacity(this._nextBucketCapacityForCount(n + 1, cap));
         }
-    }
-    /* eslint-enable no-constant-condition */
-
-    _unlockLine(pos: number): void {
-        const bitmask = 1 << (pos % 32);
-        const notbitmask = (~bitmask) & UINT32_MAX;
-        const index = Math.floor(pos / 32);
-        const state = Atomics.and(this.linelocks, index, notbitmask);
-        if ((state & bitmask) === 0) throw new Error('linelock desync ' + pos);
-        Atomics.notify(this.linelocks, index);
-    }
-
-    _lockLineSliding(oldLock: number, newLock: number): number {
-        if (newLock <= oldLock) throw new Deadlock();
-        this._lockLine(newLock);
-        this._unlockLine(oldLock);
-        return newLock;
-    }
-
-    lockExclusive(): void {
-        this._lock(LOCK.READLOCK);
-    }
-
-    unlockExclusive(): void {
-        this._unlock(LOCK.READLOCK);
-    }
-
-    _lockSharedRead(): void {
-        this._lock(LOCK.SHAREDREAD);
-        if (++this.maplock[LOCK.READERS] === 1) this._lock(LOCK.READLOCK);
-        this._unlock(LOCK.SHAREDREAD);
-    }
-
-    _unlockSharedRead(): void {
-        this._lock(LOCK.SHAREDREAD);
-        if (--this.maplock[LOCK.READERS] === 0) this._unlock(LOCK.READLOCK);
-        this._unlock(LOCK.SHAREDREAD);
-    }
-
-    _lockSharedWrite(): void {
-        this._lockSharedRead();
-        this._lock(LOCK.SHAREDWRITE);
-        if (++this.maplock[LOCK.WRITERS] === 1) this._lock(LOCK.WRITELOCK);
-        this._unlock(LOCK.SHAREDWRITE);
-    }
-
-    _unlockSharedWrite(): void {
-        this._lock(LOCK.SHAREDWRITE);
-        if (--this.maplock[LOCK.WRITERS] === 0) this._unlock(LOCK.WRITELOCK);
-        this._unlock(LOCK.SHAREDWRITE);
-        this._unlockSharedRead();
-    }
-
-    lockWrite(): void {
-        this._lockSharedRead();
-        this._lock(LOCK.WRITELOCK);
-    }
-
-    unlockWrite(): void {
-        this._unlock(LOCK.WRITELOCK);
-        this._unlockSharedRead();
     }
 
     _bucketOccupied(pos: number): boolean {
@@ -389,26 +411,6 @@ export default class SharedMapTyped {
     _decodeKeyPair(pos: number): SharedMapTypedKeyPair {
         const b = pos * KEY_WORDS;
         return { key1: this.keysData[b] >>> 0, key2: this.keysData[b + 1] >>> 0 };
-    }
-
-    /* c8 ignore next 8 */
-    _decodeBucket(pos: number, n: number): string {
-        const { key1, key2 } = this._decodeKeyPair(pos);
-        return (
-            `pos: ${pos}` +
-            ` hash: ${this._hashKey(key1, key2)}` +
-            ` key: (${key1},${key2})` +
-            ` value: ${this._readValue(pos)}` +
-            ` chain: ${this.chaining[pos]}` +
-            (n > 0 && this.chaining[pos] !== UINT32_UNDEFINED
-                ? '\n' + this._decodeBucket(this.chaining[pos], n - 1)
-                : '')
-        );
-    }
-    /* c8 ignore next 5 */
-    __printMap(): void {
-        for (let i = 0; i < this.meta[META.maxSize]; i++) console.log(this._decodeBucket(i, 0));
-        if (typeof process !== 'undefined') process.exit(1);
     }
 
     _write(pos: number, key1: number, key2: number, value: number): void {
@@ -431,159 +433,96 @@ export default class SharedMapTyped {
         return (_hashPair(key1, key2) >>> 0) % this.meta[META.maxSize];
     }
 
-    _set(key1: number, key2: number, value: number, exclusive: boolean): void {
+    /**
+     * Insert or update an entry. Does not run load-factor rehash — callers decide.
+     * @returns `true` if a new key was inserted (length increased).
+     */
+    private _putPair(key1: number, key2: number, value: number): boolean {
         let pos = this._hashKey(key1, key2);
-        if (Atomics.load(this.meta, META.length) === this.meta[META.maxSize]) {
-            if (!this._find(key1, key2, exclusive)) throw new RangeError('SharedMapTyped is full');
-        }
         let toChain: number | undefined;
-        let slidingLock: number | undefined;
-        if (!exclusive) slidingLock = this._lockLine(pos);
-        try {
-            while (this._bucketOccupied(pos)) {
-                this.stats.collisions++;
-                if (this._match(key1, key2, pos)) {
-                    this.valuesData[pos] = value >>> 0;
-                    if (!exclusive) this._unlockLine(slidingLock!);
-                    return;
-                }
-                if (this.chaining[pos] === UINT32_UNDEFINED || toChain !== undefined) {
-                    if (toChain === undefined) {
-                        toChain = pos;
-                        pos = (pos + 1) % this.meta[META.maxSize];
-                        if (!exclusive) slidingLock = this._lockLine(pos);
-                    } else {
-                        pos = (pos + 1) % this.meta[META.maxSize];
-                        if (!exclusive) slidingLock = this._lockLineSliding(slidingLock!, pos);
-                    }
+        while (this._bucketOccupied(pos)) {
+            this.stats.collisions++;
+            if (this._match(key1, key2, pos)) {
+                this.valuesData[pos] = value >>> 0;
+                return false;
+            }
+            if (this.chaining[pos] === UINT32_UNDEFINED || toChain !== undefined) {
+                if (toChain === undefined) {
+                    toChain = pos;
+                    pos = (pos + 1) % this.meta[META.maxSize];
                 } else {
-                    pos = this.chaining[pos];
-                    if (!exclusive) slidingLock = this._lockLineSliding(slidingLock!, pos);
+                    pos = (pos + 1) % this.meta[META.maxSize];
                 }
+            } else {
+                pos = this.chaining[pos];
             }
-            this._write(pos, key1, key2, value);
-            this.chaining[pos] = UINT32_UNDEFINED;
-            Atomics.add(this.meta, META.length, 1);
-            if (toChain !== undefined) {
-                this.chaining[toChain] = pos;
-                if (!exclusive) this._unlockLine(toChain);
-                toChain = undefined;
-            }
-            if (!exclusive) this._unlockLine(slidingLock!);
-        } catch (e) {
-            if (!exclusive) {
-                if (slidingLock !== undefined) this._unlockLine(slidingLock);
-                if (toChain !== undefined) this._unlockLine(toChain);
-            }
-            throw e;
         }
+        this._write(pos, key1, key2, value);
+        this.chaining[pos] = UINT32_UNDEFINED;
+        this.meta[META.length] = (this.meta[META.length] >>> 0) + 1;
+        if (toChain !== undefined) {
+            this.chaining[toChain] = pos;
+        }
+        return true;
     }
 
-    set(key1: number, key2: number, value: number, opt?: SharedMapTypedOptions): void {
+    set(key1: number, key2: number, value: number): void {
         if (typeof key1 !== 'number' || typeof key2 !== 'number') {
             throw new TypeError('SharedMapTyped keys must be numbers (key1, key2)');
         }
-        if (typeof value !== 'number') throw new TypeError('SharedMapTyped value must be a number');
-
-        const lockHeld = !!(opt?.lockWrite || opt?.lockExclusive);
+        if (typeof value !== 'number') {
+            throw new TypeError('SharedMapTyped value must be a number');
+        }
+        const k1 = key1 >>> 0;
+        const k2 = key2 >>> 0;
+        const v = value >>> 0;
         this.stats.set++;
-        if (!lockHeld) this._lockSharedWrite();
-        try {
-            this._set(key1 >>> 0, key2 >>> 0, value, lockHeld);
-            if (!lockHeld) this._unlockSharedWrite();
-        } catch (e: unknown) {
-            if (!lockHeld) this._unlockSharedWrite();
-            if (e instanceof Deadlock && !lockHeld) {
-                this.lockExclusive();
-                this.stats.deadlock++;
-                try {
-                    this._set(key1 >>> 0, key2 >>> 0, value, true);
-                    this.unlockExclusive();
-                } catch (e2: unknown) {
-                    this.unlockExclusive();
-                    throw e2;
-                }
-            } else throw e;
+
+        const existing = this._find(k1, k2);
+        if (existing !== undefined) {
+            this.valuesData[existing.pos] = v;
+            return;
+        }
+        this._ensureSlotForNewKey(k1, k2);
+        const inserted = this._putPair(k1, k2, v);
+        if (inserted) {
+            this._maybeRehashForLoad();
         }
     }
 
-    _find(key1: number, key2: number, exclusive: boolean): FindResult | undefined {
-        let slidingLock: number | undefined;
-        try {
-            let pos = this._hashKey(key1, key2);
-            let previous = UINT32_UNDEFINED;
-            this.stats.get++;
-            if (!exclusive) slidingLock = this._lockLine(pos);
-            while (pos !== UINT32_UNDEFINED && this._bucketOccupied(pos)) {
-                if (this._match(key1, key2, pos)) {
-                    return { pos, previous };
-                }
-                previous = pos;
-                pos = this.chaining[pos];
-                if (pos !== UINT32_UNDEFINED && !exclusive) slidingLock = this._lockLineSliding(slidingLock!, pos);
+    _find(key1: number, key2: number): FindResult | undefined {
+        let pos = this._hashKey(key1, key2);
+        let previous = UINT32_UNDEFINED;
+        this.stats.get++;
+        while (pos !== UINT32_UNDEFINED && this._bucketOccupied(pos)) {
+            if (this._match(key1, key2, pos)) {
+                return { pos, previous };
             }
-            if (!exclusive) this._unlockLine(slidingLock!);
-            return undefined;
-        } catch (e: unknown) {
-            if (!exclusive && slidingLock !== undefined) this._unlockLine(slidingLock);
-            throw e;
+            previous = pos;
+            pos = this.chaining[pos];
         }
+        return undefined;
     }
 
-    /**
-     * @returns Unsigned 32-bit value, or `undefined` if the key pair is absent.
-     */
-    get(key1: number, key2: number, opt?: SharedMapTypedOptions): number | undefined {
-        let pos: FindResult | undefined;
-        let val: number | undefined;
-        const lockHeld = !!(opt?.lockWrite || opt?.lockExclusive);
+    get(key1: number, key2: number): number | undefined {
         const k1 = key1 >>> 0;
         const k2 = key2 >>> 0;
-        if (!lockHeld) this._lockSharedRead();
-        try {
-            pos = this._find(k1, k2, lockHeld);
-            if (pos !== undefined) {
-                val = this._readValue(pos.pos);
-                if (!lockHeld) this._unlockLine(pos.pos);
-            }
-            if (!lockHeld) this._unlockSharedRead();
-        } catch (e: unknown) {
-            if (!lockHeld) this._unlockSharedRead();
-            if (e instanceof Deadlock && !lockHeld) {
-                this.lockExclusive();
-                this.stats.deadlock++;
-                try {
-                    pos = this._find(k1, k2, true);
-                    if (pos !== undefined) val = this._readValue(pos.pos);
-                    this.unlockExclusive();
-                } catch (e2: unknown) {
-                    this.unlockExclusive();
-                    throw e2;
-                }
-            } else throw e;
+        const pos = this._find(k1, k2);
+        if (pos !== undefined) {
+            return this._readValue(pos.pos);
         }
-        return val;
+        return undefined;
     }
 
-    has(key1: number, key2: number, opt?: SharedMapTypedOptions): boolean {
-        return this.get(key1, key2, opt) !== undefined;
+    has(key1: number, key2: number): boolean {
+        return this.get(key1, key2) !== undefined;
     }
 
-    delete(key1: number, key2: number, opt?: SharedMapTypedOptions): void {
-        const lockHeld = !!(opt?.lockExclusive);
-        if (opt?.lockWrite && !lockHeld) throw new Error('delete requires an exclusive lock');
+    delete(key1: number, key2: number): void {
         const k1 = key1 >>> 0;
         const k2 = key2 >>> 0;
-        let find: FindResult | undefined;
-        try {
-            if (!lockHeld) this.lockExclusive();
-            find = this._find(k1, k2, true);
-        } catch (e: unknown) {
-            if (!lockHeld) this.unlockExclusive();
-            throw e;
-        }
+        const find = this._find(k1, k2);
         if (find === undefined) {
-            if (!lockHeld) this.unlockExclusive();
             throw new RangeError(`SharedMapTyped does not contain key (${k1}, ${k2})`);
         }
         this.stats.delete++;
@@ -593,9 +532,8 @@ export default class SharedMapTyped {
         if (previous !== UINT32_UNDEFINED) {
             this.chaining[previous] = next === UINT32_UNDEFINED ? UINT32_UNDEFINED : next;
         }
-        Atomics.sub(this.meta, META.length, 1);
+        this.meta[META.length] = (this.meta[META.length] >>> 0) - 1;
         if (next === UINT32_UNDEFINED) {
-            if (!lockHeld) this.unlockExclusive();
             return;
         }
         this.stats.rechains++;
@@ -608,35 +546,20 @@ export default class SharedMapTyped {
                 value: this._readValue(el),
             });
             this._clearBucket(el);
-            Atomics.sub(this.meta, META.length, 1);
+            this.meta[META.length] = (this.meta[META.length] >>> 0) - 1;
             el = this.chaining[el];
         }
         for (const entry of chain) {
-            this._set(entry.key1, entry.key2, entry.value, true);
+            this._putPair(entry.key1, entry.key2, entry.value);
         }
-        if (!lockHeld) this.unlockExclusive();
     }
 
-    *_keys(exclusive: boolean | undefined): Generator<number, void, unknown> {
-        for (let pos = 0; pos < this.meta[META.maxSize]; pos++) {
-            if (!exclusive) this._lockSharedRead();
-            if (!exclusive) this._lockLine(pos);
+    *keys(): Generator<SharedMapTypedKeyPair, void, unknown> {
+        const cap = this.meta[META.maxSize] >>> 0;
+        for (let pos = 0; pos < cap; pos++) {
             if (this._bucketOccupied(pos)) {
-                yield pos;
-            } else {
-                if (!exclusive) this._unlockLine(pos);
-                if (!exclusive) this._unlockSharedRead();
+                yield this._decodeKeyPair(pos);
             }
-        }
-    }
-
-    *keys(opt?: SharedMapTypedOptions): Generator<SharedMapTypedKeyPair, void, unknown> {
-        const lockHeld = !!(opt?.lockWrite || opt?.lockExclusive);
-        for (const pos of this._keys(lockHeld)) {
-            const k = this._decodeKeyPair(pos);
-            if (!lockHeld) this._unlockLine(pos);
-            if (!lockHeld) this._unlockSharedRead();
-            yield k;
         }
     }
 
@@ -647,17 +570,10 @@ export default class SharedMapTyped {
         thisArg?: T,
     ): R[] {
         const a: R[] = [];
-        for (const pos of this._keys(undefined)) {
-            const { key1, key2 } = this._decodeKeyPair(pos);
-            const v = this._readValue(pos);
-            try {
-                a.push(cb.call(thisArg, v, key1, key2));
-                this._unlockLine(pos);
-                this._unlockSharedRead();
-            } catch (e: unknown) {
-                this._unlockLine(pos);
-                this._unlockSharedRead();
-                throw e;
+        for (const k of this.keys()) {
+            const v = this.get(k.key1, k.key2);
+            if (v !== undefined) {
+                a.push(cb.call(thisArg, v, k.key1, k.key2));
             }
         }
         return a;
@@ -665,29 +581,45 @@ export default class SharedMapTyped {
 
     reduce<R>(cb: (acc: R, value: number, key1: number, key2: number) => R, initialValue: R): R {
         let acc = initialValue;
-        for (const pos of this._keys(false)) {
-            const { key1, key2 } = this._decodeKeyPair(pos);
-            const v = this._readValue(pos);
-            try {
-                acc = cb(acc, v, key1, key2);
-                this._unlockLine(pos);
-                this._unlockSharedRead();
-            } catch (e: unknown) {
-                this._unlockLine(pos);
-                this._unlockSharedRead();
-                throw e;
+        for (const k of this.keys()) {
+            const v = this.get(k.key1, k.key2);
+            if (v !== undefined) {
+                acc = cb(acc, v, k.key1, k.key2);
             }
         }
         return acc;
     }
 
     clear(): void {
-        this.lockExclusive();
         this.keysData.fill(0);
         this.valuesData.fill(0);
         this.bucketUsed.fill(0);
         this.chaining.fill(UINT32_UNDEFINED);
-        Atomics.store(this.meta, META.length, 0);
-        this.unlockExclusive();
+        this.meta[META.length] = 0;
+    }
+
+    /* c8 ignore next 8 */
+    _decodeBucket(pos: number, n: number): string {
+        const { key1, key2 } = this._decodeKeyPair(pos);
+        return (
+            `pos: ${pos}` +
+            ` hash: ${this._hashKey(key1, key2)}` +
+            ` key: (${key1},${key2})` +
+            ` value: ${this._readValue(pos)}` +
+            ` chain: ${this.chaining[pos]}` +
+            (n > 0 && this.chaining[pos] !== UINT32_UNDEFINED
+                ? '\n' + this._decodeBucket(this.chaining[pos], n - 1)
+                : '')
+        );
+    }
+
+    /* c8 ignore next 5 */
+    __printMap(): void {
+        for (let i = 0; i < this.meta[META.maxSize]; i++) {
+            console.log(this._decodeBucket(i, 0));
+        }
+        if (typeof process !== 'undefined') {
+            process.exit(1);
+        }
     }
 }

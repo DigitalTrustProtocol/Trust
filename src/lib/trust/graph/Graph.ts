@@ -2,11 +2,7 @@ import { VerifiedEvent } from 'nostr-tools';
 import { extractSubjects, getValueFromTags, ITrustEvent, SubjectType } from '../../nostr/nip32010.js';
 
 import { EdgeT1, IEdge } from './Edge.js';
-import { Node, NodeView } from './Node.js';
-import SharedMapTyped from '../../Shared/SharedMapTyped.js';
-import SharedMultiList from '../../Shared/SharedMultiList.js';
-import SharedList from '../../Shared/SharedList.js';
-import { EdgeView } from './EdgeView.js';
+import { Node } from './Node.js';
 
 export type GraphTrustValue = 1 | 0 | -1;
 
@@ -63,14 +59,14 @@ export class Graph implements IGraph {
   edgesList: Array<IEdge | null> = new Array<IEdge | null>();
 
 
-  outMap?: SharedMapTyped; // out map is a map of context indexes to a map of subject indexes to a map of edge indexes
-  inMap?: SharedMapTyped; // in map is a map of context indexes to a map of subject indexes to a map of edge indexes
 
-  lists?: SharedMultiList;
-  nodes?: SharedList<NodeView>;
-  edges?: SharedList<EdgeView>;
+  //outMap?: SharedMapTyped; // out map is a map of context indexes to a map of subject indexes to a map of edge indexes
+  //inMap?: SharedMapTyped; // in map is a map of context indexes to a map of subject indexes to a map of edge indexes
 
-  
+  //nodes?: SharedList<NodeView>;
+  //edges?: SharedList<EdgeView>;
+
+  nodes: Uint8Array<ArrayBufferLike>;
 
   eventAddedSinceLastSave: number = 0;
   eventRemovedSinceLastSave: number = 0;
@@ -85,12 +81,10 @@ export class Graph implements IGraph {
 
 
   constructor() {
-    this.nodes = new SharedList<NodeView>(1000, NodeView.SIZE);
-    this.edges = new SharedList<EdgeView>(1000, EdgeView.SIZE);
+    this.nodes = new Uint8Array(1000); // One byte data per node for now
 
-    this.lists = new SharedMultiList(1000, { initialListSlots: 1000, maxByteLength: 1000 * (NodeView.SIZE + EdgeView.SIZE) });
-    this.lists.storage = new SharedArrayBuffer(1000 * (NodeView.SIZE + EdgeView.SIZE));
-    this.lists.storage = new SharedArrayBuffer(1000 * (NodeView.SIZE + EdgeView.SIZE));
+    //this.nodes = new SharedList<NodeView>(1000, NodeView.SIZE);
+    //this.edges = new SharedList<EdgeView>(1000, EdgeView.SIZE);
   }
 
 
@@ -137,11 +131,11 @@ export class Graph implements IGraph {
   }
 
   removeTrustEvent(trust: ITrustEvent): boolean {
-    let edgeIndex = this.edgesIndex.get(trust.parameterizedId);
+    let edgeIndex = this.edgesIndex.get(trust.addressableId);
     if (edgeIndex === undefined) return false; // No edge found for the parameterizedId
     let edge = this.edgesList[edgeIndex];
     if (!edge) {
-      console.trace('Edge not found for parameterizedId: ' + trust.parameterizedId + ' in removeTrustEvent - Failsafe check, as this should never happen');
+      console.trace('Edge not found for parameterizedId: ' + trust.addressableId + ' in removeTrustEvent - Failsafe check, as this should never happen');
       return false; // Failsafe check, as this should never happen
     } 
     
@@ -192,7 +186,7 @@ export class Graph implements IGraph {
       let edge = this.edgesList[edgeIndex];
       if (!edge) continue;
       if (edge.createdAt > until) continue;
-      this.removeEdge(edge.parameterizedId);
+      this.removeEdge(edge.addressableId);
     }
 
 
@@ -234,7 +228,7 @@ export class Graph implements IGraph {
 
   private edgePayload(edge: IEdge): GraphTrustEdgePayload {
     return {
-      dTag: edge.parameterizedId,
+      dTag: edge.addressableId,
       author: edge.author,
       kind: edge.kind,
       value: edge.value,
@@ -341,7 +335,7 @@ export class Graph implements IGraph {
 
   addEdge(trust: ITrustEvent): IEdge | null {
     let edge: IEdge | null = null;
-    let index = this.edgesIndex.get(trust.parameterizedId); // Avoid internal object reference tracking (a design principle) 
+    let index = this.edgesIndex.get(trust.addressableId); // Avoid internal object reference tracking (a design principle) 
     if (index !== undefined) edge = this.edgesList[index]!; // ! is used to tell the compiler that the edge is not null
     if (edge) {
       if (edge.createdAt > trust.created_at) return null; // If the edge is older than the new event, return null
@@ -356,6 +350,7 @@ export class Graph implements IGraph {
     return edge;
   }
 
+  /*
   addEdgeView(trust: ITrustEvent): EdgeView | null {
     //let edge: IEdge | null = null;
     let index = this.edgesIndex.get(trust.parameterizedId); // Avoid internal object reference tracking (a design principle) 
@@ -372,7 +367,7 @@ export class Graph implements IGraph {
     }
     return edgeView;
   }
-
+*/
 
   removeEdge(d_tag: string): IEdge | null {
     let index = this.edgesIndex.get(d_tag);
@@ -389,7 +384,7 @@ export class Graph implements IGraph {
   createEdge(trust: ITrustEvent): IEdge {
     let edge = new EdgeT1(trust);
     edge.index = this.edgesList.push(edge) - 1;
-    this.edgesIndex.set(trust.parameterizedId, edge.index!); // Avoid internal object reference tracking (a design principle)
+    this.edgesIndex.set(trust.addressableId, edge.index!); // Avoid internal object reference tracking (a design principle)
     return edge;
   }
 

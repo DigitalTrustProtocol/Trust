@@ -64,6 +64,7 @@
     "@noble/hashes": "^1.7.1",
     "@nostrify/db": "^0.39.25",
     "@nostrify/nostrify": "^0.49.2",
+    "@thi.ng/malloc": "^6.1.142",
     "@types/pg": "^8.18.0",
     "better-sqlite3": "^12.6.2",
     "commander": "^13.1.0",

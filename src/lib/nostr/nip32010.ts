@@ -49,11 +49,11 @@ export type Identity ={
 
 /** Event with pre-resolved d_tag and context. Plain type, no methods. */
 export type ITrustEvent = VerifiedEvent & {
-  d_tag?: string;
+  d_tag: string;
   t_tag?: string;
   p_tag?: string;
   c_tag?: string;
-  parameterizedId: string;
+  addressableId: string;
 };
 
 
@@ -259,12 +259,12 @@ export function isTrustEventValid(event: ITrustEvent): boolean {
  */
 export function asTrustEvent(event: Event): ITrustEvent {
   const e = event as ITrustEvent;
-  e.d_tag = getTagValueFromTags(event, 'd');
+  e.d_tag = getTagValueFromTags(event, 'd') ?? '';
   e.t_tag = getTagValueFromTags(event, 't');
   e.p_tag = getTagValueFromTags(event, 'p');
   e.c_tag = getTagValueFromTags(event, 'c');
 
-  e.parameterizedId = event.pubkey + e.d_tag; // the author and d_tag are the replacementId, as multiple events can have the same d_tag from different authors
+  e.addressableId = event.pubkey + e.d_tag; // the author and d_tag are the replacementId, as multiple events can have the same d_tag from different authors
 
   return e;
 }
