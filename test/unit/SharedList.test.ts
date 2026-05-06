@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import SharedList, {
     SharedListItemView,
-    Uint8ReadonlySharedList,
-    buildUint8ReadonlySharedListStorage,
+    Uint8SharedList,
+    buildUint8SharedListStorage,
     type ISharedListItemView,
 } from '../../src/lib/Shared/SharedList.js';
+import SharedMemoryPool from '../../src/lib/Shared/SharedMemoryPool.js';
+
+const SHARED_LIST_CTRL_PTR_INDEX = 1;
+
+function sharedListPtr(storage: SharedArrayBuffer): number {
+    return new Uint32Array(storage, 0, 16)[SHARED_LIST_CTRL_PTR_INDEX] >>> 0;
+}
 import { NodeView } from '../../src/lib/trust/graph/Node.js';
 
 function bytes(...n: number[]) {
@@ -49,7 +56,7 @@ class MyRowView implements ISharedListItemView {
 
 describe('SharedList', () => {
     it('push and readAt use fixed-size rows', () => {
-        const list = SharedList.createShared(new SharedListItemView(4), 4, { initialCapacity: 2 });
+        const list = SharedList.createShared(4, { initialCapacity: 2 });
         list.push(bytes(1, 0, 2, 0));
         list.push(bytes(3, 0, 4, 0));
         expect(list.length).toBe(2);
@@ -57,7 +64,7 @@ describe('SharedList', () => {
     });
 
     it('delete swaps in the last row', () => {
-        const list = SharedList.createShared(new SharedListItemView(4), 4, { initialCapacity: 4 });
+        const list = SharedList.createShared(4, { initialCapacity: 4 });
         list.push(bytes(1, 0, 1, 0));
         list.push(bytes(2, 0, 2, 0));
         list.push(bytes(3, 0, 3, 0));
@@ -68,7 +75,7 @@ describe('SharedList', () => {
 
     it('typed views are reused', () => {
         const rowView = new MyRowView();
-        const list = SharedList.createShared(rowView, 4, { initialCapacity: 2 });
+        const list = SharedList.createShared<MyRowView>(4, { initialCapacity: 2, itemViewSingleton: rowView });
         list.push(bytes(5, 0, 6, 0));
         list.push(bytes(7, 0, 8, 0));
         const first = list.itemAt(0)!;
@@ -79,15 +86,18 @@ describe('SharedList', () => {
     });
 
     it('from binds to the same storage', () => {
-        const owner = SharedList.createShared(new SharedListItemView(4), 4, { initialCapacity: 2 });
+        const owner = SharedList.createShared(4, { initialCapacity: 2 });
         owner.push(bytes(9, 0, 10, 0));
-        const worker = SharedList.from(owner.storage, new SharedListItemView(4));
+        const worker = SharedList.from(
+            SharedMemoryPool.from(owner.storage, { start: 64 }),
+            sharedListPtr(owner.storage),
+        );
         expect([...worker.readAt(0)!]).toEqual([9, 0, 10, 0]);
     });
 
     it('unsafeReadAt/unsafeItemAt/unsafeIterateItems match safe reads when no deletes happen', () => {
         const rowView = new MyRowView();
-        const list = SharedList.createShared(rowView, 4, { initialCapacity: 8 });
+        const list = SharedList.createShared<MyRowView>(4, { initialCapacity: 8, itemViewSingleton: rowView });
         list.push(bytes(1, 0, 2, 0));
         list.push(bytes(3, 0, 4, 0));
         list.push(bytes(5, 0, 6, 0));
@@ -111,9 +121,10 @@ describe('SharedList', () => {
             '0000000000000000000000000000000000000000000000000000000000000000',
             'p',
         );
-        const list = SharedList.createShared(nodeSingleton, NodeView.SIZE, {
+        const list = SharedList.createShared<NodeView>(NodeView.SIZE, {
             initialCapacity: 8,
             maxByteLength: 1 << 22,
+            itemViewSingleton: nodeSingleton,
         });
 
         for (let i = 0; i < total; i++) {
@@ -152,7 +163,11 @@ describe('SharedList', () => {
 
     it('clone copies layout and preserves items', () => {
         const v = new SharedListItemView(4);
-        const a = SharedList.createShared(v, 4, { initialCapacity: 2, maxByteLength: 4096 });
+        const a = SharedList.createShared<SharedListItemView>(4, {
+            initialCapacity: 2,
+            maxByteLength: 4096,
+            itemViewSingleton: v,
+        });
         a.push(bytes(1, 0, 0, 0));
         const b = a.clone();
         expect(b.storage).not.toBe(a.storage);
@@ -162,7 +177,7 @@ describe('SharedList', () => {
 
     it('growSharedBacking expands buffer for createShared-owned lists', () => {
         const v = new SharedListItemView(4);
-        const list = SharedList.createShared(v, 4, { initialCapacity: 1, maxByteLength: 65536 });
+        const list = SharedList.createShared(4, { initialCapacity: 1, maxByteLength: 65536, itemViewSingleton: v });
         const before = list.storage.byteLength;
         list.growSharedBacking(before + 1024);
         expect(list.storage.byteLength).toBe(before + 1024);
@@ -172,29 +187,33 @@ describe('SharedList', () => {
 describe('SharedList.from (second view on same buffer)', () => {
     it('mirrors the owner on the same storage for reads', () => {
         const rowView = new MyRowView();
-        const owner = SharedList.createShared(rowView, 4, { initialCapacity: 4 });
+        const owner = SharedList.createShared<MyRowView>(4, { initialCapacity: 4, itemViewSingleton: rowView });
         owner.push(bytes(1, 0, 2, 0));
         owner.push(bytes(3, 0, 4, 0));
-        const reader = SharedList.from(owner.storage, new MyRowView());
+        const reader = SharedList.from(
+            SharedMemoryPool.from(owner.storage, { start: 64 }),
+            sharedListPtr(owner.storage),
+        );
         expect(reader.length).toBe(2);
         expect([...reader.readAt(0)!]).toEqual([1, 0, 2, 0]);
-        const row = reader.itemAt(1)!;
-        expect(row.hi).toBe(3);
-        expect(row.lo).toBe(4);
-        const hiDuringIteration: number[] = [];
+        expect([...reader.readAt(1)!]).toEqual([3, 0, 4, 0]);
+        const heads: number[] = [];
         for (const e of reader.iterateItems()) {
-            hiDuringIteration.push(e.item.hi);
+            heads.push(e.item.bytes[0]!);
         }
-        expect(hiDuringIteration).toEqual([1, 3]);
+        expect(heads).toEqual([1, 3]);
     });
 
     it('rebind picks up capacity growth from the owner', () => {
-        const owner = SharedList.createShared(new SharedListItemView(4), 4, {
+        const owner = SharedList.createShared(4, {
             initialCapacity: 2,
             maxByteLength: 1 << 16,
         });
         owner.push(bytes(1, 0, 0, 0));
-        const reader = SharedList.from(owner.storage, new SharedListItemView(4));
+        const reader = SharedList.from(
+            SharedMemoryPool.from(owner.storage, { start: 64 }),
+            sharedListPtr(owner.storage),
+        );
         expect(reader.capacity).toBe(2);
         owner.push(bytes(2, 0, 0, 0));
         owner.push(bytes(3, 0, 0, 0));
@@ -204,11 +223,14 @@ describe('SharedList.from (second view on same buffer)', () => {
     });
 
     it('second view can push and grow on the same buffer (main-thread sequential use)', () => {
-        const seed = SharedList.createShared(new SharedListItemView(4), 4, {
+        const seed = SharedList.createShared(4, {
             initialCapacity: 1,
             maxByteLength: 1 << 12,
         });
-        const other = SharedList.from(seed.storage, new SharedListItemView(4));
+        const other = SharedList.from(
+            SharedMemoryPool.from(seed.storage, { start: 64 }),
+            sharedListPtr(seed.storage),
+        );
         expect(other.length).toBe(0);
         other.push(bytes(1, 0, 2, 0));
         other.push(bytes(3, 0, 4, 0));
@@ -220,16 +242,16 @@ describe('SharedList.from (second view on same buffer)', () => {
 
 describe('SharedList.appendBuffer', () => {
     it('writes in place when there is room', () => {
-        const list = SharedList.createShared(new SharedListItemView(4), 4, { initialCapacity: 4 });
+        const list = SharedList.createShared(4, { initialCapacity: 4 });
         const dataOff = 16;
         const end = list.appendBuffer(dataOff, new Uint8Array([10, 11, 12]));
         expect(end).toBe(19);
         expect([...new Uint8Array(list.storage).subarray(dataOff, 19)]).toEqual([10, 11, 12]);
-        expect(list.storage.byteLength).toBe(32);
+        expect(list.storage.byteLength).toBeGreaterThanOrEqual(32);
     });
 
     it('grows the buffer when the tail does not fit', () => {
-        const list = SharedList.createShared(new SharedListItemView(4), 4, {
+        const list = SharedList.createShared(4, {
             initialCapacity: 1,
             maxByteLength: 256,
         });
@@ -237,12 +259,12 @@ describe('SharedList.appendBuffer', () => {
         const payload = new Uint8Array(16).fill(7);
         const end = list.appendBuffer(tail, payload);
         expect(end).toBe(tail + 16);
-        expect(list.storage.byteLength).toBe(tail + 16);
+        expect(list.storage.byteLength).toBeGreaterThanOrEqual(tail + 16);
         expect(new Uint8Array(list.storage, tail, 16).every((b) => b === 7)).toBe(true);
     });
 
     it('throws when append would exceed maxByteLength', () => {
-        const list = SharedList.createShared(new SharedListItemView(4), 4, {
+        const list = SharedList.createShared(4, {
             initialCapacity: 1,
             maxByteLength: 24,
         });
@@ -251,9 +273,9 @@ describe('SharedList.appendBuffer', () => {
     });
 });
 
-describe('Uint8ReadonlySharedList', () => {
+describe('Uint8SharedList', () => {
     it('push appends bytes and grows when full', () => {
-        const list = new Uint8ReadonlySharedList(2, { maxByteLength: 256 });
+        const list = new Uint8SharedList(2, { maxByteLength: 256 });
         expect(list.length).toBe(0);
         expect(list.push(1)).toBe(0);
         expect(list.push(2)).toBe(1);
@@ -265,8 +287,8 @@ describe('Uint8ReadonlySharedList', () => {
     });
 
     it('get returns byte values 0..255 and values() iterates', () => {
-        const sab = buildUint8ReadonlySharedListStorage(8, [1, 300, 255, 0]);
-        const list = Uint8ReadonlySharedList.from(sab);
+        const sab = buildUint8SharedListStorage(8, [1, 300, 255, 0]);
+        const list = Uint8SharedList.from(sab);
         expect(list.length).toBe(4);
         expect(list.capacity).toBe(8);
         expect(list.get(0)).toBe(1);
@@ -278,22 +300,25 @@ describe('Uint8ReadonlySharedList', () => {
     });
 
     it('allows empty logical list with spare capacity', () => {
-        const sab = buildUint8ReadonlySharedListStorage(4, []);
-        const list = Uint8ReadonlySharedList.from(sab);
+        const sab = buildUint8SharedListStorage(4, []);
+        const list = Uint8SharedList.from(sab);
         expect(list.length).toBe(0);
         expect(list.capacity).toBe(4);
         expect(list.get(0)).toBe(undefined);
     });
 
     it('rebind refreshes byte view after buffer grow', () => {
-        const sab = buildUint8ReadonlySharedListStorage(2, [10, 20], { maxByteLength: 256 });
-        const list = Uint8ReadonlySharedList.from(sab);
+        const sab = buildUint8SharedListStorage(2, [10, 20], { maxByteLength: 4096 });
+        const list = Uint8SharedList.from(sab);
         expect(list.get(1)).toBe(20);
-        const hdr = new Uint32Array(sab, 0, 2);
+        const ctrl = new Uint32Array(sab, 0, 16);
+        const ptr = ctrl[2] >>> 0;
+        const hdr = new Uint32Array(sab, ptr, 2);
         hdr[1] = 4;
         hdr[0] = 4;
-        (sab as SharedArrayBuffer & { grow(n: number): void }).grow(8 + 4);
-        const data = new Uint8Array(sab, 8, 4);
+        const cur = sab.byteLength;
+        (sab as SharedArrayBuffer & { grow(n: number): void }).grow(Math.max(cur + 64, ptr + 8 + 4));
+        const data = new Uint8Array(sab, ptr + 8, 4);
         data.set([10, 20, 30, 40]);
         list.rebind();
         expect(list.get(2)).toBe(30);

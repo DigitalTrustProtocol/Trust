@@ -19,8 +19,7 @@
  * @packageDocumentation
  */
 
-const UINT32_MAX = 0xffffffff;
-const UINT32_UNDEFINED = 0xffffffff;
+export const UINT32_MAX = 0xffffffff;
 
 const KEY_WORDS = 2;
 const VALUE_WORDS = 1;
@@ -40,7 +39,7 @@ function _hashPair(k1: number, k2: number): number {
     h = Math.imul(h, 0xc2b2ae3d) >>> 0;
     h ^= h >>> 16;
     h = h >>> 0;
-    return h === UINT32_UNDEFINED ? 1 : h;
+    return h === UINT32_MAX ? 1 : h;
 }
 
 function align32(maxSize: number): number {
@@ -148,7 +147,7 @@ export default class SharedMapTyped {
             this.meta[META.maxSize] = cap >>> 0;
             this.meta[META.length] = 0;
             this.meta[META.layoutVersion] = LAYOUT_VERSION;
-            this.chaining.fill(UINT32_UNDEFINED);
+            this.chaining.fill(UINT32_MAX);
             this.bucketUsed.fill(0);
             this.keysData.fill(0);
             this.valuesData.fill(0);
@@ -446,7 +445,7 @@ export default class SharedMapTyped {
                 this.valuesData[pos] = value >>> 0;
                 return false;
             }
-            if (this.chaining[pos] === UINT32_UNDEFINED || toChain !== undefined) {
+            if (this.chaining[pos] === UINT32_MAX || toChain !== undefined) {
                 if (toChain === undefined) {
                     toChain = pos;
                     pos = (pos + 1) % this.meta[META.maxSize];
@@ -458,7 +457,7 @@ export default class SharedMapTyped {
             }
         }
         this._write(pos, key1, key2, value);
-        this.chaining[pos] = UINT32_UNDEFINED;
+        this.chaining[pos] = UINT32_MAX;
         this.meta[META.length] = (this.meta[META.length] >>> 0) + 1;
         if (toChain !== undefined) {
             this.chaining[toChain] = pos;
@@ -492,9 +491,9 @@ export default class SharedMapTyped {
 
     _find(key1: number, key2: number): FindResult | undefined {
         let pos = this._hashKey(key1, key2);
-        let previous = UINT32_UNDEFINED;
+        let previous = UINT32_MAX;
         this.stats.get++;
-        while (pos !== UINT32_UNDEFINED && this._bucketOccupied(pos)) {
+        while (pos !== UINT32_MAX && this._bucketOccupied(pos)) {
             if (this._match(key1, key2, pos)) {
                 return { pos, previous };
             }
@@ -529,17 +528,17 @@ export default class SharedMapTyped {
         const { pos, previous } = find;
         const next = this.chaining[pos];
         this._clearBucket(pos);
-        if (previous !== UINT32_UNDEFINED) {
-            this.chaining[previous] = next === UINT32_UNDEFINED ? UINT32_UNDEFINED : next;
+        if (previous !== UINT32_MAX) {
+            this.chaining[previous] = next === UINT32_MAX ? UINT32_MAX : next;
         }
         this.meta[META.length] = (this.meta[META.length] >>> 0) - 1;
-        if (next === UINT32_UNDEFINED) {
+        if (next === UINT32_MAX) {
             return;
         }
         this.stats.rechains++;
         let el = next;
         const chain: ChainEntry[] = [];
-        while (el !== UINT32_UNDEFINED) {
+        while (el !== UINT32_MAX) {
             chain.push({
                 key1: this.keysData[el * KEY_WORDS] >>> 0,
                 key2: this.keysData[el * KEY_WORDS + 1] >>> 0,
@@ -594,7 +593,7 @@ export default class SharedMapTyped {
         this.keysData.fill(0);
         this.valuesData.fill(0);
         this.bucketUsed.fill(0);
-        this.chaining.fill(UINT32_UNDEFINED);
+        this.chaining.fill(UINT32_MAX);
         this.meta[META.length] = 0;
     }
 
@@ -607,7 +606,7 @@ export default class SharedMapTyped {
             ` key: (${key1},${key2})` +
             ` value: ${this._readValue(pos)}` +
             ` chain: ${this.chaining[pos]}` +
-            (n > 0 && this.chaining[pos] !== UINT32_UNDEFINED
+            (n > 0 && this.chaining[pos] !== UINT32_MAX
                 ? '\n' + this._decodeBucket(this.chaining[pos], n - 1)
                 : '')
         );

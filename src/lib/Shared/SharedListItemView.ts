@@ -3,6 +3,9 @@
  * rebound via {@link ISharedListItemView.attachAt} on each read / iteration step.
  */
 export interface ISharedListItemView {
+    
+    itemByteSize: number;
+
     /** Row bytes for {@link SharedList.push} / inserts; length must equal the list row size. */
     get bytes(): Uint8Array<ArrayBufferLike>;
     /**
@@ -29,9 +32,10 @@ export interface ISharedListItemView {
 
 /** Reference u32 row view with fast in-list stepping via {@link nextItem}. */
 export class SharedListItemView implements ISharedListItemView {
+    public itemByteSize = 0;
+
     protected itemIndex = 0;
     protected listLength = 0;
-    protected itemByteSize = 0;
     protected buffer!: ArrayBufferLike;
     protected off = 0;
     protected dv!: DataView;

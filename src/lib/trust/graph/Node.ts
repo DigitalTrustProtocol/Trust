@@ -5,7 +5,7 @@ import { Graph } from './Graph.js';
 import type { SharedListView } from '../../Shared/SharedList.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 
-
+/*
 export class NodeView implements SharedListView {
 
     //private dv!: DataView; 
@@ -65,7 +65,7 @@ export class NodeView implements SharedListView {
 
     static SIZE = 33;
 }
-
+*/
 
 export class Node {
     index: number = 0;

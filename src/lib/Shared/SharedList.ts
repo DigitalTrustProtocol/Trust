@@ -1,10 +1,13 @@
 import { SharedListItemView, type ISharedListItemView } from './SharedListItemView.js';
+import SharedMemoryPool from './SharedMemoryPool.js';
 
 export type { ISharedListItemView, SharedListView } from './SharedListItemView.js';
 export { SharedListItemView } from './SharedListItemView.js';
 
 const HDR_WORDS = 3;
 const OFF_HDR = 4;
+const SHARED_LIST_POOL_START = 64;
+const CTRL_LIST_PTR = 1; // u32[1] at byte offset 4
 
 const H = {
     count: 0,
@@ -22,39 +25,9 @@ function layoutOffsets(capacity: number, itemBytes: number) {
     return { dataByteOffset, totalBytes };
 }
 
-type GrowableSharedArrayBufferCtor = new (
-    byteLength: number,
-    options?: { maxByteLength?: number },
-) => SharedArrayBuffer;
-
-function createGrowableSharedArrayBuffer(byteLength: number, maxByteLength: number): SharedArrayBuffer {
-    const Ctor = SharedArrayBuffer as unknown as GrowableSharedArrayBufferCtor;
-    return new Ctor(byteLength, { maxByteLength });
-}
-
 function readSharedArrayBufferMaxByteLength(sab: SharedArrayBuffer): number | undefined {
     const m = (sab as { maxByteLength?: number }).maxByteLength;
     return typeof m === 'number' && Number.isFinite(m) ? m : undefined;
-}
-
-/** Raw tail write used by {@link SharedList.appendBuffer}. */
-function appendBufferToStorage(
-    storage: SharedArrayBuffer,
-    byteOffset: number,
-    source: Uint8Array<ArrayBufferLike>,
-): number {
-    const end = byteOffset + source.byteLength;
-    if (end <= storage.byteLength) {
-        new Uint8Array(storage).set(source, byteOffset);
-        return end;
-    }
-    const maxB = storage.maxByteLength;
-    if (end > maxB) {
-        throw new RangeError(`SharedList.appendBuffer: need ${end} bytes but maxByteLength is ${maxB}`);
-    }
-    storage.grow(end);
-    new Uint8Array(storage).set(source, byteOffset);
-    return end;
 }
 
 export interface SharedListOptions {
@@ -65,8 +38,12 @@ export interface SharedListOptions {
      * (or a same-sized {@link clone}). Enables {@link growSharedBacking}. Do not set manually.
      */
     ownedSharedBacking?: { initialByteLength: number; maxByteLength: number };
+    /** Optional logical growth ceiling (can be < pool page size). */
+    logicalMaxByteLength?: number;
     /** Used only by {@link SharedList.createShared} to write the initial header. */
     initFresh?: { initialCapacity: number };
+    /** Optional bound view singleton; when omitted, SharedList creates one internally. */
+    itemViewSingleton?: ISharedListItemView;
 }
 
 /** Options for {@link SharedList.createShared}. */
@@ -75,8 +52,20 @@ export interface SharedListCreateSharedOptions extends Omit<SharedListOptions, '
     maxByteLength?: number;
 }
 
-export interface SharedListFromOptions {
-    growthFactor?: number;
+export interface SharedListConstructorOptions<T extends ISharedListItemView = SharedListItemView> extends SharedListOptions {
+    pool: SharedMemoryPool;
+    itemByteSize?: number;
+    /** Fresh table with this many rows. */
+    initFresh?: { initialCapacity: number };
+    /** Existing list block pointer in the pool buffer. */
+    listPtr?: number;
+    itemViewSingleton?: T;
+}
+
+export interface SharedListCreateInPoolOptions<T extends ISharedListItemView = SharedListItemView>
+    extends Omit<SharedListOptions, 'initFresh' | 'ownedSharedBacking'> {
+    initialCapacity: number;
+    itemViewSingleton?: T;
 }
 
 /** Overrides for {@link SharedList.clone}; omit both for a same-size copy into a new buffer instance. */
@@ -96,58 +85,81 @@ export interface SharedListEntry<T extends ISharedListItemView> {
  */
 export default class SharedList<T extends ISharedListItemView = SharedListItemView> {
     public storage!: SharedArrayBuffer;
+    private pool!: SharedMemoryPool;
+    private listPtr = 0;
+    private ctrl!: Uint32Array;
     private hdr!: Uint32Array;
     private data!: Uint8Array;
     private itemByteSize: number;
     private singleton: T;
     private growthFactor: number;
     private _ownedSharedBacking: { initialByteLength: number; maxByteLength: number } | undefined;
+    private _logicalMaxByteLength: number | undefined;
 
-    constructor(storage: SharedArrayBuffer, itemViewSingleton: T, itemByteSize: number, options?: SharedListOptions) {
-        if (!Number.isInteger(itemByteSize) || itemByteSize < 1) {
+    constructor(options: SharedListConstructorOptions<T>) {
+        const pool = options.pool;
+        const itemByteSize = options.itemByteSize;
+        const providedItemByteSize = itemByteSize ?? 0;
+        const defaultSingletonItemBytes =
+            Number.isInteger(itemByteSize) && (itemByteSize as number) > 0 ? (itemByteSize as number) : 4;
+        if (options.listPtr === undefined && (!Number.isInteger(itemByteSize) || providedItemByteSize < 1)) {
             throw new RangeError('SharedList: itemByteSize must be a positive integer');
         }
+        const storage = pool.sharedArrayBuffer;
         this.storage = storage;
-        this.singleton = itemViewSingleton;
-        this.itemByteSize = itemByteSize;
+        this.ctrl = new Uint32Array(storage, 0, SHARED_LIST_POOL_START >>> 2);
+        this.singleton =
+            (options?.itemViewSingleton as T | undefined) ??
+            (new SharedListItemView(defaultSingletonItemBytes) as unknown as T);
+        this.itemByteSize = defaultSingletonItemBytes;
         this.growthFactor = options?.growthFactor ?? 2;
         if (!Number.isFinite(this.growthFactor) || this.growthFactor < 1) {
             throw new RangeError('SharedList: growthFactor must be >= 1');
         }
         this._ownedSharedBacking = options?.ownedSharedBacking;
-        /** Bytes `0..3` reserved (legacy mutex slot); header starts at {@link OFF_HDR}. */
-        new Uint32Array(storage, 0, 1)[0] = 0;
-        this.hdr = new Uint32Array(storage, OFF_HDR, HDR_WORDS);
+        this._logicalMaxByteLength = options?.logicalMaxByteLength;
+        this.pool = pool;
 
         if (options?.initFresh) {
+            this.pool.freeAll();
             const initialCapacity = options.initFresh.initialCapacity;
             if (!Number.isInteger(initialCapacity) || initialCapacity < 1) {
                 throw new RangeError('SharedList: initFresh.initialCapacity must be a positive integer');
             }
-            const need = layoutOffsets(initialCapacity, itemByteSize).totalBytes;
-            if (need > storage.byteLength) {
-                throw new RangeError('SharedList: buffer too small for initFresh layout');
+            const ib = itemByteSize as number;
+            const need = layoutOffsets(initialCapacity, ib).totalBytes;
+            let ptr = this.pool.malloc(need);
+            if (!ptr && this._tryAutoGrowSharedBacking()) {
+                ptr = this.pool.malloc(need);
             }
+            if (!ptr) throw new RangeError('SharedList: malloc failed for initFresh layout');
+            this.listPtr = ptr >>> 0;
+            this.ctrl[CTRL_LIST_PTR] = this.listPtr;
+            this.hdr = new Uint32Array(storage, this.listPtr, HDR_WORDS);
             this.hdr[H.count] = 0;
             this.hdr[H.capacity] = initialCapacity >>> 0;
-            this.hdr[H.itemBytes] = itemByteSize >>> 0;
+            this.hdr[H.itemBytes] = ib >>> 0;
         } else {
-            const minBytes = OFF_HDR + HDR_WORDS * Uint32Array.BYTES_PER_ELEMENT;
-            if (storage.byteLength < minBytes) {
-                throw new RangeError('SharedList: buffer too small for header');
-            }
+            this.listPtr =
+                options.listPtr !== undefined ? (options.listPtr >>> 0) : (this.ctrl[CTRL_LIST_PTR] >>> 0);
+            if (this.listPtr === 0) throw new RangeError('SharedList: missing list pointer in control area');
+            this.hdr = new Uint32Array(storage, this.listPtr, HDR_WORDS);
             const count = this.hdr[H.count] >>> 0;
             const capacity = this.hdr[H.capacity] >>> 0;
             const ib = this.hdr[H.itemBytes] >>> 0;
-            if (ib !== (itemByteSize >>> 0)) {
+            if (options.listPtr === undefined && ib !== ((itemByteSize as number) >>> 0)) {
                 throw new RangeError(`SharedList: itemByteSize ${itemByteSize} does not match header (${ib})`);
             }
             if (capacity < 1 || ib < 1 || count > capacity) {
                 throw new RangeError('SharedList: invalid header');
             }
-            const need = layoutOffsets(capacity, itemByteSize).totalBytes;
-            if (need > storage.byteLength) {
-                throw new RangeError('SharedList: buffer byteLength is smaller than embedded layout');
+            this.itemByteSize = ib;
+            if (!options.itemViewSingleton) {
+                this.singleton = new SharedListItemView(ib) as unknown as T;
+            }
+            const need = layoutOffsets(capacity, ib).totalBytes;
+            if (this.listPtr + need > storage.byteLength) {
+                throw new RangeError('SharedList: list layout exceeds buffer byteLength');
             }
         }
         this._rebindData();
@@ -159,7 +171,6 @@ export default class SharedList<T extends ISharedListItemView = SharedListItemVi
      * to build a larger replacement while readers keep the old reference.
      */
     static createShared<T extends ISharedListItemView>(
-        itemViewSingleton: T,
         itemByteSize: number,
         options: SharedListCreateSharedOptions,
     ): SharedList<T> {
@@ -173,11 +184,38 @@ export default class SharedList<T extends ISharedListItemView = SharedListItemVi
         if (!Number.isInteger(maxB) || maxB < layout0.totalBytes) {
             throw new RangeError('SharedList.createShared: maxByteLength must be an integer ≥ layout size');
         }
-        const sab = createGrowableSharedArrayBuffer(layout0.totalBytes, maxB);
-        return new SharedList(sab, itemViewSingleton, itemByteSize, {
+        const initialByteLength = Math.max(SHARED_LIST_POOL_START + layout0.totalBytes + 64, SHARED_LIST_POOL_START + 64);
+        const poolMax = Math.max(SHARED_LIST_POOL_START + 64, maxB, 64);
+        const pool = new SharedMemoryPool({
+            estimatedAvailableBytes: poolMax,
+            fractionOfAvailable: 1,
+            minMaxByteLength: 64,
+            maxMaxByteLength: poolMax,
+            initialByteLength,
+            start: SHARED_LIST_POOL_START,
+        });
+        return new SharedList<T>({
+            pool,
+            itemByteSize,
             ...rest,
+            itemViewSingleton: rest.itemViewSingleton as T | undefined,
             growthFactor,
-            ownedSharedBacking: { initialByteLength: layout0.totalBytes, maxByteLength: maxB },
+            ownedSharedBacking: { initialByteLength, maxByteLength: maxB },
+            logicalMaxByteLength: maxByteLength,
+            initFresh: { initialCapacity },
+        });
+    }
+
+    static createInPool<T extends ISharedListItemView = SharedListItemView>(
+        pool: SharedMemoryPool,
+        itemByteSize: number,
+        options: SharedListCreateInPoolOptions<T>,
+    ): SharedList<T> {
+        const { initialCapacity, ...rest } = options;
+        return new SharedList<T>({
+            pool,
+            itemByteSize,
+            ...rest,
             initFresh: { initialCapacity },
         });
     }
@@ -187,34 +225,14 @@ export default class SharedList<T extends ISharedListItemView = SharedListItemVi
      * The owner thread must have initialized the buffer (e.g. via {@link createShared}).
      */
     static from<T extends ISharedListItemView>(
-        storage: SharedArrayBuffer,
-        itemViewSingleton: T,
-        options?: SharedListFromOptions,
+        pool: SharedMemoryPool,
+        listPtr: number,
     ): SharedList<T> {
-        const minBytes = OFF_HDR + HDR_WORDS * Uint32Array.BYTES_PER_ELEMENT;
-        if (storage.byteLength < minBytes) {
-            throw new RangeError('SharedList.from: buffer too small for header');
-        }
-        const hdr = new Uint32Array(storage, OFF_HDR, HDR_WORDS);
-        const count = hdr[H.count] >>> 0;
-        const capacity = hdr[H.capacity] >>> 0;
-        const itemBytes = hdr[H.itemBytes] >>> 0;
-        if (capacity < 1 || itemBytes < 1 || count > capacity) {
-            throw new RangeError('SharedList.from: invalid header');
-        }
-        const need = layoutOffsets(capacity, itemBytes).totalBytes;
-        if (need > storage.byteLength) {
-            throw new RangeError('SharedList.from: buffer byteLength is smaller than embedded layout');
-        }
-        const inst = Object.create(SharedList.prototype) as SharedList<T>;
-        inst.storage = storage;
-        inst.hdr = hdr;
-        inst.singleton = itemViewSingleton;
-        inst.itemByteSize = itemBytes;
-        inst.growthFactor = options?.growthFactor ?? 2;
-        inst._ownedSharedBacking = undefined;
-        inst._rebindData();
-        return inst;
+        return new SharedList<T>({
+            pool,
+            itemByteSize: 1,
+            listPtr,
+        });
     }
 
     /**
@@ -224,36 +242,31 @@ export default class SharedList<T extends ISharedListItemView = SharedListItemVi
     clone(options?: SharedListCloneOptions): SharedList<T> {
         const oldBuf = this.storage;
         const oldLen = oldBuf.byteLength;
-        const meta = this._ownedSharedBacking;
-        const sabMax = readSharedArrayBufferMaxByteLength(oldBuf);
-        const oldMax = meta?.maxByteLength ?? sabMax ?? oldLen;
-
+        const oldMax = readSharedArrayBufferMaxByteLength(oldBuf) ?? oldLen;
         const newLen = options?.newByteLength ?? oldLen;
         if (!Number.isInteger(newLen) || newLen < oldLen) {
             throw new RangeError('SharedList.clone: newByteLength must be an integer ≥ current byteLength');
         }
-
-        let newMax = options?.newMaxByteLength ?? oldMax;
+        const newMax = options?.newMaxByteLength ?? oldMax;
         if (!Number.isInteger(newMax) || newMax < newLen) {
             throw new RangeError('SharedList.clone: newMaxByteLength must be an integer ≥ newByteLength');
         }
-
-        const src = new Uint8Array(oldBuf, 0, oldLen);
-        const nextBuf = createGrowableSharedArrayBuffer(newLen, newMax);
-        new Uint8Array(nextBuf, 0, oldLen).set(src);
-
-        const inst = Object.create(SharedList.prototype) as SharedList<T>;
-        inst.storage = nextBuf;
-        inst.hdr = new Uint32Array(nextBuf, OFF_HDR, HDR_WORDS);
-        inst.singleton = this.singleton;
-        inst.itemByteSize = this.itemByteSize;
-        inst.growthFactor = this.growthFactor;
-        inst._ownedSharedBacking =
-            meta !== undefined
-                ? { initialByteLength: meta.initialByteLength, maxByteLength: newMax }
-                : undefined;
-        inst._rebindData();
-        return inst;
+        const pool = new SharedMemoryPool({
+            estimatedAvailableBytes: newMax,
+            fractionOfAvailable: 1,
+            minMaxByteLength: 64,
+            maxMaxByteLength: newMax,
+            initialByteLength: newLen,
+            start: SHARED_LIST_POOL_START,
+        });
+        const nextBuf = pool.sharedArrayBuffer;
+        new Uint8Array(nextBuf, 0, oldLen).set(new Uint8Array(oldBuf, 0, oldLen));
+        const cloned = SharedList.from<T>(
+            SharedMemoryPool.from(nextBuf, { start: SHARED_LIST_POOL_START }),
+            new Uint32Array(nextBuf, 0, SHARED_LIST_POOL_START >>> 2)[CTRL_LIST_PTR] >>> 0,
+        );
+        cloned._logicalMaxByteLength = this._logicalMaxByteLength;
+        return cloned;
     }
 
     /**
@@ -261,25 +274,16 @@ export default class SharedList<T extends ISharedListItemView = SharedListItemVi
      * allocated via {@link createShared} (or {@link clone} with owned metadata).
      */
     growSharedBacking(targetByteLength: number): void {
-        if (!this._ownedSharedBacking) {
-            throw new RangeError('SharedList.growSharedBacking: only supported for buffers created with createShared');
-        }
-        const sab = this.storage;
-        const grow = (sab as { grow?: (n: number) => void }).grow;
-        if (typeof grow !== 'function') {
-            throw new RangeError('SharedList.growSharedBacking: SharedArrayBuffer is not growable');
-        }
-        const cur = sab.byteLength;
-        if (!Number.isInteger(targetByteLength) || targetByteLength <= cur) {
-            throw new RangeError('SharedList.growSharedBacking: targetByteLength must be an integer > current length');
-        }
-        const maxB = readSharedArrayBufferMaxByteLength(sab);
-        if (maxB !== undefined && targetByteLength > maxB) {
+        if (this._logicalMaxByteLength !== undefined && targetByteLength > this._logicalMaxByteLength) {
             throw new RangeError(
-                `SharedList.growSharedBacking: targetByteLength ${targetByteLength} exceeds maxByteLength ${maxB}`,
+                `SharedList.growSharedBacking: targetByteLength ${targetByteLength} exceeds maxByteLength ${this._logicalMaxByteLength}`,
             );
         }
-        grow.call(sab, targetByteLength);
+        this.pool.growSharedBacking(targetByteLength);
+        this.storage = this.pool.sharedArrayBuffer;
+        this.ctrl = new Uint32Array(this.storage, 0, SHARED_LIST_POOL_START >>> 2);
+        this.listPtr = this.ctrl[CTRL_LIST_PTR] >>> 0;
+        this.hdr = new Uint32Array(this.storage, this.listPtr, HDR_WORDS);
         this._rebindData();
     }
 
@@ -314,7 +318,7 @@ export default class SharedList<T extends ISharedListItemView = SharedListItemVi
     /** @param listLength — When set (e.g. snapshot in {@link unsafeIterateItems}), passed to {@link ISharedListItemView.attachAt} instead of the live length. */
     private _bindSingleton(index: number, listLength?: number): T {
         const count = listLength ?? (this.hdr[H.count] >>> 0);
-        const off = this._dataByteOffset() + index * this.itemByteSize;
+        const off = this.listPtr + this._dataByteOffset() + index * this.itemByteSize;
         this.singleton.attachAt(this.storage, off, this.itemByteSize, index, count);
         return this.singleton;
     }
@@ -333,7 +337,15 @@ export default class SharedList<T extends ISharedListItemView = SharedListItemVi
         if (!Number.isInteger(byteOffset) || byteOffset < 0) {
             throw new RangeError('SharedList.appendBuffer: byteOffset must be a non-negative integer');
         }
-        return appendBufferToStorage(this.storage, byteOffset, source);
+        const end = byteOffset + source.byteLength;
+        if (this._logicalMaxByteLength !== undefined && end > this._logicalMaxByteLength) {
+            throw new RangeError(`SharedList.appendBuffer: need ${end} bytes but maxByteLength is ${this._logicalMaxByteLength}`);
+        }
+        if (end > this.storage.byteLength) {
+            this.growSharedBacking(end);
+        }
+        new Uint8Array(this.storage).set(source, byteOffset);
+        return end;
     }
 
     push(bytes: Uint8Array<ArrayBufferLike>): number {
@@ -431,31 +443,47 @@ export default class SharedList<T extends ISharedListItemView = SharedListItemVi
         const itemBytes = this.hdr[H.itemBytes] >>> 0;
         const oldLayout = layoutOffsets(this.capacity, itemBytes);
         const newLayout = layoutOffsets(newCapacity, itemBytes);
-        if (newLayout.totalBytes > this.storage.maxByteLength) {
+        const newBytes = newLayout.totalBytes;
+        if (this._logicalMaxByteLength !== undefined && newBytes > this._logicalMaxByteLength) {
             throw new RangeError('SharedList: maxByteLength exceeded while growing');
         }
-        if (newLayout.totalBytes > this.storage.byteLength) {
-            this.storage.grow(newLayout.totalBytes);
+        let newPtr = this.pool.realloc(this.listPtr, newBytes);
+        if (!newPtr && this._tryAutoGrowSharedBacking()) {
+            newPtr = this.pool.realloc(this.listPtr, newBytes);
         }
+        if (!newPtr) throw new RangeError('SharedList: realloc failed while growing');
+        this.listPtr = newPtr >>> 0;
+        this.ctrl[CTRL_LIST_PTR] = this.listPtr;
+        this.hdr = new Uint32Array(this.storage, this.listPtr, HDR_WORDS);
         this.hdr[H.capacity] = newCapacity >>> 0;
         this._rebindData();
-        const oldData = new Uint8Array(
-            this.storage,
-            oldLayout.dataByteOffset,
-            oldLayout.totalBytes - oldLayout.dataByteOffset,
-        );
-        const newData = new Uint8Array(this.storage, newLayout.dataByteOffset, oldData.length);
-        newData.set(oldData);
+        void oldLayout;
     }
 
     private _rebindData(): void {
         const l = layoutOffsets(this.capacity, this.itemByteSize);
-        this.data = new Uint8Array(this.storage, l.dataByteOffset, this.capacity * this.itemByteSize);
+        this.data = new Uint8Array(this.storage, this.listPtr + l.dataByteOffset, this.capacity * this.itemByteSize);
+    }
+
+    private _tryAutoGrowSharedBacking(): boolean {
+        const sab = this.pool.sharedArrayBuffer;
+        const maxB = readSharedArrayBufferMaxByteLength(sab);
+        if (!maxB || maxB <= sab.byteLength) return false;
+        const next = Math.min(maxB, Math.max(sab.byteLength + 1, sab.byteLength * 2));
+        if (next <= sab.byteLength) return false;
+        this.pool.growSharedBacking(next);
+        this.storage = this.pool.sharedArrayBuffer;
+        this.ctrl = new Uint32Array(this.storage, 0, SHARED_LIST_POOL_START >>> 2);
+        this.listPtr = this.ctrl[CTRL_LIST_PTR] >>> 0;
+        this.hdr = new Uint32Array(this.storage, this.listPtr, HDR_WORDS);
+        this._rebindData();
+        return true;
     }
 }
 
 /** Byte offset of payload after the 8-byte header (count + capacity as u32). */
 const U8R_DATA_OFFSET = 8;
+const U8R_CTRL_PTR = 2; // u32[2] at byte offset 8
 
 const U8R_H = {
     count: 0,
@@ -467,29 +495,50 @@ function u8rTotalBytes(capacity: number): number {
 }
 
 /**
- * Build a {@link SharedArrayBuffer} holding a {@link Uint8ReadonlySharedList} layout: `count`, `capacity`, then `capacity` byte slots (first `count` used).
+ * Build a {@link SharedArrayBuffer} holding a {@link Uint8SharedList} layout: `count`, `capacity`, then `capacity` byte slots (first `count` used).
  * Each value is coerced with `value & 0xff`. Use only while readers are not relying on a stable snapshot, then publish `count` last if needed.
  */
-export function buildUint8ReadonlySharedListStorage(
+export function buildUint8SharedListStorage(
     capacity: number,
     values: readonly number[],
     options?: { maxByteLength?: number },
 ): SharedArrayBuffer {
     if (!Number.isInteger(capacity) || capacity < 1) {
-        throw new RangeError('buildUint8ReadonlySharedListStorage: capacity must be a positive integer');
+        throw new RangeError('buildUint8SharedListStorage: capacity must be a positive integer');
     }
     const count = values.length;
     if (count > capacity) {
-        throw new RangeError('buildUint8ReadonlySharedListStorage: more values than capacity');
+        throw new RangeError('buildUint8SharedListStorage: more values than capacity');
     }
     const total = u8rTotalBytes(capacity);
     const minMax = Math.max(total * 4, total + 4096);
-    const maxB = Math.max(options?.maxByteLength ?? minMax, total);
-    const storage = new SharedArrayBuffer(total, { maxByteLength: maxB });
-    const hdr = new Uint32Array(storage, 0, 2);
+    const logicalMax = Math.max(options?.maxByteLength ?? minMax, total);
+    const poolMax = Math.max(SHARED_LIST_POOL_START + 64, logicalMax, 64);
+    const initialByteLength = Math.max(SHARED_LIST_POOL_START + total + 64, SHARED_LIST_POOL_START + 64);
+    const pool = new SharedMemoryPool({
+        estimatedAvailableBytes: poolMax,
+        fractionOfAvailable: 1,
+        minMaxByteLength: 64,
+        maxMaxByteLength: poolMax,
+        initialByteLength,
+        start: SHARED_LIST_POOL_START,
+    });
+    const storage = pool.sharedArrayBuffer;
+    pool.freeAll();
+    let ptr = pool.malloc(total);
+    if (!ptr) {
+        pool.growSharedBacking(Math.max(storage.byteLength + 64, SHARED_LIST_POOL_START + total + 64));
+        ptr = pool.malloc(total);
+    }
+    if (!ptr) {
+        throw new RangeError('buildUint8SharedListStorage: malloc failed');
+    }
+    const ctrl = new Uint32Array(storage, 0, SHARED_LIST_POOL_START >>> 2);
+    ctrl[U8R_CTRL_PTR] = ptr >>> 0;
+    const hdr = new Uint32Array(storage, (ptr >>> 0), 2);
     hdr[U8R_H.count] = count >>> 0;
     hdr[U8R_H.capacity] = capacity >>> 0;
-    const data = new Uint8Array(storage, U8R_DATA_OFFSET, capacity);
+    const data = new Uint8Array(storage, (ptr >>> 0) + U8R_DATA_OFFSET, capacity);
     for (let i = 0; i < count; i++) {
         data[i] = values[i]! & 0xff;
     }
@@ -502,36 +551,50 @@ export function buildUint8ReadonlySharedListStorage(
  *
  * Layout: bytes `0..3` = `count` (u32 LE), `4..7` = `capacity` (u32 LE), byte index `i` payload at `8 + i`.
  */
-export class Uint8ReadonlySharedList {
+export class Uint8SharedList {
     public storage!: SharedArrayBuffer;
+    private pool!: SharedMemoryPool;
+    private ctrl!: Uint32Array;
+    private listPtr = 0;
+    private logicalMaxByteLength: number | undefined;
     private hdr!: Uint32Array;
     public bytes!: Uint8Array;
 
     constructor(initialCapacity: number, options?: { maxByteLength?: number }) {
         if (!Number.isInteger(initialCapacity) || initialCapacity < 1) {
-            throw new RangeError('Uint8ReadonlySharedList: initialCapacity must be a positive integer');
+            throw new RangeError('Uint8SharedList: initialCapacity must be a positive integer');
         }
-        this.storage = buildUint8ReadonlySharedListStorage(initialCapacity, [], options);
-        this.hdr = new Uint32Array(this.storage, 0, 2);
+        this.storage = buildUint8SharedListStorage(initialCapacity, [], options);
+        this.pool = SharedMemoryPool.from(this.storage, { start: SHARED_LIST_POOL_START });
+        this.ctrl = new Uint32Array(this.storage, 0, SHARED_LIST_POOL_START >>> 2);
+        this.listPtr = this.ctrl[U8R_CTRL_PTR] >>> 0;
+        this.logicalMaxByteLength = options?.maxByteLength;
+        this.hdr = new Uint32Array(this.storage, this.listPtr, 2);
         this._rebindBytes();
     }
 
-    static from(storage: SharedArrayBuffer): Uint8ReadonlySharedList {
+    static from(storage: SharedArrayBuffer): Uint8SharedList {
         if (storage.byteLength < U8R_DATA_OFFSET + 1) {
-            throw new RangeError('Uint8ReadonlySharedList.from: buffer too small');
+            throw new RangeError('Uint8SharedList.from: buffer too small');
         }
-        const hdr = new Uint32Array(storage, 0, 2);
+        const ctrl = new Uint32Array(storage, 0, Math.max(2, SHARED_LIST_POOL_START >>> 2));
+        const ptr = ctrl.length > U8R_CTRL_PTR ? (ctrl[U8R_CTRL_PTR] >>> 0) : 0;
+        const hdr = new Uint32Array(storage, ptr !== 0 ? ptr : 0, 2);
         const count = hdr[U8R_H.count] >>> 0;
         const capacity = hdr[U8R_H.capacity] >>> 0;
         if (capacity < 1 || count > capacity) {
-            throw new RangeError('Uint8ReadonlySharedList.from: invalid header');
+            throw new RangeError('Uint8SharedList.from: invalid header');
         }
         const need = u8rTotalBytes(capacity);
-        if (need > storage.byteLength) {
-            throw new RangeError('Uint8ReadonlySharedList.from: buffer byteLength is smaller than layout');
+        if ((ptr !== 0 ? ptr : 0) + need > storage.byteLength) {
+            throw new RangeError('Uint8SharedList.from: buffer byteLength is smaller than layout');
         }
-        const inst = Object.create(Uint8ReadonlySharedList.prototype) as Uint8ReadonlySharedList;
+        const inst = Object.create(Uint8SharedList.prototype) as Uint8SharedList;
         inst.storage = storage;
+        inst.pool = SharedMemoryPool.from(storage, { start: SHARED_LIST_POOL_START });
+        inst.ctrl = new Uint32Array(storage, 0, SHARED_LIST_POOL_START >>> 2);
+        inst.listPtr = ptr !== 0 ? ptr : 0;
+        inst.logicalMaxByteLength = undefined;
         inst.hdr = hdr;
         inst._rebindBytes();
         return inst;
@@ -576,7 +639,7 @@ export class Uint8ReadonlySharedList {
      */
     get(index: number): number | undefined {
         if (!Number.isInteger(index) || index < 0) {
-            throw new RangeError('Uint8ReadonlySharedList.get: index must be a non-negative integer');
+            throw new RangeError('Uint8SharedList.get: index must be a non-negative integer');
         }
         const count = this.hdr[U8R_H.count] >>> 0;
         if (index >= count) {
@@ -593,21 +656,36 @@ export class Uint8ReadonlySharedList {
     }
     private _growCapacity(newCapacity: number): void {
         if (!Number.isInteger(newCapacity) || newCapacity < 1) {
-            throw new RangeError('Uint8ReadonlySharedList: newCapacity must be a positive integer');
+            throw new RangeError('Uint8SharedList: newCapacity must be a positive integer');
         }
         const need = u8rTotalBytes(newCapacity);
-        if (need > this.storage.maxByteLength) {
-            throw new RangeError('Uint8ReadonlySharedList: maxByteLength exceeded while growing');
+        if (this.logicalMaxByteLength !== undefined && need > this.logicalMaxByteLength) {
+            throw new RangeError('Uint8SharedList: maxByteLength exceeded while growing');
         }
-        if (need > this.storage.byteLength) {
-            this.storage.grow(need);
+        let newPtr = this.pool.realloc(this.listPtr, need);
+        if (!newPtr) {
+            const sab = this.pool.sharedArrayBuffer;
+            const maxB = readSharedArrayBufferMaxByteLength(sab);
+            const next = maxB ? Math.min(maxB, Math.max(sab.byteLength + 1, sab.byteLength * 2)) : 0;
+            if (next > sab.byteLength) {
+                this.pool.growSharedBacking(next);
+                this.storage = this.pool.sharedArrayBuffer;
+                this.ctrl = new Uint32Array(this.storage, 0, SHARED_LIST_POOL_START >>> 2);
+                newPtr = this.pool.realloc(this.listPtr, need);
+            }
         }
+        if (!newPtr) {
+            throw new RangeError('Uint8SharedList: realloc failed while growing');
+        }
+        this.listPtr = newPtr >>> 0;
+        this.ctrl[U8R_CTRL_PTR] = this.listPtr;
+        this.hdr = new Uint32Array(this.storage, this.listPtr, 2);
         this.hdr[U8R_H.capacity] = newCapacity >>> 0;
         this._rebindBytes();
     }
 
     private _rebindBytes(): void {
         const capacity = this.hdr[U8R_H.capacity] >>> 0;
-        this.bytes = new Uint8Array(this.storage, U8R_DATA_OFFSET, capacity);
+        this.bytes = new Uint8Array(this.storage, this.listPtr + U8R_DATA_OFFSET, capacity);
     }
 }

@@ -33,9 +33,10 @@ describe('EdgeView', () => {
 describe('EdgeView with SharedList', () => {
     it('reads many rows correctly after repeated push', () => {
         const edgeSingleton = new EdgeItemView();
-        const list = SharedList.createShared(edgeSingleton, EdgeItemView.SIZE, {
+        const list = SharedList.createShared<EdgeItemView>(EdgeItemView.SIZE, {
             initialCapacity: 4,
             maxByteLength: 1 << 20,
+            itemViewSingleton: edgeSingleton,
         });
         const n = 25;
         for (let i = 0; i < n; i++) {
@@ -53,9 +54,10 @@ describe('EdgeView with SharedList', () => {
 
     it('keeps EdgeView DataView valid after SharedList capacity growth (single reused view)', () => {
         let shared: EdgeItemView | undefined;
-        const list = SharedList.createShared((shared ??= new EdgeItemView()), EdgeItemView.SIZE, {
+        const list = SharedList.createShared<EdgeItemView>(EdgeItemView.SIZE, {
             initialCapacity: 1,
             maxByteLength: 1 << 18,
+            itemViewSingleton: (shared ??= new EdgeItemView()),
         });
         const byteLengthAfterInit = list.storage.byteLength;
 
@@ -78,9 +80,10 @@ describe('EdgeView with SharedList', () => {
     });
 
     it('re-reads first row after growth (attach + new backing byteLength)', () => {
-        const list = SharedList.createShared(new EdgeItemView(), EdgeItemView.SIZE, {
+        const list = SharedList.createShared<EdgeItemView>(EdgeItemView.SIZE, {
             initialCapacity: 2,
             maxByteLength: 1 << 18,
+            itemViewSingleton: new EdgeItemView(),
         });
         {
             const row = new EdgeItemView();
